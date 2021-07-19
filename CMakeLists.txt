@@ -1140,7 +1140,11 @@ set(INPUT_SOURCES
 	src/input/TextInput.cpp
 )
 set(INPUT_SDL1_SOURCES src/input/SDL1InputBackend.cpp)
-set(INPUT_SDL2_SOURCES src/input/SDL2InputBackend.cpp)
+if(NINTENDO_SWITCH)
+	set(INPUT_SDL2_SOURCES src/input/SDL2SwitchInputBackend.cpp)
+else()
+	set(INPUT_SDL2_SOURCES src/input/SDL2InputBackend.cpp)
+endif()
 
 set(IO_SOURCES
 	src/io/IniReader.cpp
