@@ -37,6 +37,9 @@
 #include <epoxy/gl.h>
 #elif ARX_HAVE_GLEW
 #include <GL/glew.h>
+#elif ARX_HAVE_GLAD
+#include <EGL/egl.h>
+#include "glad/glad.h"
 #else
 #error "OpenGL renderer not supported: need ARX_HAVE_EPOXY or ARX_HAVE_GLEW"
 #endif

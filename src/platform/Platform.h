@@ -48,7 +48,7 @@
 #elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) \
       || defined(__bsdi__) || defined(__DragonFly__)
 	#define ARX_PLATFORM ARX_PLATFORM_BSD
-#elif defined(__unix__) || defined(__unix) || defined(unix)
+#elif defined(__unix__) || defined(__unix) || defined(unix) || defined(__SWITCH__)
 	#define ARX_PLATFORM ARX_PLATFORM_UNIX
 #else
 	#define ARX_PLATFORM ARX_PLATFORM_UNKNOWN

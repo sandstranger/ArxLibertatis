@@ -103,6 +103,13 @@ void OpenGLRenderer::initialize() {
 	LogInfo << "Using GLEW " << glewVersion;
 	CrashHandler::setVariable("GLEW version", glewVersion);
 	
+	#elif ARX_HAVE_GLAD
+	
+	if(gladLoadGLLoader(reinterpret_cast<GLADloadproc>(eglGetProcAddress)) == 0) {
+		LogError << "GLAD init failed";
+		return;
+	}
+	
 	#endif
 	
 	OpenGLInfo gl;

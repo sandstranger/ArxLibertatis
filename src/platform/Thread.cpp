@@ -95,7 +95,7 @@ void Thread::start() {
 }
 
 void Thread::setPriority(Priority priority) {
-	
+#ifndef __SWITCH__
 	#if ARX_HAVE_SCHED_GETSCHEDULER
 	int policy = sched_getscheduler(0);
 	#else
@@ -112,6 +112,7 @@ void Thread::setPriority(Priority priority) {
 		param.sched_priority = m_priority;
 		pthread_setschedparam(m_thread, policy, &param);
 	}
+#endif
 }
 
 Thread::~Thread() { }

@@ -76,6 +76,8 @@ OpenGLInfo::OpenGLInfo()
 	} else if(glewIsSupported("GL_VERSION_1_4")) {
 		m_version = 14;
 	}
+	#elif ARX_HAVE_GLAD
+	m_version = 43; // TODO: check GLAD_GL_VERSION_* properly
 	#endif
 	
 	m_versionString = reinterpret_cast<const char *>(glGetString(GL_VERSION));
@@ -167,6 +169,9 @@ bool OpenGLInfo::has(const char * extension, u32 version) const {
 		bool supported = epoxy_has_gl_extension(extension);
 		#elif ARX_HAVE_GLEW
 		bool supported = glewIsSupported(extension);
+		#elif ARX_HAVE_GLAD
+		const char *glext = reinterpret_cast<const char *>(glGetString(GL_EXTENSIONS));
+		bool supported = std::strstr(glext, extension);
 		#endif
 		if(!supported) {
 			return false;

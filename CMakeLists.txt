@@ -33,14 +33,18 @@ if(BUILD_ALL OR DEVELOPER)
 	set(default_BUILD_TESTS ON)
 endif()
 suboption(BUILD_TESTS "Build tests" BOOL ${default_BUILD_TESTS})
-option(BUILD_TOOLS "Build tools" ON)
+set(def_BUILD_TOOLS ON)
+if(CMAKE_CROSSCOMPILING)
+	set(def_BUILD_TOOLS OFF)
+endif()
+option(BUILD_TOOLS "Build tools" ${def_BUILD_TOOLS})
 set(default_BUILD_TOOLS_MERGED ON)
 if(WIN32)
 	set(default_BUILD_TOOLS_MERGED OFF)
 endif()
 suboption(BUILD_TOOLS_MERGED "Merge tools into a single binary" BOOL ${default_BUILD_TOOLS_MERGED})
 set(def_BUILD_CRASHHANDLER ON)
-if(MACOS)
+if(MACOS OR NINTENDO_SWITCH)
 	set(def_BUILD_CRASHHANDLER OFF)
 elseif(WIN32 AND NOT MSVC)
 	set(def_BUILD_CRASHHANDLER OFF)
@@ -56,13 +60,21 @@ if(BUILD_PROFILER_INSTRUMENT OR BUILD_ALL)
 	set(def_BUILD_PROFILER ON)
 endif()
 suboption(BUILD_PROFILER "Build the profiler GUI" BOOL ${def_BUILD_PROFILER})
-option(INSTALL_BLENDER_PLUGIN "Install the Arx Libertatis blender plugin" ON)
+set(def_INSTALL_BLENDER_PLUGIN ON)
+if(NINTENDO_SWITCH)
+	set(def_INSTALL_BLENDER_PLUGIN OFF)
+endif()
+option(INSTALL_BLENDER_PLUGIN "Install the Arx Libertatis blender plugin" ${def_INSTALL_BLENDER_PLUGIN})
 suboption(BUILD_IO_LIBRARY "Build shared library for reading and writing arx data"
           BOOL ${INSTALL_BLENDER_PLUGIN})
 if(INSTALL_BLENDER_PLUGIN)
 	set(BUILD_IO_LIBRARY ON)
 endif()
-option(INSTALL_SCRIPTS "Install the data install script" ON)
+set(def_INSTALL_SCRIPTS ON)
+if(CMAKE_CROSSCOMPILING)
+	set(def_INSTALL_SCRIPTS OFF)
+endif()
+option(INSTALL_SCRIPTS "Install the data install script" ${def_INSTALL_SCRIPTS})
 
 # Optional dependencies
 option(USE_OPENAL "Build the OpenAL audio backend" ON)
@@ -70,7 +82,7 @@ option(USE_OPENGL "Build the OpenGL renderer backend" ON)
 option(USE_WINHTTP "Use the native WinHTTP API instead of CURL on Windows" ON)
 option(USE_NATIVE_FS "Use the native filesystem backend directly instead of boost" ON)
 set(default_USE_X11 OFF)
-if(NOT WIN32 AND NOT MACOS)
+if(NOT WIN32 AND NOT MACOS AND NOT NINTENDO_SWITCH)
 	set(default_USE_X11 ON)
 endif()
 suboption(USE_X11 "Check for X11 support in used libraries" BOOL ${default_USE_X11})
@@ -79,11 +91,11 @@ option(USE_WAYLAND "Check for Wayland support in used libraries" OFF)
 # Alternative dependencies
 set(WITH_SDL CACHE STRING "The SDL version to use: 1 or 2 or empty (use any)")
 set(WITH_QT CACHE STRING "The Qt version to use: 4 or 5 or empty (use any)")
-set(WITH_OPENGL CACHE STRING "The OpenGL wrangler to use: epoxy or glew or empty (use any)")
+set(WITH_OPENGL CACHE STRING "The OpenGL wrangler to use: epoxy or glew or glad or empty (use any)")
 
 # Build types
 set(default_UNITY_BUILD ON)
-if(DEVELOPER)
+if(DEVELOPER OR NINTENDO_SWITCH)
 	set(default_UNITY_BUILD OFF)
 endif()
 suboption(UNITY_BUILD "Unity build" BOOL ${default_UNITY_BUILD})
@@ -98,7 +110,7 @@ if(DEVELOPER OR CONTINUOUS_INTEGRATION)
 endif()
 suboption(FASTLINK "Optimize (incremental) linking speed" BOOL ${default_FASTLINK})
 set(default_USE_LTO OFF)
-if(SET_OPTIMIZATION_FLAGS AND NOT FASTLINK)
+if(SET_OPTIMIZATION_FLAGS AND NOT FASTLINK AND NOT NINTENDO_SWITCH)
 	set(default_USE_LTO ON)
 endif()
 suboption(USE_LTO "Use link-time code generation" BOOL ${default_USE_LTO})
@@ -119,7 +131,7 @@ set(ARX_DEBUG_GL ${DEBUG_GL})
 
 # Static libs
 set(default_USE_STATIC_LIBS OFF)
-if(WIN32)
+if(WIN32 OR NINTENDO_SWITCH)
 	set(default_USE_STATIC_LIBS ON)
 endif()
 option(USE_STATIC_LIBS          "Statically link libraries" ${default_USE_STATIC_LIBS})
@@ -224,6 +236,8 @@ elseif(MACOS)
 	set(DATA_DIR_PREFIXES "/Applications"                 CACHE STRING "Data dir paths")
 	set(USER_DIR          "ArxLibertatis"                 CACHE STRING "User dir names")
 	set(USER_DIR_PREFIXES "$HOME/Library/Application Support" CACHE STRING "User dir paths")
+elseif(NINTENDO_SWITCH)
+	set(USER_DIR          "user"                          CACHE STRING "User dir names")
 else()
 	set(DATA_DIR
 		"games/arx:arx"
@@ -451,12 +465,26 @@ if(USE_OPENGL)
 			set(ARX_HAVE_GL_STATIC ${GLEW_USE_STATIC_LIBS})
 		endif()
 	endif()
+	if(NOT ARX_HAVE_OPENGL AND (WITH_OPENGL STREQUAL "" OR WITH_OPENGL STREQUAL "glad"))
+		find_package(OpenGL ${OPTIONAL_DEPENDENCY})
+		if(OPENGL_FOUND)
+			set(ARX_HAVE_GLAD 1)
+			set(ARX_HAVE_OPENGL 1)
+			set(ARX_HAVE_GL_STATIC 1)
+		endif()
+	endif()
 endif()
 
 # OpenAL
 if(USE_OPENAL)
 	find_package(OpenAL ${OPTIONAL_DEPENDENCY})
 	find_package(OpenALEFX)
+	if(NINTENDO_SWITCH AND NOT OPENAL_FOUND)
+		# no pkgconfig scripts provided with switch-cmake?
+		set(OPENAL_FOUND TRUE)
+		set(OPENAL_INCLUDE_DIR "${DEVKITPRO}/portlibs/switch/include/AL")
+		set(OPENAL_LIBRARY "-L${DEVKITPRO}/portlibs/switch/lib -lopenal")
+	endif()
 	if(NOT MSVC AND OPENAL_FOUND)
 		check_link_library(OpenAL OPENAL_LIBRARY)
 	endif()
@@ -598,8 +626,14 @@ find_package(PythonInterp)
 if(ARX_HAVE_SDL AND ARX_HAVE_OPENGL AND NOT WIN32 AND NOT APPLE)
 	set(old_CMAKE_REQUIRED_INCLUDES)
 	if(ARX_HAVE_SDL2)
+		if (NOT SDL2_INCLUDE_DIR)
+			set(SDL2_INCLUDE_DIR ${SDL2_INCLUDE_DIRS})
+		endif()
 		set(CMAKE_REQUIRED_INCLUDES ${SDL2_INCLUDE_DIR})
 	else()
+		if (NOT SDL_INCLUDE_DIR)
+			set(SDL_INCLUDE_DIR ${SDL_INCLUDE_DIRS})
+		endif()
 		set(CMAKE_REQUIRED_INCLUDES ${SDL_INCLUDE_DIR})
 	endif()
 	check_symbol_exists(SDL_VIDEO_DRIVER_X11 "SDL_config.h" SDL_HAVE_VIDEO_X11)
@@ -607,7 +641,7 @@ if(ARX_HAVE_SDL AND ARX_HAVE_OPENGL AND NOT WIN32 AND NOT APPLE)
 	check_symbol_exists(SDL_HINT_VIDEO_X11_FORCE_EGL "SDL_hints.h" SDL_HAVE_VIDEO_X11_EGL)
 	if(EPOXY_FOUND)
 		set(CMAKE_REQUIRED_INCLUDES ${Epoxy_INCLUDE_DIR})
-	else()
+	elseif(GLEW_FOUND)
 		set(CMAKE_REQUIRED_INCLUDES ${OPENGL_INCLUDE_DIR} ${GLEW_INCLUDE_DIR})
 	endif()
 	if(SDL_HAVE_VIDEO_X11)
@@ -651,7 +685,7 @@ if(MSVC)
 	
 else(MSVC)
 	
-	if(USE_STATIC_LIBS)
+	if(USE_STATIC_LIBS AND NOT NINTENDO_SWITCH)
 		add_ldflag("-static-libstdc++")
 		add_ldflag("-static-libgcc")
 	endif()
@@ -893,6 +927,12 @@ else(MSVC)
 	
 endif(MSVC)
 
+if(NINTENDO_SWITCH)
+	# our libc is a bit dysfunctional
+	set(ARX_HAVE_SETENV FALSE)
+	set(ARX_HAVE_UNSETENV FALSE)
+	set(ARX_HAVE_KILL FALSE)
+endif()
 
 # Sources
 
@@ -1045,6 +1085,9 @@ set(GRAPHICS_OPENGL_SOURCES
 	src/graphics/opengl/OpenGLRenderer.cpp
 	src/graphics/opengl/OpenGLUtil.cpp
 )
+if(ARX_HAVE_GLAD)
+	list(APPEND GRAPHICS_OPENGL_SOURCES src/graphics/opengl/glad/glad.c)
+endif()
 
 set(GUI_SOURCES
 	src/gui/CharacterCreation.cpp
@@ -1281,10 +1324,12 @@ if(ARX_HAVE_OPENGL)
 	if(EPOXY_FOUND)
 		list(APPEND ARX_LIBRARIES ${Epoxy_LIBRARIES})
 		include_directories(SYSTEM ${Epoxy_INCLUDE_DIR})
-	else()
+	elseif(GLEW_FOUND)
 		list(APPEND ARX_LIBRARIES ${GLEW_LIBRARIES} ${OPENGL_gl_LIBRARY})
 		include_directories(SYSTEM ${OPENGL_INCLUDE_DIR} ${GLEW_INCLUDE_DIR})
 		add_definitions(${GLEW_DEFINITIONS})
+	else()
+		list(APPEND ARX_LIBRARIES ${OPENGL_gl_LIBRARY})
 	endif()
 else()
 	# SDL backends require OpenGL
@@ -1305,6 +1350,10 @@ if(ARX_HAVE_SDL)
 		list(APPEND INPUT_SOURCES ${INPUT_SDL1_SOURCES})
 		list(APPEND ARX_LIBRARIES ${SDL_LIBRARY})
 		include_directories(SYSTEM ${SDL_INCLUDE_DIR})
+	endif()
+	if(NINTENDO_SWITCH)
+		# our SDL2 cmake config doesn't append dependencies for some reason
+		list(APPEND ARX_LIBRARIES "-L${DEVKITPRO}/portlibs/switch/lib -lEGL -lglapi -ldrm_nouveau")
 	endif()
 	add_definitions(-DNO_SDL_GLEXT) # we use libepoxy/GLEW for that
 endif()
@@ -1382,6 +1431,10 @@ if(LIBRT_LIBRARY AND (ARX_HAVE_CLOCK_GETTIME OR ARX_HAVE_CRASHHANDLER_POSIX))
 	list(APPEND BASE_LIBRARIES ${LIBRT_LIBRARY})
 endif()
 
+if(NINTENDO_SWITCH)
+	add_definitions(-D__SWITCH__=1)
+endif()
+
 list(APPEND ARX_LIBRARIES ${BASE_LIBRARIES})
 
 if(NOT MSVC)
@@ -1414,7 +1467,9 @@ set(ARX_SOURCES
 )
 
 # Using include() for now as add_subdirectory causes problems with uses in qrc files
-include(data/CMakeLists.txt)
+if(NOT NINTENDO_SWITCH)
+	include(data/CMakeLists.txt)
+endif()
 
 # Set the icon for the Windows executable by adding this resource file to the sources
 if(WIN32)
@@ -1918,7 +1973,7 @@ if(INSTALL_SCRIPTS AND NOT WIN32)
 endif()
 
 # Install icon and desktop entry
-if(NOT WIN32 AND NOT MACOS)
+if(NOT WIN32 AND NOT MACOS AND NOT NINTENDO_SWITCH)
 	
 	find_program(DESKTOP_FILE_VALIDATE desktop-file-validate)
 	
@@ -1952,6 +2007,16 @@ if(INSTALL_SCRIPTS AND NOT WIN32)
 	        OPTIONAL)
 endif()
 
+# Build NRO if building for Switch
+if(NINTENDO_SWITCH)
+	add_custom_command(
+		TARGET arx POST_BUILD
+		COMMAND nacptool --create "Arx Libertatis" \"\" \"\" "arx.nacp"
+		COMMAND aarch64-none-elf-strip -o ${CMAKE_BINARY_DIR}/arx_stripped ${CMAKE_BINARY_DIR}/arx
+		COMMAND elf2nro ${CMAKE_BINARY_DIR}/arx_stripped ${CMAKE_BINARY_DIR}/arx.nro
+		                --icon=${CMAKE_SOURCE_DIR}/data/icons/arx-libertatis-switch.jpg --nacp=arx.nacp
+	)
+endif()
 
 # Print a configuration summary
 
@@ -1981,6 +2046,7 @@ print_configuration("Renderer"
 	ARX_HAVE_EPOXY "OpenGL (libepoxy)"
 	ARX_HAVE_EPOXY "OpenGL ES (libepoxy)"
 	ARX_HAVE_GLEW  "OpenGL (GLEW)"
+	ARX_HAVE_GLAD  "OpenGL (GLAD)"
 )
 print_configuration("Audio features"
 	ARX_HAVE_OPENAL_EFX  "EFX"
