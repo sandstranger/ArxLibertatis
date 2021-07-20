@@ -93,15 +93,16 @@ Ensure that devkitA64 is in your `PATH` and run:
     $ aarch64-none-elf-cmake -G"Unix Makefiles" ..
     $ make
 
-This will produce `switchbuild/arx.nro`.
+This will produce `arx.nro` in the `switchbuild` directory.
 
 To install:
 1. Create the directories `/switch/arx/` and `/switch/arx/data/` on your SD card.
 2. Copy `data/core/localisation` and `data/core/misc` from this repository into the `/switch/arx/data/` directory.
 3. Copy the [required data files](https://wiki.arx-libertatis.org/Required_data_files_and_checksums) from your Arx install into the `/switch/arx/data/` directory.
-4. Run the game from the Homebrew Menu (**don't use applet mode**, that won't have enough memory).
+4. Copy `arx.nro` to the `/switch/arx/` directory.
+5. Run the game from the Homebrew Menu (**don't use applet mode**, that won't have enough memory).
 
-## Compile and install
+## Compile and install for other platforms
 
 For Linux run:
 
