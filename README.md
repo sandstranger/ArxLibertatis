@@ -78,6 +78,29 @@ To avoid the Inkscape (as well as ImageMagick and OptiPNG) dependency for git bu
 
 Alternatively, icons can be disabled by setting the `ICON_TYPE` CMake variable to `none`. See **OPTIONS.md** for other supported icon type values.
 
+## Compile and install for Nintendo Switch
+
+For Switch ensure that you have the latest versions of devkitA64 and libnx installed, as well as the required dependencies.
+You can install most dependencies using `(dkp-)pacman`:
+
+    $ pacman -S devkitA64 libnx switch-cmake switch-tools switch-sdl2 switch-glm switch-freetype switch-mesa switch-libdrm_nouveau switch-openal-soft switch-zlib 
+
+Install the Boost headers into `$(DEVKITPRO)/portlibs/switch/include/` (copy the `boost` folder out of a [Boost release tarball](https://boostorg.jfrog.io/artifactory/main/release/1.76.0/source/boost_1_76_0.tar.gz) into that directory).
+
+Ensure that devkitA64 is in your `PATH` and run:
+
+    $ mkdir switchbuild && cd switchbuild
+    $ aarch64-none-elf-cmake -G"Unix Makefiles" ..
+    $ make
+
+This will produce `switchbuild/arx.nro`.
+
+To install:
+1. Create the directories `/switch/arx/` and `/switch/arx/data/` on your SD card.
+2. Copy `data/core/localisation` and `data/core/misc` from this repository into the `/switch/arx/data/` directory.
+3. Copy the [required data files](https://wiki.arx-libertatis.org/Required_data_files_and_checksums) from your Arx install into the `/switch/arx/data/` directory.
+4. Run the game from the Homebrew Menu (**don't use applet mode**, that won't have enough memory).
+
 ## Compile and install
 
 For Linux run:
