@@ -82,6 +82,7 @@ const int
 	bufferSize = 0,
 	quickLevelTransition = JumpToChangeLevel,
 	gyroSensitivity = 4,
+	gyroSmoothing = 5,
 	gyroJoycon = 1,
 	gyroMode = GyroMagicOnly;
 
@@ -331,6 +332,7 @@ const std::string
 	gyroJoycon = "gyro_joycon",
 	gyroSensitivityX = "gyro_sensitivity_x",
 	gyroSensitivityY = "gyro_sensitivity_y",
+	gyroSmoothing = "gyro_smoothing",
 	gyroDockedOnly = "gyro_docked_only";
 #endif
 
@@ -565,6 +567,7 @@ bool Config::save() {
 	writer.writeKey(Key::gyroDockedOnly, nswitch.gyroDockedOnly);
 	writer.writeKey(Key::gyroSensitivityX, nswitch.gyroSensitivity.x);
 	writer.writeKey(Key::gyroSensitivityY, nswitch.gyroSensitivity.y);
+	writer.writeKey(Key::gyroSmoothing, nswitch.gyroSmoothing);
 	#endif
 
 	return writer.flush();
@@ -731,6 +734,7 @@ bool Config::init(const fs::path & file) {
 	nswitch.gyroDockedOnly = reader.getKey(Section::NSwitch, Key::gyroDockedOnly, Default::gyroDockedOnly);
 	nswitch.gyroSensitivity.x = reader.getKey(Section::NSwitch, Key::gyroSensitivityX, Default::gyroSensitivity);
 	nswitch.gyroSensitivity.y = reader.getKey(Section::NSwitch, Key::gyroSensitivityY, Default::gyroSensitivity);
+	nswitch.gyroSmoothing = reader.getKey(Section::NSwitch, Key::gyroSmoothing, Default::gyroSmoothing);
 	#endif
 
 	return loaded;

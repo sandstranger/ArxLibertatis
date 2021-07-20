@@ -243,6 +243,7 @@ public:
 		int gyroJoyconIndex;
 		GyroMode gyroMode;
 		bool gyroDockedOnly;
+		int gyroSmoothing;
 
 	} nswitch;
 	#endif

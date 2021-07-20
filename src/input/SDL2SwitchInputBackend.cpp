@@ -83,7 +83,6 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	, cursorRelAccum(0)
 	, cursorInWindow(false)
 	, currentWheel(0)
-	, gyroSmooth(0.8f)
 {
 	
 	arx_assert(window != nullptr);
@@ -678,6 +677,7 @@ void SDL2InputBackend::gyroToMouse(const Vec2i & winSize) {
 	else if (stylemask & HidNpadStyleTag_NpadJoyDual) // hope to god the joycon is connected
 		numstates = hidGetSixAxisSensorStates(gyroHandles[config.nswitch.gyroJoyconIndex], &sixaxis, 1);
 	if(numstates > 0) {
+		const float gyroSmooth = float(10 - config.nswitch.gyroSmoothing) * 0.1f;
 		const Vec2f fdelta = Vec2f(-sixaxis.angular_velocity.z, -sixaxis.angular_velocity.x);
 		const Vec2f ldelta = Vec2f(
 			lerp(lastGyro.x, fdelta.x, gyroSmooth),

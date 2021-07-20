@@ -1810,6 +1810,14 @@ public:
 			addCenter(sld);
 		}
 
+		{
+			std::string label = getLocalised("system_menus_options_nswitch_gyro_smoothing");
+			SliderWidget * sld = new SliderWidget(sliderSize(), hFontMenu, label);
+			sld->valueChanged = boost::bind(&SwitchOptionsMenuPage::onChangedGyroSmoothing, this, arg::_1);
+			sld->setValue(config.nswitch.gyroSmoothing);
+			addCenter(sld);
+		}
+
 		addBackButton(Page_Options);
 		
 	}
@@ -1832,6 +1840,10 @@ private:
 
 	void onChangedGyroSensitivityY(int value) {
 		config.nswitch.gyroSensitivity.y = value;
+	}
+
+	void onChangedGyroSmoothing(int value) {
+		config.nswitch.gyroSmoothing = value;
 	}
 
 };

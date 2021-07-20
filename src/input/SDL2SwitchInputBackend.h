@@ -97,7 +97,6 @@ private:
 
 	HidSixAxisSensorHandle gyroHandles[3];
 	float gyroScale[2];
-	float gyroSmooth;
 	Vec2f lastGyro;
 	
 	void joystickToMouse(const Vec2i & winSize);
