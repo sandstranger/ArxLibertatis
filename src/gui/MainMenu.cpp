@@ -542,6 +542,15 @@ public:
 			txt->setTargetPage(Page_OptionsInput);
 			addCenter(txt);
 		}
+
+		#ifdef __SWITCH__
+		{
+			std::string label = getLocalised("system_menus_options_nswitch");
+			TextWidget * txt = new TextWidget(hFontMenu, label);
+			txt->setTargetPage(Page_OptionsSwitch);
+			addCenter(txt);
+		}
+		#endif
 		
 		addBackButton(Page_None);
 		
@@ -1747,6 +1756,88 @@ private:
 	
 };
 
+#ifdef __SWITCH__
+
+class SwitchOptionsMenuPage final : public MenuPage {
+	
+public:
+	
+	SwitchOptionsMenuPage()
+		: MenuPage(Page_OptionsSwitch)
+	{}
+	
+	~SwitchOptionsMenuPage() { }
+	
+	void init() {
+		
+		reserveBottom();
+		
+		{
+			std::string label = getLocalised("system_menus_options_nswitch_gyro_mode");
+			CycleTextWidget * cb = new CycleTextWidget(sliderSize(), hFontMenu, label);
+			cb->valueChanged = boost::bind(&SwitchOptionsMenuPage::onChangedGyroMode, this, arg::_1, arg::_2);
+			cb->addEntry(getLocalised("system_menus_options_nswitch_gyro_mode_off"));
+			cb->addEntry(getLocalised("system_menus_options_nswitch_gyro_mode_magic"));
+			cb->addEntry(getLocalised("system_menus_options_nswitch_gyro_mode_cursor"));
+			cb->addEntry(getLocalised("system_menus_options_nswitch_gyro_mode_always"));
+			cb->setValue(int(config.nswitch.gyroMode));
+			addCenter(cb);
+		}
+
+		{
+			std::string label = getLocalised("system_menus_options_nswitch_gyro_joycon");
+			CycleTextWidget * cb = new CycleTextWidget(sliderSize(), hFontMenu, label);
+			cb->valueChanged = boost::bind(&SwitchOptionsMenuPage::onChangedGyroJoycon, this, arg::_1, arg::_2);
+			cb->addEntry(getLocalised("system_menus_options_nswitch_gyro_joycon_left"));
+			cb->addEntry(getLocalised("system_menus_options_nswitch_gyro_joycon_right"));
+			cb->setValue(config.nswitch.gyroJoyconIndex);
+			addCenter(cb);
+		}
+
+		{
+			std::string label = getLocalised("system_menus_options_nswitch_gyro_sensitivity_x");
+			SliderWidget * sld = new SliderWidget(sliderSize(), hFontMenu, label);
+			sld->valueChanged = boost::bind(&SwitchOptionsMenuPage::onChangedGyroSensitivityX, this, arg::_1);
+			sld->setValue(config.nswitch.gyroSensitivity.x);
+			addCenter(sld);
+		}
+
+		{
+			std::string label = getLocalised("system_menus_options_nswitch_gyro_sensitivity_y");
+			SliderWidget * sld = new SliderWidget(sliderSize(), hFontMenu, label);
+			sld->valueChanged = boost::bind(&SwitchOptionsMenuPage::onChangedGyroSensitivityY, this, arg::_1);
+			sld->setValue(config.nswitch.gyroSensitivity.y);
+			addCenter(sld);
+		}
+
+		addBackButton(Page_Options);
+		
+	}
+	
+private:
+
+	void onChangedGyroMode(int pos, const std::string & str) {
+		ARX_UNUSED(str);
+		config.nswitch.gyroMode = GyroMode(pos);
+	}
+
+	void onChangedGyroJoycon(int pos, const std::string & str) {
+		ARX_UNUSED(str);
+		config.nswitch.gyroJoyconIndex = pos;
+	}
+
+	void onChangedGyroSensitivityX(int value) {
+		config.nswitch.gyroSensitivity.x = value;
+	}
+
+	void onChangedGyroSensitivityY(int value) {
+		config.nswitch.gyroSensitivity.y = value;
+	}
+
+};
+
+#endif
+
 class ControlOptionsPage : public MenuPage {
 	
 public:
@@ -1822,7 +1913,6 @@ protected:
 	}
 	
 };
-
 
 class ControlOptionsMenuPage1 final : public ControlOptionsPage {
 	
@@ -2033,6 +2123,10 @@ void MainMenu::initWindowPages() {
 	m_window->add(new QuitConfirmMenuPage());
 	m_window->add(new LocalizationMenuPage());
 	
+	#ifdef __SWITCH__
+	m_window->add(new SwitchOptionsMenuPage());
+	#endif
+
 }
 
 

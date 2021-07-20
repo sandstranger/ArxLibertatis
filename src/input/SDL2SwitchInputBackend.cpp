@@ -20,9 +20,6 @@
 #include "input/SDL2SwitchInputBackend.h"
 
 #include <glm/glm.hpp>
-#include <boost/range/size.hpp>
-#include <boost/algorithm/clamp.hpp>
-#include <boost/math/special_functions/sign.hpp>
 
 // can't #include <switch.h> because of conflicts
 extern "C" {
@@ -32,6 +29,9 @@ extern "C" {
 #include "io/log/Logger.h"
 #include "math/Rectangle.h"
 #include "platform/PlatformConfig.h"
+// FIXME: this is not very good, since this module is too low level to access these
+#include "core/Config.h"
+#include "gui/Interface.h"
 
 static Keyboard::Key sdlToArxKey[SDL_NUM_SCANCODES];
 
@@ -84,7 +84,6 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	, cursorInWindow(false)
 	, currentWheel(0)
 	, gyroSmooth(0.8f)
-	, gyroEnabled(true)
 {
 	
 	arx_assert(window != nullptr);
@@ -365,9 +364,8 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	axisDeadzone[SDL_CONTROLLER_AXIS_TRIGGERLEFT] = 0.25f;
 	axisDeadzone[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0.25f;
 
-	gyroScale[0] = 0.33f;
-	gyroScale[1] = 0.33f;
-	gyroEnabled = true; //(appletGetOperationMode() == AppletOperationMode_Console);
+	gyroScale[0] = 0.0666f;
+	gyroScale[1] = 0.0666f;
 
 	lastTouch = Vec2i(0, 0);
 	lastGyro = Vec2f(0.0f, 0.0f);
@@ -389,7 +387,14 @@ bool SDL2InputBackend::update() {
 	if(m_pad)
 		joystickToMouse(winSize);
 
-	const bool gyroActive = gyroEnabled && SDL_GameControllerGetButton(m_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+	bool gyroActive;
+	switch(config.nswitch.gyroMode) {
+		case GyroMagicOnly:  gyroActive = MAGICMODE; break;
+		case GyroCursorMode: gyroActive = TRUE_PLAYER_MOUSELOOK_ON; break;
+		case GyroAlways:     gyroActive = true; break;
+		default:             gyroActive = false; break;
+	}
+
 	if(gyroActive)
 		gyroToMouse(winSize);
 
@@ -538,7 +543,7 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 			const int axis = event.caxis.axis;
 			if(axis >= 0 && axis < SDL_CONTROLLER_AXIS_MAX) {
 				const float oldVal = currentAxis[axis];
-				const float newVal = static_cast<float>(boost::algorithm::clamp(event.caxis.value, -32767, 32767)) / 32767.0f;
+				const float newVal = static_cast<float>(glm::clamp(int(event.caxis.value), -32767, 32767)) / 32767.0f;
 				if(axis == SDL_CONTROLLER_AXIS_LEFTX || axis == SDL_CONTROLLER_AXIS_LEFTY) {
 					// left stick controls movement keys
 					keyStates[moveAxisToArxKey[axis][0] - Keyboard::KeyBase] = (newVal < -axisDeadzone[axis]);
@@ -657,9 +662,9 @@ void SDL2InputBackend::joystickToMouse(const Vec2i & winSize) {
 		const float val = currentAxis[SDL_CONTROLLER_AXIS_RIGHTX + i];
 		if(val > dead || val < -dead) {
 			const float scale = axisScale[SDL_CONTROLLER_AXIS_RIGHTX + i];
-			const int ival = static_cast<int>((val - dead * boost::math::sign(val)) * mouseSpeed * scale);
+			const int ival = static_cast<int>((val - dead * glm::sign(val)) * mouseSpeed * scale);
 			cursorRelAccum[i] += ival;
-			cursorAbs[i] = boost::algorithm::clamp(cursorAbs[i] + ival, 0, winSize[i] - 1);
+			cursorAbs[i] = glm::clamp(cursorAbs[i] + ival, 0, winSize[i] - 1);
 		}
 	}
 }
@@ -670,21 +675,21 @@ void SDL2InputBackend::gyroToMouse(const Vec2i & winSize) {
 	size_t numstates = 0;
 	if (stylemask & HidNpadStyleTag_NpadFullKey)
 		numstates = hidGetSixAxisSensorStates(gyroHandles[2], &sixaxis, 1);
-	else if (stylemask & HidNpadStyleTag_NpadJoyDual) // hope to god right joycon is connected
-		numstates = hidGetSixAxisSensorStates(gyroHandles[1], &sixaxis, 1);
+	else if (stylemask & HidNpadStyleTag_NpadJoyDual) // hope to god the joycon is connected
+		numstates = hidGetSixAxisSensorStates(gyroHandles[config.nswitch.gyroJoyconIndex], &sixaxis, 1);
 	if(numstates > 0) {
-		const Vec2f fdelta = Vec2f(sixaxis.angular_velocity.y, -sixaxis.angular_velocity.x);
+		const Vec2f fdelta = Vec2f(-sixaxis.angular_velocity.z, -sixaxis.angular_velocity.x);
 		const Vec2f ldelta = Vec2f(
 			lerp(lastGyro.x, fdelta.x, gyroSmooth),
 			lerp(lastGyro.y, fdelta.y, gyroSmooth)
 		);
 		const Vec2i delta = Vec2i(
-			int(ldelta.x * gyroScale[0] * winSize.x),
-			int(ldelta.y * gyroScale[1] * winSize.y)
+			int(ldelta.x * gyroScale[0] * winSize.x * float(config.nswitch.gyroSensitivity.x)),
+			int(ldelta.y * gyroScale[1] * winSize.y * float(config.nswitch.gyroSensitivity.y))
 		);
 		cursorRelAccum += delta;
-		cursorAbs.x = boost::algorithm::clamp(cursorAbs.x + delta.x, 0, winSize.x);
-		cursorAbs.y = boost::algorithm::clamp(cursorAbs.y + delta.y, 0, winSize.y);
+		cursorAbs.x = glm::clamp(cursorAbs.x + delta.x, 0, winSize.x);
+		cursorAbs.y = glm::clamp(cursorAbs.y + delta.y, 0, winSize.y);
 		lastGyro = ldelta;
 	}
 }

@@ -105,6 +105,17 @@ enum AutoReadyWeapon {
 	AlwaysAutoReadyWeapon = 2,
 };
 
+#ifdef __SWITCH__
+
+enum GyroMode {
+	GyroDisabled = 0,
+	GyroMagicOnly = 1,
+	GyroCursorMode = 2,
+	GyroAlways = 3
+};
+
+#endif
+
 struct ActionKey {
 	
 	explicit ActionKey(InputKeyId key_0 = UNUSED,
@@ -224,6 +235,18 @@ public:
 		
 	} input;
 	
+	#ifdef __SWITCH__
+	// section 'switch'
+	struct {
+
+		Vec2i gyroSensitivity;
+		int gyroJoyconIndex;
+		GyroMode gyroMode;
+		bool gyroDockedOnly;
+
+	} nswitch;
+	#endif
+
 	// section 'key'
 	ActionKey actions[NUM_ACTION_KEY];
 	

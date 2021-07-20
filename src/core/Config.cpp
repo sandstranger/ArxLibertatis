@@ -75,12 +75,15 @@ const int
 	fontWeight = 2,
 	hrtf = audio::HRTFDefault,
 	autoReadyWeapon = AutoReadyWeaponNearEnemies,
-	mouseSensitivity = 6,
+	mouseSensitivity = 5,
 	mouseAcceleration = 0,
 	migration = Config::OriginalAssets,
 	quicksaveSlots = 3,
 	bufferSize = 0,
-	quickLevelTransition = JumpToChangeLevel;
+	quickLevelTransition = JumpToChangeLevel,
+	gyroSensitivity = 4,
+	gyroJoycon = 1,
+	gyroMode = GyroMagicOnly;
 
 const bool
 	fullscreen = true,
@@ -103,7 +106,8 @@ const bool
 	rawMouseInput = true,
 	borderTurning = true,
 	useAltRuneRecognition = true,
-	improvedBowAim = true;
+	improvedBowAim = true,
+	gyroDockedOnly = true;
 
 #ifdef ARX_DEBUG
 const bool allowConsole = true;
@@ -115,7 +119,7 @@ const float
 	fogDistance = 10.f,
 	gamma = 5.f,
 	fov = 75.f,
-	hudScale = 0.5f,
+	hudScale = 1.0f,
 	bookScale = 1.f,
 	cursorScale = 0.5f,
 	fontSize = 1.f,
@@ -183,7 +187,8 @@ const std::string
 	Audio = "audio",
 	Input = "input",
 	Key = "key",
-	Misc = "misc";
+	Misc = "misc",
+	NSwitch = "nswitch";
 
 } // namespace Section
 
@@ -318,6 +323,16 @@ const std::string
 	migration = "migration",
 	quicksaveSlots = "quicksave_slots",
 	debugLevels = "debug";
+
+#ifdef __SWITCH__
+// Switch options
+const std::string
+	gyroMode = "gyro_mode",
+	gyroJoycon = "gyro_joycon",
+	gyroSensitivityX = "gyro_sensitivity_x",
+	gyroSensitivityY = "gyro_sensitivity_y",
+	gyroDockedOnly = "gyro_docked_only";
+#endif
 
 } // namespace Key
 
@@ -542,6 +557,16 @@ bool Config::save() {
 	writer.writeKey(Key::quicksaveSlots, misc.quicksaveSlots);
 	writer.writeKey(Key::debugLevels, misc.debug);
 	
+	#ifdef __SWITCH__
+	// switch
+	writer.beginSection(Section::NSwitch);
+	writer.writeKey(Key::gyroMode, int(nswitch.gyroMode));
+	writer.writeKey(Key::gyroJoycon, nswitch.gyroJoyconIndex);
+	writer.writeKey(Key::gyroDockedOnly, nswitch.gyroDockedOnly);
+	writer.writeKey(Key::gyroSensitivityX, nswitch.gyroSensitivity.x);
+	writer.writeKey(Key::gyroSensitivityY, nswitch.gyroSensitivity.y);
+	#endif
+
 	return writer.flush();
 }
 
@@ -697,5 +722,16 @@ bool Config::init(const fs::path & file) {
 	misc.quicksaveSlots = std::max(reader.getKey(Section::Misc, Key::quicksaveSlots, Default::quicksaveSlots), 1);
 	misc.debug = reader.getKey(Section::Misc, Key::debugLevels, Default::debugLevels);
 	
+	#ifdef __SWITCH__
+	// Get Switch settings
+	int gyroMode = reader.getKey(Section::NSwitch, Key::gyroMode, Default::gyroMode);
+	nswitch.gyroMode = GyroMode(glm::clamp(gyroMode, 0, 3));
+	int gyroJoyconIndex = reader.getKey(Section::NSwitch, Key::gyroJoycon, Default::gyroJoycon);
+	nswitch.gyroJoyconIndex = glm::clamp(gyroJoyconIndex, 0, 1);
+	nswitch.gyroDockedOnly = reader.getKey(Section::NSwitch, Key::gyroDockedOnly, Default::gyroDockedOnly);
+	nswitch.gyroSensitivity.x = reader.getKey(Section::NSwitch, Key::gyroSensitivityX, Default::gyroSensitivity);
+	nswitch.gyroSensitivity.y = reader.getKey(Section::NSwitch, Key::gyroSensitivityY, Default::gyroSensitivity);
+	#endif
+
 	return loaded;
 }
