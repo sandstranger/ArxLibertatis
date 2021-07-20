@@ -2017,7 +2017,7 @@ endif()
 if(NINTENDO_SWITCH)
 	add_custom_command(
 		TARGET arx POST_BUILD
-		COMMAND nacptool --create "Arx Libertatis" \"\" \"\" "arx.nacp"
+		COMMAND nacptool --create "Arx Libertatis" "Arkane, Arx Libertatis team, fgsfds" "1.2-nx1" "arx.nacp"
 		COMMAND aarch64-none-elf-strip -o ${CMAKE_BINARY_DIR}/arx_stripped ${CMAKE_BINARY_DIR}/arx
 		COMMAND elf2nro ${CMAKE_BINARY_DIR}/arx_stripped ${CMAKE_BINARY_DIR}/arx.nro
 		                --icon=${CMAKE_SOURCE_DIR}/data/icons/arx-libertatis-switch.jpg --nacp=arx.nacp
