@@ -183,19 +183,16 @@ bool SDL2Window::initializeFramework() {
 	platform::EnvironmentLock environment(overrrides);
 	#endif
 	
-	if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) {
+	Uint32 sdlFlags = SDL_INIT_VIDEO | SDL_INIT_EVENTS;
+	#ifdef __SWITCH__
+	sdlFlags |= SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER;
+	#endif
+
+	if(SDL_Init(sdlFlags) < 0) {
 		LogError << "Failed to initialize SDL: " << SDL_GetError();
 		return false;
 	}
 	
-	#ifdef __SWITCH__
-	// have to init this before creating a window
-	if(SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
-		LogError << "Failed to initialize SDL GameControllers: " << SDL_GetError();
-		return false;
-	}
-	#endif
-
 	SDL_version ver;
 	SDL_GetVersion(&ver);
 	std::ostringstream runtimeVersion;
@@ -242,6 +239,27 @@ bool SDL2Window::initializeFramework() {
 	SDL_EventState(SDL_DROPFILE,    SDL_ENABLE);
 	SDL_EventState(SDL_SYSWMEVENT,  SDL_IGNORE);
 	SDL_EventState(SDL_USEREVENT,   SDL_IGNORE);
+	#ifdef __SWITCH__
+	// have to set these BEFORE the window is created?
+	SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
+	SDL_EventState(SDL_KEYDOWN, SDL_ENABLE);
+	SDL_EventState(SDL_KEYUP, SDL_ENABLE);
+	SDL_EventState(SDL_TEXTINPUT, SDL_DISABLE);
+	SDL_EventState(SDL_TEXTEDITING, SDL_DISABLE);
+	#if SDL_VERSION_ATLEAST(2, 0, 5)
+	SDL_EventState(SDL_DROPTEXT, SDL_ENABLE);
+	#endif
+	SDL_EventState(SDL_MOUSEMOTION, SDL_ENABLE);
+	SDL_EventState(SDL_MOUSEBUTTONDOWN, SDL_ENABLE);
+	SDL_EventState(SDL_MOUSEBUTTONUP, SDL_ENABLE);
+	SDL_EventState(SDL_CONTROLLERBUTTONDOWN, SDL_ENABLE);
+	SDL_EventState(SDL_CONTROLLERBUTTONUP, SDL_ENABLE);
+	SDL_EventState(SDL_CONTROLLERAXISMOTION, SDL_ENABLE);
+	SDL_EventState(SDL_FINGERDOWN, SDL_ENABLE);
+	SDL_EventState(SDL_FINGERUP, SDL_ENABLE);
+	SDL_EventState(SDL_FINGERMOTION, SDL_ENABLE);
+	SDL_GameControllerEventState(SDL_ENABLE);
+	#endif
 	
 	return true;
 }

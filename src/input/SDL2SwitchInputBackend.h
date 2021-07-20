@@ -22,8 +22,14 @@
 
 #include <string>
 #include <stddef.h>
+#include <stdint.h>
 
 #include <SDL.h>
+
+// can't #include <switch.h> because of conflicts
+extern "C" {
+#include <switch/services/hid.h>
+}
 
 #include "input/InputBackend.h"
 #include "input/Keyboard.h"
@@ -59,7 +65,6 @@ public:
 	
 private:
 	
-	void joystickToMouse();
 
 	SDL2Window * m_window;
 
@@ -89,7 +94,16 @@ private:
 	
 	int numFingers;
 	Vec2i lastTouch;
+
+	HidSixAxisSensorHandle gyroHandles[3];
+	float gyroScale[2];
+	float gyroSmooth;
+	bool gyroEnabled;
+	Vec2f lastGyro;
 	
+	void joystickToMouse(const Vec2i & winSize);
+	void gyroToMouse(const Vec2i & winSize);
+
 };
 
 #endif // ARX_INPUT_SDL2INPUTBACKEND_H

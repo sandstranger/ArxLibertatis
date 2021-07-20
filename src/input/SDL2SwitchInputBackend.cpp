@@ -24,6 +24,11 @@
 #include <boost/algorithm/clamp.hpp>
 #include <boost/math/special_functions/sign.hpp>
 
+// can't #include <switch.h> because of conflicts
+extern "C" {
+#include <switch/services/applet.h>
+}
+
 #include "io/log/Logger.h"
 #include "math/Rectangle.h"
 #include "platform/PlatformConfig.h"
@@ -40,10 +45,10 @@ static const Keyboard::Key padToArxKey[SDL_CONTROLLER_BUTTON_MAX] = {
 	Keyboard::Key_F1,         // Back
 	Keyboard::Key_Invalid,    // Guide
 	Keyboard::Key_Escape,     // Start
-	Keyboard::Key_LeftCtrl,   // LStick
-	Keyboard::Key_RightCtrl,  // RStick
-	Keyboard::Key_LeftShift,  // LShoulder
-	Keyboard::Key_RightShift, // RShoulder
+	Keyboard::Key_LeftShift,  // LStick
+	Keyboard::Key_RightShift, // RStick
+	Keyboard::Key_LeftCtrl,   // LShoulder
+	Keyboard::Key_RightCtrl,  // RShoulder
 	Keyboard::Key_UpArrow,    // D-Pad Up
 	Keyboard::Key_DownArrow,  // D-Pad Down
 	Keyboard::Key_LeftArrow,  // D-Pad Left
@@ -62,6 +67,10 @@ static const Mouse::Button triggerToArxButton[2] {
 
 static constexpr float mouseSpeed = 100.0f;
 
+static constexpr float lerp(float a, float b, float t) {
+	return (1.0f - t) * a + t * b;
+}
+
 SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	: m_window(window)
 	, m_pad(nullptr)
@@ -74,40 +83,24 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	, cursorRelAccum(0)
 	, cursorInWindow(false)
 	, currentWheel(0)
+	, gyroSmooth(0.8f)
+	, gyroEnabled(true)
 {
 	
 	arx_assert(window != nullptr);
-	
-	// swap A, B and X, Y to correct positions
-	SDL_GameControllerAddMapping(
-		"53776974636820436F6E74726F6C6C65,Switch Controller,"
-		"a:b0,b:b1,back:b11,"
-		"dpdown:b15,dpleft:b12,dpright:b14,dpup:b13,"
-		"leftshoulder:b6,leftstick:b4,lefttrigger:b8,leftx:a0,lefty:a1,"
-		"rightshoulder:b7,rightstick:b5,righttrigger:b9,rightx:a2,righty:a3,"
-		"start:b10,x:b2,y:b3"
-	);
-	
-	SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
-	SDL_EventState(SDL_KEYDOWN, SDL_ENABLE);
-	SDL_EventState(SDL_KEYUP, SDL_ENABLE);
-	SDL_EventState(SDL_TEXTINPUT, SDL_ENABLE);
-	SDL_EventState(SDL_TEXTEDITING, SDL_ENABLE);
-	#if SDL_VERSION_ATLEAST(2, 0, 5)
-	SDL_EventState(SDL_DROPTEXT, SDL_ENABLE);
-	#endif
-	SDL_EventState(SDL_MOUSEMOTION, SDL_ENABLE);
-	SDL_EventState(SDL_MOUSEBUTTONDOWN, SDL_ENABLE);
-	SDL_EventState(SDL_MOUSEBUTTONUP, SDL_ENABLE);
-	
-	const char * controllername = SDL_GameControllerNameForIndex(0);
-	m_pad = SDL_GameControllerOpen(0);
-	if(m_pad)
-		LogInfo << "Detected controller: " << (controllername != NULL ? controllername : "NULL");
-	else
-		LogWarning << "No controller detected.";
 
-	arx_assert(pad);
+	m_pad = SDL_GameControllerOpen(0);
+	arx_assert(m_pad != nullptr);
+
+	const char * controllername = SDL_GameControllerNameForIndex(0);
+	controllername = (controllername != NULL ? controllername : "NULL");
+	LogInfo << "Detected controller: " << controllername;
+
+	hidGetSixAxisSensorHandles(&gyroHandles[0], 2, HidNpadIdType_No1, HidNpadStyleTag_NpadJoyDual);
+	hidGetSixAxisSensorHandles(&gyroHandles[2], 1, HidNpadIdType_No1, HidNpadStyleTag_NpadFullKey);
+	hidStartSixAxisSensor(gyroHandles[0]);
+	hidStartSixAxisSensor(gyroHandles[1]);
+	hidStartSixAxisSensor(gyroHandles[2]);
 
 	std::fill_n(sdlToArxKey, std::size(sdlToArxKey), Keyboard::Key_Invalid);
 	
@@ -372,7 +365,12 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	axisDeadzone[SDL_CONTROLLER_AXIS_TRIGGERLEFT] = 0.25f;
 	axisDeadzone[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0.25f;
 
+	gyroScale[0] = 0.33f;
+	gyroScale[1] = 0.33f;
+	gyroEnabled = true; //(appletGetOperationMode() == AppletOperationMode_Console);
+
 	lastTouch = Vec2i(0, 0);
+	lastGyro = Vec2f(0.0f, 0.0f);
 
 }
 
@@ -384,8 +382,16 @@ bool SDL2InputBackend::update() {
 	
 	wheel = 0;
 	
+	const Vec2i winSize = m_window->getSize();
+
 	SDL_GameControllerUpdate();
-	joystickToMouse();
+
+	if(m_pad)
+		joystickToMouse(winSize);
+
+	const bool gyroActive = gyroEnabled && SDL_GameControllerGetButton(m_pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+	if(gyroActive)
+		gyroToMouse(winSize);
 
 	cursorRel = cursorRelAccum;
 	cursorRelAccum = Vec2i(0);
@@ -645,8 +651,7 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 	
 }
 
-void SDL2InputBackend::joystickToMouse() {
-	const Vec2i winSize = m_window->getSize();
+void SDL2InputBackend::joystickToMouse(const Vec2i & winSize) {
 	for(int i = 0; i < 2; ++i) {
 		const float dead = axisDeadzone[SDL_CONTROLLER_AXIS_RIGHTX + i];
 		const float val = currentAxis[SDL_CONTROLLER_AXIS_RIGHTX + i];
@@ -656,5 +661,30 @@ void SDL2InputBackend::joystickToMouse() {
 			cursorRelAccum[i] += ival;
 			cursorAbs[i] = boost::algorithm::clamp(cursorAbs[i] + ival, 0, winSize[i] - 1);
 		}
+	}
+}
+
+void SDL2InputBackend::gyroToMouse(const Vec2i & winSize) {
+	HidSixAxisSensorState sixaxis;
+	const u64 stylemask = hidGetNpadStyleSet(HidNpadIdType_No1) | hidGetNpadStyleSet(HidNpadIdType_Handheld);
+	size_t numstates = 0;
+	if (stylemask & HidNpadStyleTag_NpadFullKey)
+		numstates = hidGetSixAxisSensorStates(gyroHandles[2], &sixaxis, 1);
+	else if (stylemask & HidNpadStyleTag_NpadJoyDual) // hope to god right joycon is connected
+		numstates = hidGetSixAxisSensorStates(gyroHandles[1], &sixaxis, 1);
+	if(numstates > 0) {
+		const Vec2f fdelta = Vec2f(sixaxis.angular_velocity.y, -sixaxis.angular_velocity.x);
+		const Vec2f ldelta = Vec2f(
+			lerp(lastGyro.x, fdelta.x, gyroSmooth),
+			lerp(lastGyro.y, fdelta.y, gyroSmooth)
+		);
+		const Vec2i delta = Vec2i(
+			int(ldelta.x * gyroScale[0] * winSize.x),
+			int(ldelta.y * gyroScale[1] * winSize.y)
+		);
+		cursorRelAccum += delta;
+		cursorAbs.x = boost::algorithm::clamp(cursorAbs.x + delta.x, 0, winSize.x);
+		cursorAbs.y = boost::algorithm::clamp(cursorAbs.y + delta.y, 0, winSize.y);
+		lastGyro = ldelta;
 	}
 }
