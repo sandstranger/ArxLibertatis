@@ -380,7 +380,21 @@ bool SaveBlock::open(bool writable) {
 		return false;
 	}
 	
+	m_writable = writable;
+
 	return true;
+}
+
+bool SaveBlock::ensure_open(bool writable) {
+
+	if(m_handle.is_open()) {
+		if(m_writable == writable) {
+			m_handle.clear();
+			return !m_handle.seekg(0).fail();
+		}
+	}
+
+	return open(writable);
 }
 
 bool SaveBlock::flush(const std::string & important) {
@@ -394,9 +408,14 @@ bool SaveBlock::flush(const std::string & important) {
 	
 	writeFileTable(important);
 	
-	m_handle.flush();
+	if(!m_handle.flush().good())
+		return false;
 	
-	return m_handle.good();
+	// need to close this on systems that don't allow multiple file handles for one file
+	// ensure_open() will handle reopening
+	m_handle.close();
+	
+	return !m_handle.fail();
 }
 
 bool SaveBlock::defragment() {

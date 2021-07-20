@@ -253,8 +253,8 @@ static bool openCurrentSavedGameFile() {
 	arx_assert(!CURRENT_GAME_FILE.empty());
 	
 	if(g_currentSavedGame) {
-		// Already open...
-		return true;
+		// Already open?
+		return g_currentSavedGame->ensure_open(true);
 	}
 	
 	g_currentSavedGame = new SaveBlock(CURRENT_GAME_FILE);

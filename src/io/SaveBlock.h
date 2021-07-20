@@ -104,6 +104,7 @@ private:
 	size_t m_usedSize;
 	size_t m_chunkCount;
 	Files m_files;
+	bool m_writable;
 	
 	bool defragment();
 	bool loadFileTable();
@@ -126,6 +127,12 @@ public:
 	 */
 	bool open(bool writable = false);
 	
+	/*!
+	 * Open a save block if it's not already open.
+	 * \param writable must be true if the block is going to be changed
+	 */
+	bool ensure_open(bool writable = false);
+
 	/*!
 	 * Finalize the save block: defragment if needed and write the file table.
 	 */
