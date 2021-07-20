@@ -59,6 +59,7 @@
 #cmakedefine01 ARX_HAVE_FSTATAT
 #cmakedefine01 ARX_HAVE_AT_SYMLINK_NOFOLLOW
 #cmakedefine01 ARX_HAVE_CHDIR
+#cmakedefine01 ARX_PRECACHE_PAKFILES
 
 // Video backend
 #cmakedefine01 ARX_HAVE_EPOXY

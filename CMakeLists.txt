@@ -932,6 +932,8 @@ if(NINTENDO_SWITCH)
 	set(ARX_HAVE_SETENV FALSE)
 	set(ARX_HAVE_UNSETENV FALSE)
 	set(ARX_HAVE_KILL FALSE)
+	# enable archive precaching
+	set(ARX_PRECACHE_PAKFILES TRUE)
 endif()
 
 # Sources

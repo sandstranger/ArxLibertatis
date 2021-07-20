@@ -27,6 +27,8 @@
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 
+#include "Configure.h"
+
 #include "io/log/Logger.h"
 #include "io/Blast.h"
 #include "io/resource/PakEntry.h"
@@ -82,7 +84,12 @@ class UncompressedFile : public PakFile {
 public:
 	
 	explicit UncompressedFile(std::istream * archive, size_t offset, size_t size)
-		: m_archive(*archive), m_offset(offset), m_size(size) { }
+		: m_archive(*archive), m_offset(offset), m_size(size) {
+		#if ARX_PRECACHE_PAKFILES
+		_cached.clear();
+		_cached = read();
+		#endif
+	}
 	
 	std::string read() const;
 	
@@ -114,6 +121,11 @@ public:
 
 std::string UncompressedFile::read() const {
 	
+	#if ARX_PRECACHE_PAKFILES
+	if(!_cached.empty())
+		return _cached;
+	#endif
+
 	m_archive.seekg(m_offset);
 	
 	std::string buffer;
@@ -140,11 +152,21 @@ size_t UncompressedFileHandle::read(void * buf, size_t size) {
 		return 0;
 	}
 	
-	m_file.m_archive.seekg(m_file.m_offset + m_offset);
-	
 	if(m_file.m_size < m_offset + size) {
 		size = (m_offset > m_file.m_size) ? 0 : (m_file.m_size - m_offset);
 	}
+
+	#ifdef ARX_PRECACHE_PAKFILES
+	auto & cached = m_file.cached_contents();
+	if(!cached.empty()) {
+		const size_t nread = std::min(size, m_file.m_size - m_offset);
+		std::memcpy(buf, cached.c_str() + m_offset, nread);
+		m_offset += nread;
+		return nread;
+	}
+	#endif
+
+	m_file.m_archive.seekg(m_file.m_offset + m_offset);
 	
 	fs::read(m_file.m_archive, buf, size);
 	
@@ -190,7 +212,12 @@ class CompressedFile : public PakFile {
 public:
 	
 	explicit CompressedFile(fs::ifstream * archive, size_t offset, size_t size, size_t storedSize)
-		:  m_archive(*archive), m_offset(offset), m_storedSize(storedSize), m_uncompressedSize(size) { }
+		:  m_archive(*archive), m_offset(offset), m_storedSize(storedSize), m_uncompressedSize(size) {
+		#if ARX_PRECACHE_PAKFILES
+		_cached.clear();
+		_cached = read();
+		#endif
+	}
 	
 	std::string read() const;
 	
@@ -246,6 +273,11 @@ size_t blastInFile(void * Param, const unsigned char ** buf) {
 
 std::string CompressedFile::read() const {
 	
+	#if ARX_PRECACHE_PAKFILES
+	if(!_cached.empty())
+		return _cached;
+	#endif
+
 	m_archive.seekg(m_offset);
 	
 	std::string buffer;
@@ -317,6 +349,16 @@ size_t CompressedFileHandle::read(void * buf, size_t size) {
 		return 0;
 	}
 	
+	#ifdef ARX_PRECACHE_PAKFILES
+	auto & cached = m_file.cached_contents();
+	if(!cached.empty()) {
+		const size_t nread = std::min(size, m_file.m_uncompressedSize - m_offset);
+		std::memcpy(buf, cached.c_str() + m_offset, nread);
+		m_offset += nread;
+		return nread;
+	}
+	#endif
+
 	if(size < m_file.m_uncompressedSize || m_offset != 0) {
 		LogWarning << "Partially reading a compressed file - inefficient: size=" << size
 		           << " offset=" << m_offset << " total=" << m_file.m_uncompressedSize;

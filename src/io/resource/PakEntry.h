@@ -25,6 +25,8 @@
 
 #include <boost/noncopyable.hpp>
 
+#include "Configure.h"
+
 namespace res { class path; }
 
 class PakFileHandle;
@@ -41,6 +43,10 @@ protected:
 	
 	virtual ~PakFile();
 	
+	#if ARX_PRECACHE_PAKFILES
+	std::string _cached;
+	#endif
+
 	friend class PakReader;
 	friend class PakDirectory;
 	
@@ -52,6 +58,10 @@ public:
 	
 	virtual PakFileHandle * open() const = 0;
 	
+	#if ARX_PRECACHE_PAKFILES
+	const std::string & cached_contents() const { return _cached; }
+	#endif
+
 };
 
 class PakDirectory {
