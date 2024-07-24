@@ -1482,9 +1482,13 @@ endif()
 
 # Add executables
 
+if (ANDROID)
+	add_library (arx SHARED "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")
+else()
 add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")
-set_binary_type(arx WIN32)
-set_binary_installdir(arx "${GAMESBINDIR}")
+	set_binary_type(arx WIN32)
+	set_binary_installdir(arx "${GAMESBINDIR}")
+endif()
 
 if(Qt_VERSION VERSION_LESS 5.6)
 	set(qt_dpiaware)
