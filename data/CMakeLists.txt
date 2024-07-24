@@ -107,20 +107,6 @@ set(overview_sizes
 	512
 )
 
-add_icon(arx-libertatis
-	arx-libertatis.svg    1024
-	arx-libertatis-32.svg 32@2x 512
-	arx-libertatis-16.svg 16@2x
-	ICO ${ico_sizes}
-	ICNS ${icns_sizes}
-	ICONSET ${iconset_sizes}
-	PNG ${png_sizes}
-	OVERVIEW ${overview_sizes}
-	INSTALL
-)
-
-add_icon(TARGET arx-libertatis-logo arx-libertatis-logo.svg 58 3080x512)
-
 add_custom_target(data DEPENDS
 	arx-libertatis-icon
 	arx-libertatis-logo
