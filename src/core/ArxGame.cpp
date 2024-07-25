@@ -419,6 +419,11 @@ bool ArxGame::initWindow(RenderWindow * window) {
 	m_MainWindow->setTitle(arx_name + " " + arx_version);
 	m_MainWindow->setMinimizeOnFocusLost(config.window.minimizeOnFocusLost);
 	m_MainWindow->setMinTextureUnits(3);
+#ifdef ANDROID   
+	m_MainWindow->setMinTextureUnits(2);
+#else
+    m_MainWindow->setMinTextureUnits(3);
+#endif    
 	m_MainWindow->setMaxMSAALevel(config.video.antialiasing ? 8 : 1);
 	m_MainWindow->setVSync(benchmark::isEnabled() ? 0 : config.video.vsync);
 	
