@@ -418,7 +418,6 @@ bool ArxGame::initWindow(RenderWindow * window) {
 	
 	m_MainWindow->setTitle(arx_name + " " + arx_version);
 	m_MainWindow->setMinimizeOnFocusLost(config.window.minimizeOnFocusLost);
-	m_MainWindow->setMinTextureUnits(3);
 #ifdef ANDROID   
 	m_MainWindow->setMinTextureUnits(2);
 #else
