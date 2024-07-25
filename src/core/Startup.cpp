@@ -71,14 +71,21 @@
  * This is needed to initialize NSApplication - otherwise we will later
  * crash when trying to use SDL windowing functions.
  */
+#ifdef ANDROID
+    #include <SDL_main.h>
+#endif
+
 #if ARX_PLATFORM == ARX_PLATFORM_MACOS
 	#include <SDL_main.h>
 #else
-	#undef main /* in case SDL.h was already included */
+//	#undef main /* in case SDL.h was already included */
 #endif
 
+#ifdef ANDROID
+int SDL_main(int argc, char **argv) {
+#else
 int utf8_main(int argc, char ** argv) {
-	
+#endif	
 	// GCC -ffast-math disables denormal before main() - do the same for other compilers
 	Thread::disableFloatDenormals();
 	

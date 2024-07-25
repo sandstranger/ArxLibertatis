@@ -1483,9 +1483,10 @@ endif()
 # Add executables
 
 if (ANDROID)
-	add_library (arx SHARED "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")
+	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}")
+    target_link_libraries(arx "${ARX_LIBRARIES}")
 else()
-add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")
+    add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")
 	set_binary_type(arx WIN32)
 	set_binary_installdir(arx "${GAMESBINDIR}")
 endif()
