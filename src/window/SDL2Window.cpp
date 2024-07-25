@@ -768,8 +768,9 @@ void SDL2Window::processEvents(bool waitForEvent) {
 						#endif
 						break;
 					}
-					
+#ifndef ANDROID					
 					case SDL_WINDOWEVENT_HIDDEN:       onShow(false);  break;
+#endif                    
 					case SDL_WINDOWEVENT_EXPOSED:      onPaint();      break;
 					case SDL_WINDOWEVENT_MINIMIZED:    onMinimize();   break;
 					case SDL_WINDOWEVENT_MAXIMIZED:    onMaximize();   break;

@@ -282,7 +282,7 @@ static bool migrateFilenames(fs::path path, bool is_dir) {
 }
 
 static bool migrateFilenames(const fs::path & configFile) {
-	
+#ifndef ANDROID   
 	LogInfo << "Changing filenames to lowercase...";
 	
 	static const char * files[] = { "cfg.ini", "cfg_default.ini",
@@ -304,6 +304,9 @@ static bool migrateFilenames(const fs::path & configFile) {
 	}
 	
 	return migrated;
+#else
+    return true;
+#endif    
 }
 
 bool ArxGame::initConfig() {
