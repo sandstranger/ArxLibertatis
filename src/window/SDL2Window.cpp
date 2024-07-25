@@ -383,7 +383,8 @@ bool SDL2Window::initialize() {
 		bool first = (api == 0);
 		
 		bool matched = false;
-		
+
+#ifndef ANDROID       
 		if(samples == 0 && first == (autoRenderer || config.video.renderer == "OpenGL")) {
 			matched = true;
 			
@@ -420,7 +421,7 @@ bool SDL2Window::initialize() {
 			}
 			
 		}
-		
+#endif		
 		#if ARX_HAVE_EPOXY
 		if(samples == 0 && first == (autoRenderer || config.video.renderer == "OpenGL ES")) {
 			matched = true;
