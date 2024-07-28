@@ -34,8 +34,8 @@
 #include "util/String.h"
 
 #ifdef ANDROID
-#include "set.h"
-#include "string.h"
+#include <set>
+#include <string.h>
 #endif
 
 static std::string g_glExtensionOverride;
