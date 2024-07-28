@@ -77,8 +77,8 @@
 
 #if ARX_PLATFORM == ARX_PLATFORM_MACOS
 	#include <SDL_main.h>
-#else
-//	#undef main /* in case SDL.h was already included */
+#elifndef ANDROID
+	#undef main /* in case SDL.h was already included */
 #endif
 
 #ifdef ANDROID

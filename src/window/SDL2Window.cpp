@@ -421,7 +421,29 @@ bool SDL2Window::initialize() {
 			}
 			
 		}
-#endif		
+#else
+        if(samples == 0) {
+            matched = true;
+
+            for(int type = 0; type < ((debugMode == gldebug::Enabled) ? 2 : 1) && samples == 0; type++) {
+
+                int flags = 0;
+                if(debugMode == gldebug::Enabled && type == 0) {
+                    flags |= SDL_GL_CONTEXT_DEBUG_FLAG;
+                }
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, flags);
+
+                // TODO OpenGL ES 2.0+ is not supported yet
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
+                samples = createWindowAndGLContext("OpenGL ES");
+
+            }
+        }
+#endif
+
 		#if ARX_HAVE_EPOXY
 		if(samples == 0 && first == (autoRenderer || config.video.renderer == "OpenGL ES")) {
 			matched = true;

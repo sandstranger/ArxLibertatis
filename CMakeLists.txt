@@ -405,7 +405,12 @@ include_directories(SYSTEM ${FREETYPE_INCLUDE_DIRS})
 list(APPEND ARX_LIBRARIES ${FREETYPE_LIBRARIES})
 
 # OpenGL
-if(USE_OPENGL)
+if (ANDROID)
+    find_package(OpenGL ${OPTIONAL_DEPENDENCY})
+    set(ARX_HAVE_OPENGL 1)
+endif ()
+
+if (USE_OPENGL AND NOT ANDROID)
 	if(NOT ARX_HAVE_OPENGL AND (WITH_OPENGL STREQUAL "" OR WITH_OPENGL STREQUAL "epoxy"))
 	if(NOT WITH_OPENGL)
 		set(EPOXY_OPTIONAL_DEPENDENCY)
@@ -1275,6 +1280,16 @@ if(USE_OPENAL AND OPENAL_FOUND)
 endif()
 
 # Graphics
+
+if (ANDROID)
+    list(APPEND ARX_LIBRARIES ${OPENGL_gl_LIBRARY})
+    include_directories(SYSTEM ${OPENGL_INCLUDE_DIR})
+endif()    
+
+if (ANDROID)
+    list(APPEND GRAPHICS_SOURCES ${GRAPHICS_OPENGL_SOURCES})
+endif()    
+if (NOT ANDROID)
 if(ARX_HAVE_OPENGL)
 	list(APPEND GRAPHICS_SOURCES ${GRAPHICS_OPENGL_SOURCES})
 	if(EPOXY_FOUND)
@@ -1290,6 +1305,7 @@ else()
 	unset(ARX_HAVE_SDL)
 	unset(ARX_HAVE_SDL1)
 	unset(ARX_HAVE_SDL2)
+endif()
 endif()
 
 # Windowing / input
@@ -1485,6 +1501,8 @@ endif()
 if (ANDROID)
 	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}")
     target_link_libraries(arx "${ARX_LIBRARIES}")
+    target_link_libraries(arx ${OPENGL_opengl_LIBRARY})
+    target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
     add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")
 	set_binary_type(arx WIN32)
@@ -1969,10 +1987,12 @@ print_configuration("Filesystem backend" FIRST
 	ARX_HAVE_WIN32_FILESYSTEM "Win32"
 	1                         "Boost"
 )
+
 print_configuration("Renderer"
 	ARX_HAVE_EPOXY "OpenGL (libepoxy)"
 	ARX_HAVE_EPOXY "OpenGL ES (libepoxy)"
-	ARX_HAVE_GLEW  "OpenGL (GLEW)"
+	ARX_HAVE_GLEW  "OpenGL (GLEW)" 
+    ARX_HAVE_OPENGL "OpenGL"        
 )
 print_configuration("Audio features"
 	ARX_HAVE_OPENAL_EFX  "EFX"
@@ -2008,6 +2028,9 @@ endif()
 
 if(NOT (ARX_HAVE_PTHREADS OR WIN32))
 	message(SEND_ERROR "No supported thread libraries found.")
+endif()
+if (ANDROID AND NOT (ARX_HAVE_OPENGL))
+    message(SEND_ERROR "No renderer available - need OpenGL for Android")
 endif()
 if(NOT (ARX_HAVE_OPENGL))
 	message(SEND_ERROR "No renderer available - need libepoxy or OpenGL and GLEW")

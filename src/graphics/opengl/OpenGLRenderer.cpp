@@ -403,6 +403,7 @@ void OpenGLRenderer::reinit() {
 	
 	glEnable(GL_ALPHA_TEST);
 	m_glalphaFunc = -1.f;
+#ifndef ANDROID
 	#ifdef GL_VERSION_4_0
 	if(hasSampleShading()) {
 		#if ARX_HAVE_GLEW
@@ -411,7 +412,8 @@ void OpenGLRenderer::reinit() {
 		glMinSampleShading(1.f);
 		#endif
 	}
-	#endif
+    #endif
+#endif    
 	m_glstate.setAlphaCutout(false);
 	
 	glEnable(GL_DEPTH_TEST);
@@ -624,6 +626,7 @@ void OpenGLRenderer::Clear(BufferFlags bufferFlags, Color clearColor, float clea
 			glDepthMask(GL_TRUE);
 			m_glstate.setDepthWrite(true);
 		}
+        
 		#ifdef GL_VERSION_4_1
 		if(hasClearDepthf()) {
 			glClearDepthf(clearDepth);

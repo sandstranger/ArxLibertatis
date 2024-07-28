@@ -79,7 +79,9 @@ OpenGLInfo::OpenGLInfo()
 	} else if(glewIsSupported("GL_VERSION_1_4")) {
 		m_version = 14;
 	}
-	#endif
+    #elif ANDROID
+        m_version = 21;
+    #endif
 	
 	m_versionString = reinterpret_cast<const char *>(glGetString(GL_VERSION));
 	const char * prefix = "OpenGL ";
@@ -179,10 +181,13 @@ bool OpenGLInfo::has(const char * extension, u32 version) const {
 		bool supported = epoxy_has_gl_extension(extension);
 		#elif ARX_HAVE_GLEW
 		bool supported = glewIsSupported(extension);
-		#endif
+        #elif ANDROID
+            return true; //TODO USE extensions support from gl4es
+        #else            
 		if(!supported) {
 			return false;
 		}
+        #endif
 	}
 	
 	for(std::string_view override : boost::adaptors::reverse(m_extensionOverrides)) {
