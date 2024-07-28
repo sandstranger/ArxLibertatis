@@ -33,9 +33,15 @@
 #include "util/Number.h"
 #include "util/String.h"
 
+#ifdef ANDROID
+#include "set.h"
+#include "string.h"
+#endif
 
 static std::string g_glExtensionOverride;
-
+#ifdef ANDROID
+static std::set<std::string> ogl_extensions;
+#endif
 static void setGlOverride(const std::string & string) {
 	g_glExtensionOverride = string;
 }
@@ -82,7 +88,15 @@ OpenGLInfo::OpenGLInfo()
     #elif ANDROID
         m_version = 21;
     #endif
-	
+
+    #ifdef ANDROID
+        GLint no_of_extensions = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &no_of_extensions);
+
+        for (int i = 0; i < no_of_extensions; ++i)
+            ogl_extensions.insert((const char*)glGetStringi(GL_EXTENSIONS, i));
+    #endif
+        
 	m_versionString = reinterpret_cast<const char *>(glGetString(GL_VERSION));
 	const char * prefix = "OpenGL ";
 	if(boost::starts_with(m_versionString, prefix)) {
@@ -182,12 +196,11 @@ bool OpenGLInfo::has(const char * extension, u32 version) const {
 		#elif ARX_HAVE_GLEW
 		bool supported = glewIsSupported(extension);
         #elif ANDROID
-            return true; //TODO USE extensions support from gl4es
-        #else            
+        bool supported = ogl_extensions.find(extension) != ogl_extensions.end();
+        #endif            
 		if(!supported) {
 			return false;
 		}
-        #endif
 	}
 	
 	for(std::string_view override : boost::adaptors::reverse(m_extensionOverrides)) {
