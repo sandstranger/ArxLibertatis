@@ -78,6 +78,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "util/String.h"
 
+#ifdef ANDROID
+#include "jni.h"
+#endif
 
 using audio::AmbianceId;
 using audio::EnvId;
@@ -261,6 +264,20 @@ void ARX_SOUND_MixerStop(audio::MixerId mixer_id) {
 		audio::mixerStop(mixer_id);
 	}
 }
+
+#ifdef ANDROID
+extern "C" {
+    JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_resumeSound(JNIEnv *env, jobject thisObject) {
+        ARX_SOUND_MixerResume(ARX_SOUND_MixerGame);
+        ARX_SOUND_MixerResume(ARX_SOUND_MixerMenu);
+    }
+
+    JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_pauseSound(JNIEnv *env, jobject thisObject) {
+        ARX_SOUND_MixerPause(ARX_SOUND_MixerGame);
+        ARX_SOUND_MixerPause(ARX_SOUND_MixerMenu);
+    }
+};
+#endif
 
 void ARX_SOUND_MixerPause(audio::MixerId mixer_id) {
 	if(g_soundInitialized) {
