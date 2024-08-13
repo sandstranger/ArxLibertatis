@@ -243,7 +243,9 @@ void OpenGLRenderer::initialize() {
 			LogWarning << "Missing OpenGL extension GL_ARB_texture_non_power_of_two";
 		}
 		m_hasSizedTextureFormats = true;
+#ifndef ANDROID       
 		m_hasIntensityTextures = true;
+#endif        
 		m_hasBGRTextureTransfer = true;
 	}
 	
