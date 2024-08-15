@@ -191,7 +191,9 @@ extern CircularVertexBuffer<SMY_VERTEX3> * pDynamicVertexBuffer;
 
 bool EXTERNALVIEW = false;
 bool SHOW_INGAME_MINIMAP = true;
-
+#ifdef ANDROID
+bool hideScreenControlsPreviousState = false;
+#endif
 bool ARX_FLARES_Block = true;
 
 Vec3f PUSH_PLAYER_FORCE;
@@ -205,7 +207,8 @@ ArxGame::ArxGame()
 	, m_gameInitialized(false)
 	, m_frameStart(0)
 	, m_frameDelta(0)
-{ }
+{
+}
 
 bool ArxGame::initialize() {
 	
@@ -1200,6 +1203,14 @@ void ArxGame::doFrame() {
 		ARX_QuickLoad();
 	}
 	
+    bool hideScreenControls = isInCinematic() || ARXmenu.mode() == Mode_MainMenu;
+    
+    if (hideScreenControls != hideScreenControlsPreviousState){
+        setenv("SHOW_SCREEN_CONTROLS", !hideScreenControls ? "1" : "0", true);
+    }
+    
+    hideScreenControlsPreviousState = hideScreenControls;
+    
 	if(cinematicIsStopped()
 	   && !cinematicBorder.isActive()
 	   && !BLOCK_PLAYER_CONTROLS
