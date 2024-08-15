@@ -69,6 +69,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "window/RenderWindow.h"
 
+#include<string.h>
 
 Input * GInput = nullptr;
 
@@ -346,6 +347,8 @@ Input::Input()
 	, iKeyId(-1)
 {
     hideScreenControls = getenv ("HIDE_SCREEN_CONTROLS") == "true";
+    std::string s( getenv ("HIDE_SCREEN_CONTROLS") );
+    hideScreenControls = s == "true";
 	setMouseSensitivity(2);
 	reset();
 }
