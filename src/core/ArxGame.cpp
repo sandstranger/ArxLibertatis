@@ -178,6 +178,10 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "window/SDL1Window.h"
 #endif
 
+#ifdef ANDROID
+#include "jni.h"
+#endif
+
 InfoPanels g_debugInfo = InfoPanelNone;
 
 extern bool START_NEW_QUEST;
@@ -192,7 +196,7 @@ extern CircularVertexBuffer<SMY_VERTEX3> * pDynamicVertexBuffer;
 bool EXTERNALVIEW = false;
 bool SHOW_INGAME_MINIMAP = true;
 #ifdef ANDROID
-bool hideScreenControlsPreviousState = false;
+bool needToShowScreenControls = true;
 #endif
 bool ARX_FLARES_Block = true;
 
@@ -209,6 +213,15 @@ ArxGame::ArxGame()
 	, m_frameDelta(0)
 {
 }
+
+#ifdef ANDROID
+extern "C" {
+JNIEXPORT jboolean JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_needToShowScreenControls(JNIEnv *env, jobject thisObject) {
+    return needToShowScreenControls;
+}
+};
+#endif
+
 
 bool ArxGame::initialize() {
 	
@@ -1202,14 +1215,10 @@ void ArxGame::doFrame() {
 	if(GInput->actionNowPressed(CONTROLS_CUST_QUICKLOAD)) {
 		ARX_QuickLoad();
 	}
-	
-    bool hideScreenControls = isInCinematic() || ARXmenu.mode() == Mode_MainMenu;
-    
-    if (hideScreenControls != hideScreenControlsPreviousState){
-        setenv("SHOW_SCREEN_CONTROLS", !hideScreenControls ? "1" : "0", true);
-    }
-    
-    hideScreenControlsPreviousState = hideScreenControls;
+
+#ifdef ANDROID   
+    needToShowScreenControls = ARXmenu.mode() != Mode_MainMenu;
+#endif
     
 	if(cinematicIsStopped()
 	   && !cinematicBorder.isActive()
