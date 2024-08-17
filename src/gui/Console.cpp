@@ -548,7 +548,7 @@ void ScriptConsole::applySuggestion(const Suggestion & suggestion) {
 void ScriptConsole::update() {
 	
 	if(!m_enabled) {
-		if(config.input.allowConsole && GInput->actionNowPressed(CONTROLS_CUST_CONSOLE)) {
+		if(GInput->actionNowPressed(CONTROLS_CUST_CONSOLE)) {
 			open();
 		} else {
 			return;

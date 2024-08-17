@@ -1660,9 +1660,7 @@ public:
 
         addControlRow(CONTROLS_CUST_MAGIC, "system_menus_options_input_customize_controls_magic");
 
-        if(config.input.allowConsole) {
 			addControlRow(CONTROLS_CUST_CONSOLE, "system_menus_options_input_customize_controls_console");
-		}
 		
 		addBackButton(Page_OptionsInput);
 		
