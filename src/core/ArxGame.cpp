@@ -219,11 +219,6 @@ extern "C" {
 JNIEXPORT jboolean JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_needToShowScreenControls(JNIEnv *env, jobject thisObject) {
     return needToShowScreenControls;
 }
-
-JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_saveConfig(JNIEnv *env, jobject thisObject) {
-    config.save();
-}
-
 }
 #endif
 
