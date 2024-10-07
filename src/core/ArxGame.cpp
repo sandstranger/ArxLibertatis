@@ -971,9 +971,11 @@ void ArxGame::shutdownGame() {
 	TextureContainer::DeleteAll();
 	
 	cinematicDestroy();
-	
+
+#if !ANDROID	
 	config.save();
-	
+#endif	
+
 	RoomDrawRelease();
 	EXITING = 1;
 	TREATZONE_Clear();
