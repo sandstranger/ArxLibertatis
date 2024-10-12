@@ -165,7 +165,6 @@ void ARX_Menu_Manage() {
 		case Mode_InGame: {
 			// Checks for ESC key
 			if(GInput->isKeyPressedNowUnPressed(Keyboard::Key_Escape)) {
-                config.save();
 
                 if(isInCinematic()) {
 					cinematicEnd();
@@ -197,7 +196,6 @@ void ARX_Menu_Manage() {
 			if(   GInput->isKeyPressedNowUnPressed(Keyboard::Key_Escape)
 			   && bFadeInOut == Fade_Out // TODO: comment seems incorrect -> // XS: Disabling ESC capture while fading in or out.
 			) {
-                config.save();
                 ARX_SOUND_PlayMenu(g_snd.MENU_CLICK);
 				ARXmenu.requestMode(Mode_MainMenu);
 			}
@@ -208,7 +206,6 @@ void ARX_Menu_Manage() {
 			   && MENU_NoActiveWindow()
 			   && g_canResumeGame
 			) {
-                config.save();
                 g_gameTime.resume(GameTime::PauseMenu);
 				ARX_MENU_Clicked_QUIT();
 			}
@@ -218,7 +215,6 @@ void ARX_Menu_Manage() {
 			if(   GInput->isKeyPressedNowUnPressed(Keyboard::Key_Escape)
 			   || GInput->isKeyPressedNowUnPressed(Keyboard::Key_Spacebar)
 			) {
-                config.save();
                 ARX_SOUND_PlayMenu(g_snd.MENU_CLICK);
 				MenuFader_start(Fade_In, Mode_MainMenu);
 				ARX_SOUND_PlayMenuAmbiance(AMB_MENU);

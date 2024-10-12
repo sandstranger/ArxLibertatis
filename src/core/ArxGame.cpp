@@ -960,6 +960,7 @@ void ArxGame::shutdown() {
 	LogInfo << "Clean shutdown";
 }
 
+
 void ArxGame::shutdownGame() {
 	
 	ARX_Menu_Resources_Release();
@@ -972,9 +973,7 @@ void ArxGame::shutdownGame() {
 	
 	cinematicDestroy();
 
-#if !ANDROID	
 	config.save();
-#endif	
 
 	RoomDrawRelease();
 	EXITING = 1;
