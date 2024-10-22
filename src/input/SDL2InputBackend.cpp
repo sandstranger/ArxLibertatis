@@ -74,6 +74,8 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 {
 	
 	arx_assert(window != nullptr);
+
+    connectGamePad(0);
     
     SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
 	SDL_EventState(SDL_KEYDOWN, SDL_ENABLE);
@@ -465,14 +467,18 @@ void SDL2InputBackend::joystickToMouse(const Vec2i & winSize) {
     }
 }
 
+void SDL2InputBackend::connectGamePad(int deviceId){
+    m_pad = SDL_GameControllerOpen(deviceId);
+    const char *controllername = SDL_GameControllerNameForIndex(deviceId);
+    controllername = (controllername != NULL ? controllername : "NULL");
+    LogInfo << "Detected controller: " << controllername;
+}
+
 void SDL2InputBackend::onEvent(const SDL_Event & event) {
 	
 	switch(event.type) {
         case SDL_CONTROLLERDEVICEADDED:{
-            m_pad = SDL_GameControllerOpen(event.cdevice.which);
-            const char *controllername = SDL_GameControllerNameForIndex(event.cdevice.which);
-            controllername = (controllername != NULL ? controllername : "NULL");
-            LogInfo << "Detected controller: " << controllername;
+            connectGamePad(event.cdevice.which);
             break;
         }
         case SDL_CONTROLLERDEVICEREMOVED:  {
