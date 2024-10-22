@@ -40,7 +40,7 @@ static const Keyboard::Key padToArxKey[SDL_CONTROLLER_BUTTON_MAX] = {
         Keyboard::Key_LeftShift,  // LStick
         Keyboard::Key_RightShift, // RStick
         Keyboard::Key_LeftCtrl,   // LShoulder
-        Keyboard::Key_RightCtrl,  // RShoulder
+        Keyboard::Key_C,  // RShoulder
         Keyboard::Key_UpArrow,    // D-Pad Up
         Keyboard::Key_DownArrow,  // D-Pad Down
         Keyboard::Key_LeftArrow,  // D-Pad Left
@@ -57,7 +57,7 @@ static const Mouse::Button triggerToArxButton[2] {
         Mouse::Button_0, // Right Trigger
 };
 
-static constexpr float mouseSpeed = 100.0f;
+static constexpr float mouseSpeed = 70.0f;
 
 SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	: m_pad(nullptr)
