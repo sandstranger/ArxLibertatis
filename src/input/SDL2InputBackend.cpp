@@ -74,12 +74,6 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 {
 	
 	arx_assert(window != nullptr);
-
-    m_pad = SDL_GameControllerOpen(0);
-
-    const char * controllername = SDL_GameControllerNameForIndex(0);
-    controllername = (controllername != NULL ? controllername : "NULL");
-    LogInfo << "Detected controller: " << controllername;
     
     SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
 	SDL_EventState(SDL_KEYDOWN, SDL_ENABLE);
@@ -365,12 +359,10 @@ bool SDL2InputBackend::update() {
 	
 	wheel = 0;
 
-    const Vec2i winSize = m_window->getSize();
-
-    SDL_GameControllerUpdate();
-
-    if(m_pad)
-        joystickToMouse(winSize);
+    if(m_pad) {
+        SDL_GameControllerUpdate();
+        joystickToMouse(m_window->getSize());
+    }
 	
     cursorRel = cursorRelAccum;
 	cursorRelAccum = Vec2i(0);
@@ -476,7 +468,18 @@ void SDL2InputBackend::joystickToMouse(const Vec2i & winSize) {
 void SDL2InputBackend::onEvent(const SDL_Event & event) {
 	
 	switch(event.type) {
-		
+        case SDL_CONTROLLERDEVICEADDED:{
+            m_pad = SDL_GameControllerOpen(event.cdevice.which);
+            const char *controllername = SDL_GameControllerNameForIndex(event.cdevice.which);
+            controllername = (controllername != NULL ? controllername : "NULL");
+            LogInfo << "Detected controller: " << controllername;
+            break;
+        }
+        case SDL_CONTROLLERDEVICEREMOVED:  {
+            SDL_GameControllerClose(m_pad);
+            m_pad = nullptr;
+            break;
+        }
 		case SDL_WINDOWEVENT: {
 			if(event.window.event == SDL_WINDOWEVENT_ENTER) {
 				cursorInWindow = true;
