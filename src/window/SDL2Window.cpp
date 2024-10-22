@@ -183,7 +183,11 @@ bool SDL2Window::initializeFramework() {
 		LogError << "Failed to initialize SDL: " << SDL_GetError();
 		return false;
 	}
-	
+
+    if(SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
+        LogWarning << "Failed to initialize SDL GameControllers: " << SDL_GetError();
+    }
+    
 	SDL_version ver;
 	SDL_GetVersion(&ver);
 	std::ostringstream runtimeVersion;

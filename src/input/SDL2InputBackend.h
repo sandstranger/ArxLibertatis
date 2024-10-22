@@ -58,8 +58,8 @@ public:
 	void onEvent(const SDL_Event & event);
 	
 private:
-	
-	SDL2Window * m_window;
+    SDL_GameController * m_pad;
+    SDL2Window * m_window;
 	
 	TextInputHandler * m_textHandler;
 	std::string m_editText;
@@ -78,7 +78,12 @@ private:
 	int currentWheel;
 	size_t currentClickCount[Mouse::ButtonCount];
 	size_t currentUnclickCount[Mouse::ButtonCount];
-	
+
+    float currentAxis[SDL_CONTROLLER_AXIS_MAX];
+    float axisDeadzone[SDL_CONTROLLER_AXIS_MAX];
+    float axisScale[SDL_CONTROLLER_AXIS_MAX];
+    
+    void joystickToMouse(const Vec2i & winSize);
 };
 
 #endif // ARX_INPUT_SDL2INPUTBACKEND_H

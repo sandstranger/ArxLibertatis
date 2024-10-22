@@ -29,8 +29,39 @@ static Keyboard::Key sdlToArxKey[SDL_NUM_SCANCODES];
 
 static Mouse::Button sdlToArxButton[10];
 
+static const Keyboard::Key padToArxKey[SDL_CONTROLLER_BUTTON_MAX] = {
+        Keyboard::Key_Enter,      // A
+        Keyboard::Key_Backspace,  // B
+        Keyboard::Key_Spacebar,   // X
+        Keyboard::Key_Tab,        // Y
+        Keyboard::Key_F1,         // Back
+        Keyboard::Key_Invalid,    // Guide
+        Keyboard::Key_Escape,     // Start
+        Keyboard::Key_LeftShift,  // LStick
+        Keyboard::Key_RightShift, // RStick
+        Keyboard::Key_LeftCtrl,   // LShoulder
+        Keyboard::Key_RightCtrl,  // RShoulder
+        Keyboard::Key_UpArrow,    // D-Pad Up
+        Keyboard::Key_DownArrow,  // D-Pad Down
+        Keyboard::Key_LeftArrow,  // D-Pad Left
+        Keyboard::Key_RightArrow, // D-Pad Right
+};
+
+static const Keyboard::Key moveAxisToArxKey[2][2] {
+        { Keyboard::Key_A, Keyboard::Key_D, }, // Left X
+        { Keyboard::Key_W, Keyboard::Key_S, }, // Left Y
+};
+
+static const Mouse::Button triggerToArxButton[2] {
+        Mouse::Button_1, // Left Trigger
+        Mouse::Button_0, // Right Trigger
+};
+
+static constexpr float mouseSpeed = 100.0f;
+
 SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
-	: m_window(window)
+	: m_pad(nullptr)
+    , m_window(window)
 	, m_textHandler(nullptr)
 	, m_editCursorPos(0)
 	, m_editCursorLength(0)
@@ -43,8 +74,14 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 {
 	
 	arx_assert(window != nullptr);
-	
-	SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
+
+    m_pad = SDL_GameControllerOpen(0);
+
+    const char * controllername = SDL_GameControllerNameForIndex(0);
+    controllername = (controllername != NULL ? controllername : "NULL");
+    LogInfo << "Detected controller: " << controllername;
+    
+    SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
 	SDL_EventState(SDL_KEYDOWN, SDL_ENABLE);
 	SDL_EventState(SDL_KEYUP, SDL_ENABLE);
 	SDL_EventState(SDL_TEXTINPUT, SDL_ENABLE);
@@ -308,7 +345,16 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	std::fill_n(keyStates, std::size(keyStates), false);
 	std::fill_n(clickCount, std::size(clickCount), 0);
 	std::fill_n(unclickCount, std::size(unclickCount), 0);
-	
+
+    std::fill_n(currentAxis, std::size(currentAxis), 0.0f);
+    std::fill_n(axisScale, std::size(axisScale), 0.25f);
+    
+    axisDeadzone[SDL_CONTROLLER_AXIS_LEFTX] = 0.33f;
+    axisDeadzone[SDL_CONTROLLER_AXIS_LEFTY] = 0.33f;
+    axisDeadzone[SDL_CONTROLLER_AXIS_RIGHTX] = 0.15f;
+    axisDeadzone[SDL_CONTROLLER_AXIS_RIGHTY] = 0.15f;
+    axisDeadzone[SDL_CONTROLLER_AXIS_TRIGGERLEFT] = 0.25f;
+    axisDeadzone[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0.25f;
 }
 
 bool SDL2InputBackend::update() {
@@ -318,8 +364,15 @@ bool SDL2InputBackend::update() {
 	std::copy(unclickCount, unclickCount + std::size(unclickCount), currentUnclickCount);
 	
 	wheel = 0;
+
+    const Vec2i winSize = m_window->getSize();
+
+    SDL_GameControllerUpdate();
+
+    if(m_pad)
+        joystickToMouse(winSize);
 	
-	cursorRel = cursorRelAccum;
+    cursorRel = cursorRelAccum;
 	cursorRelAccum = Vec2i(0);
 	
 	std::fill_n(clickCount, std::size(clickCount), 0);
@@ -407,6 +460,19 @@ std::string SDL2InputBackend::getKeyName(Keyboard::Key key) const {
 	return std::string();
 }
 
+void SDL2InputBackend::joystickToMouse(const Vec2i & winSize) {
+    for(int i = 0; i < 2; ++i) {
+        const float dead = axisDeadzone[SDL_CONTROLLER_AXIS_RIGHTX + i];
+        const float val = currentAxis[SDL_CONTROLLER_AXIS_RIGHTX + i];
+        if(val > dead || val < -dead) {
+            const float scale = axisScale[SDL_CONTROLLER_AXIS_RIGHTX + i];
+            const int ival = static_cast<int>((val - dead * glm::sign(val)) * mouseSpeed * scale);
+            cursorRelAccum[i] += ival;
+            cursorAbs[i] = glm::clamp(cursorAbs[i] + ival, 0, winSize[i] - 1);
+        }
+    }
+}
+
 void SDL2InputBackend::onEvent(const SDL_Event & event) {
 	
 	switch(event.type) {
@@ -442,8 +508,49 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 			}
 			break;
 		}
-		
-		case SDL_TEXTINPUT: {
+
+        case SDL_CONTROLLERBUTTONDOWN:
+        case SDL_CONTROLLERBUTTONUP: {
+            int key = event.cbutton.button;
+            if(key < int(std::size(padToArxKey)) && padToArxKey[key] != Keyboard::Key_Invalid) {
+                Keyboard::Key arxkey = padToArxKey[key];
+                if(m_textHandler && event.cbutton.state == SDL_PRESSED) {
+                    KeyModifiers mod = { 0, 0, 0, 0, 0 };
+                    if(m_textHandler->keyPressed(arxkey, mod))
+                        break;
+                }
+                keyStates[arxkey - Keyboard::KeyBase] = (event.cbutton.state == SDL_PRESSED);
+            } else {
+                LogWarning << "Unmapped SDL controller button: " << int(key);
+            }
+            break;
+        }
+
+        case SDL_CONTROLLERAXISMOTION: {
+            const int axis = event.caxis.axis;
+            if(axis >= 0 && axis < SDL_CONTROLLER_AXIS_MAX) {
+                const float oldVal = currentAxis[axis];
+                const float newVal = static_cast<float>(glm::clamp(int(event.caxis.value), -32767, 32767)) / 32767.0f;
+                if(axis == SDL_CONTROLLER_AXIS_LEFTX || axis == SDL_CONTROLLER_AXIS_LEFTY) {
+                    // left stick controls movement keys
+                    keyStates[moveAxisToArxKey[axis][0] - Keyboard::KeyBase] = (newVal < -axisDeadzone[axis]);
+                    keyStates[moveAxisToArxKey[axis][1] - Keyboard::KeyBase] = (newVal >  axisDeadzone[axis]);
+                } else if(axis == SDL_CONTROLLER_AXIS_RIGHTX || axis == SDL_CONTROLLER_AXIS_RIGHTY) {
+                    currentAxis[axis] = newVal;
+                    // right stick controls mouse
+                    cursorInWindow = true;
+                } else if(axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+                    // triggers control left and right mouse buttons
+                    const size_t i = triggerToArxButton[axis - SDL_CONTROLLER_AXIS_TRIGGERLEFT] - Mouse::ButtonBase;
+                    clickCount[i] += (oldVal < axisDeadzone[axis] && newVal > axisDeadzone[axis]);
+                    unclickCount[i] += (oldVal > axisDeadzone[axis] && newVal < axisDeadzone[axis]);
+                }
+                currentAxis[axis] = newVal;
+            }
+            break;
+        }
+        
+        case SDL_TEXTINPUT: {
 			if(m_textHandler) {
 				m_editText.clear();
 				m_textHandler->newText(event.text.text);
@@ -501,5 +608,4 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 		}
 		
 	}
-	
 }
