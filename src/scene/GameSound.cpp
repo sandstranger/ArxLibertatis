@@ -269,32 +269,32 @@ void ARX_SOUND_MixerStop(audio::MixerId mixer_id) {
 #ifdef ANDROID
 extern "C" {
     JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_resumeSound(JNIEnv *env, jobject thisObject) {
-        if (ARXmenu.mode() ==  Mode_MainMenu) {
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuSample);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenu);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuSpeech);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuAmbiance);
-        }
-        else {
+        if (ARXmenu.mode() ==  Mode_InGame) {
             ARX_SOUND_MixerResume(ARX_SOUND_MixerGame);
             ARX_SOUND_MixerResume(ARX_SOUND_MixerGameSample);
             ARX_SOUND_MixerResume(ARX_SOUND_MixerGameSpeech);
             ARX_SOUND_MixerResume(ARX_SOUND_MixerGameAmbiance);
         }
+        else {
+            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuSample);
+            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenu);
+            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuSpeech);
+            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuAmbiance);
+        }
     }
 
     JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_pauseSound(JNIEnv *env, jobject thisObject) {
-        if (ARXmenu.mode() ==  Mode_MainMenu) {
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuSample);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuSpeech);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuAmbiance);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenu);
-        }
-        else{
+        if (ARXmenu.mode() ==  Mode_InGame) {
             ARX_SOUND_MixerPause(ARX_SOUND_MixerGame);
             ARX_SOUND_MixerPause(ARX_SOUND_MixerGameSample);
             ARX_SOUND_MixerPause(ARX_SOUND_MixerGameSpeech);
             ARX_SOUND_MixerPause(ARX_SOUND_MixerGameAmbiance);
+        }
+        else{
+            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuSample);
+            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuSpeech);
+            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuAmbiance);
+            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenu);
         }
     }
 }
