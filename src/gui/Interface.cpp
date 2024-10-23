@@ -134,6 +134,10 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "window/RenderWindow.h"
 
+#ifdef ANDROID
+#include "jni.h"
+bool needToPlaySpellSound = false;
+#endif
 
 extern AnimationDuration PLAYER_ROTATION;
 extern float SLID_VALUE;
@@ -917,7 +921,7 @@ void ArxGame::managePlayerControls() {
 	
 	// MAGIC
 	if(GInput->actionPressed(CONTROLS_CUST_MAGICMODE)) {
-		if(!(player.m_currentMovement & PLAYER_CROUCH) && !BLOCK_PLAYER_CONTROLS && ARXmenu.mode() == Mode_InGame) {
+		if(!(player.m_currentMovement & PLAYER_CROUCH) && !BLOCK_PLAYER_CONTROLS && ARXmenu.mode() == Mode_InGame && needToPlaySpellSound) {
 			if(!ARX_SOUND_IsPlaying(player.magic_ambient)) {
 				player.magic_ambient = ARX_SOUND_PlaySFX_loop(g_snd.MAGIC_AMBIENT_LOOP, nullptr, 1.f);
 			}
@@ -1598,6 +1602,22 @@ void ArxGame::manageKeyMouse() {
 	
 	manageEntityDescription();
 }
+
+#ifdef ANDROID
+extern "C" {
+    JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_resumeSpellsSound(JNIEnv *env, jobject thisObject) {
+        needToPlaySpellSound = true;
+    }
+
+    JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_pauseSpellsSound(JNIEnv *env, jobject thisObject) {
+        needToPlaySpellSound = false;
+        ARX_SOUND_Stop(player.magic_ambient);
+        player.magic_ambient = audio::SourcedSample();
+        ARX_SOUND_Stop(player.magic_draw);
+        player.magic_draw = audio::SourcedSample();
+    }
+}
+#endif
 
 void ArxGame::manageEntityDescription() {
 	
