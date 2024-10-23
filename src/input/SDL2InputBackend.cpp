@@ -57,7 +57,7 @@ static const Mouse::Button triggerToArxButton[2] {
         Mouse::Button_0, // Right Trigger
 };
 
-static constexpr float mouseSpeed = 60.0f;
+static constexpr float mouseSpeed = 100.0f;
 
 SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	: m_pad(nullptr)
