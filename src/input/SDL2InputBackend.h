@@ -56,7 +56,8 @@ public:
 	std::string getKeyName(Keyboard::Key key) const override;
 	
 	void onEvent(const SDL_Event & event);
-	
+    void destroyGamePad();
+    
 private:
     SDL_GameController * m_pad;
     SDL2Window * m_window;

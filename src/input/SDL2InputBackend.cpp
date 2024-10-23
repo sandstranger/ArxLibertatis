@@ -57,7 +57,7 @@ static const Mouse::Button triggerToArxButton[2] {
         Mouse::Button_0, // Right Trigger
 };
 
-static constexpr float mouseSpeed = 70.0f;
+static constexpr float mouseSpeed = 60.0f;
 
 SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	: m_pad(nullptr)
@@ -474,6 +474,13 @@ void SDL2InputBackend::connectGamePad(int deviceId){
     LogInfo << "Detected controller: " << controllername;
 }
 
+void SDL2InputBackend::destroyGamePad(){
+    if (m_pad){
+        SDL_GameControllerClose(m_pad);
+        m_pad = nullptr;
+    }
+}
+
 void SDL2InputBackend::onEvent(const SDL_Event & event) {
 	
 	switch(event.type) {
@@ -482,8 +489,7 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
             break;
         }
         case SDL_CONTROLLERDEVICEREMOVED:  {
-            SDL_GameControllerClose(m_pad);
-            m_pad = nullptr;
+            destroyGamePad();
             break;
         }
 		case SDL_WINDOWEVENT: {

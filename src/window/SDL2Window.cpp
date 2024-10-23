@@ -839,6 +839,7 @@ void SDL2Window::processEvents(bool waitForEvent) {
 				// TODO onDestroy() fits SDL_WINDOWEVENT_CLOSE better, but SDL captures Ctrl+C
 				// evenst and *only* sends the SDL_QUIT event for them while normal close
 				// generates *both* SDL_WINDOWEVENT_CLOSE and SDL_QUIT
+                m_input->destroyGamePad();
 				onDestroy();
 				return; // abort event loop!
 			}
