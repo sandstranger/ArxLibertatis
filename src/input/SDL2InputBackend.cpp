@@ -42,9 +42,9 @@ static const Keyboard::Key padToArxKey[SDL_CONTROLLER_BUTTON_MAX] = {
         Keyboard::Key_LeftCtrl,   // LShoulder
         Keyboard::Key_C,  // RShoulder
         Keyboard::Key_F5,    // D-Pad Up
-        Keyboard::Key_DownArrow,  // D-Pad Down
+        Keyboard::Key_1,  // D-Pad Down
         Keyboard::Key_F9,  // D-Pad Left
-        Keyboard::Key_RightArrow, // D-Pad Right
+        Keyboard::Key_2, // D-Pad Right
 };
 
 static const Keyboard::Key moveAxisToArxKey[2][2] {
