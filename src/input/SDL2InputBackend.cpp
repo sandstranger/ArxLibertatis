@@ -24,6 +24,7 @@
 #include "io/log/Logger.h"
 #include "math/Rectangle.h"
 #include "platform/PlatformConfig.h"
+#include "SDL_gamecontroller.h"
 
 static Keyboard::Key sdlToArxKey[SDL_NUM_SCANCODES];
 
@@ -74,7 +75,10 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 {
 	
 	arx_assert(window != nullptr);
-
+#ifdef ANDROID
+    std::string pathToGameControllerDb = std::string(getenv("ARX_DATA_PATH")) + std::string("/gamecontrollerdb.txt");
+    SDL_GameControllerAddMappingsFromFile(pathToGameControllerDb.c_str());
+#endif    
     connectGamePad(0);
     
     SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
