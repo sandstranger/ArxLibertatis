@@ -102,7 +102,11 @@ public:
 	bool hasBGRTextureTransfer() const { return m_hasBGRTextureTransfer; }
 	
 	bool hasMapBuffer() const { return m_hasMapBuffer; }
+#ifndef ANDROID   
 	bool hasMapBufferRange() const { return m_hasMapBufferRange; }
+#else
+	bool hasMapBufferRange() const { return false; }
+#endif    
 	bool hasBufferStorage() const { return m_hasBufferStorage; }
 	bool hasBufferUsageStream() const { return m_hasBufferUsageStream; }
 	bool hasDrawRangeElements() const { return m_hasDrawRangeElements; }

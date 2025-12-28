@@ -106,7 +106,7 @@ static void ARX_GLAPIENTRY callback(GLenum source, GLenum type, GLuint id,
 #endif
 
 void initialize(const OpenGLInfo & gl) {
-	
+#ifndef ANDROID
 	if(mode() != Enabled) {
 		return;
 	}
@@ -169,7 +169,7 @@ void initialize(const OpenGLInfo & gl) {
 	LogWarning << "OpenGL debug output not supported in this build";
 	
 	#endif
-	
+#endif
 }
 
 inline Mode defaultMode() {

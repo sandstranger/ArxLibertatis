@@ -255,7 +255,7 @@ include(CheckIncludeFiles)
 include(CheckSymbolExists)
 include(CheckTypeSize)
 
-set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake") # For custom cmake modules
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake") # For custom cmake modules
 
 include(VersionString)
 set(version_names VERSION ICON_NAME DATA_VERSION IO_LIBRARY_ABI_VERSION)
@@ -499,7 +499,9 @@ if(NOT ARX_HAVE_SDL AND (NOT WITH_SDL OR WITH_SDL EQUAL 1))
 endif()
 
 # Boost
+if (NOT ANDROID)
 find_package(Boost 1.58 REQUIRED)
+endif ()
 include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 add_definitions(-DBOOST_ALL_NO_LIB)
 add_definitions(-DBOOST_EXCEPTION_DISABLE)
@@ -649,7 +651,7 @@ if(MSVC)
 	
 else(MSVC)
 	
-	add_cxxflag("-fmacro-prefix-map=${PROJECT_SOURCE_DIR}/=")
+	add_cxxflag("-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=")
 	if(FLAG_FOUND)
 		add_cxxflag("-fmacro-prefix-map=${PROJECT_BINARY_DIR}/=build/")
 		if(FLAG_FOUND)
@@ -1250,11 +1252,11 @@ if(USE_X11 AND SDL_HAVE_VIDEO_X11)
 endif()
 
 # TODO manually specify these like we do for the tools
-file(GLOB_RECURSE ALL_INCLUDES RELATIVE ${PROJECT_SOURCE_DIR} src/*.h)
+file(GLOB_RECURSE ALL_INCLUDES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} src/*.h)
 
 set_property(SOURCE src/graphics/image/stb_image.cpp APPEND PROPERTY COMPILE_FLAGS ${conservative_warnings})
 
-include_directories(src ${CMAKE_CURRENT_BINARY_DIR} ${PROJECT_SOURCE_DIR}/tools)
+include_directories(src ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/tools)
 
 
 # Check for optional / alternative subsystem implementations
@@ -1876,14 +1878,14 @@ if(BUILD_DOCS AND DOXYGEN_EXECUTABLE)
 	add_custom_target(doc
 		#build the documentation
 		COMMAND "${CMAKE_COMMAND}" -E make_directory "${DOXYGEN_OUTPUT_DIR}"
-		COMMAND "${CMAKE_COMMAND}" -E chdir ${PROJECT_SOURCE_DIR}
+		COMMAND "${CMAKE_COMMAND}" -E chdir ${CMAKE_CURRENT_SOURCE_DIR}
 			${DOXYGEN_EXECUTABLE} "${CMAKE_CURRENT_BINARY_DIR}/Doxyfile"
 		COMMENT "Building doxygen documentation."
 		VERBATIM
 	)
 endif()
 
-file(GLOB_RECURSE STYLE_CHECKED_SOURCES RELATIVE ${PROJECT_SOURCE_DIR}
+file(GLOB_RECURSE STYLE_CHECKED_SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
 	src/*.cpp
 	src/*.c
 	src/*.h
@@ -1913,7 +1915,7 @@ add_style_check_target(style "${STYLE_CHECKED_SOURCES}" ARX)
 install(DIRECTORY data/core/ DESTINATION "${INSTALL_DATADIR}")
 # Also tell arx where to find the not yet installed data
 # This is required to run arx from the build directory without installing
-set(arx_core_dir "${PROJECT_SOURCE_DIR}/data/core")
+set(arx_core_dir "${CMAKE_CURRENT_SOURCE_DIR}/data/core")
 get_filename_component(arx_core_dir "${arx_core_dir}" ABSOLUTE)
 file(TO_NATIVE_PATH "${arx_core_dir}" arx_core_dir)
 file(GENERATE OUTPUT "$<TARGET_FILE_DIR:arx>/data.dirs" CONTENT "${arx_core_dir}\n")
