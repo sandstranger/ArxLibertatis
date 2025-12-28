@@ -73,9 +73,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 Input * GInput = nullptr;
 
 long EERIEMouseButton = 0;
-bool MouseButton1Pressed = false;
 long LastMouseClick = 0;
-bool hideScreenControls = false;
 
 struct KeyDescription {
 	InputKeyId id;
@@ -317,6 +315,7 @@ static const char SEPARATOR = '+';
 
 bool ARX_INPUT_Init(Window * window) {
 	GInput = new Input();
+	
 	bool ret = GInput->init(window);
 	if(!ret) {
 		delete GInput;
@@ -345,8 +344,6 @@ Input::Input()
 	, iWheelDir(0)
 	, iKeyId(-1)
 {
-    std::string s( getenv ("HIDE_SCREEN_CONTROLS") );
-    hideScreenControls = s == "true";
 	setMouseSensitivity(2);
 	reset();
 }
@@ -802,7 +799,6 @@ bool Input::getMouseButtonNowUnPressed(int buttonId) const {
 	int buttonIdx = buttonId - Mouse::ButtonBase;
 	return !bMouseButton[buttonIdx] && bOldMouseButton[buttonIdx];
 }
-
 
 bool Input::getMouseButtonDoubleClick(int buttonId) const {
 	arx_assert(buttonId >= Mouse::ButtonBase && buttonId < Mouse::ButtonMax);
