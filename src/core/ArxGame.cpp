@@ -196,7 +196,7 @@ extern CircularVertexBuffer<SMY_VERTEX3> * pDynamicVertexBuffer;
 bool EXTERNALVIEW = false;
 bool SHOW_INGAME_MINIMAP = true;
 #ifdef ANDROID
-bool needToShowScreenControls = true;
+bool showOnScreenControls = true;
 #endif
 bool ARX_FLARES_Block = true;
 
@@ -216,8 +216,12 @@ ArxGame::ArxGame()
 
 #ifdef ANDROID
 extern "C" {
-JNIEXPORT jboolean JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_needToShowScreenControls(JNIEnv *env, jobject thisObject) {
-    return needToShowScreenControls;
+bool needToShowScreenControls() {
+    return showOnScreenControls;
+}
+
+bool needToInvokeMouseButtonsEvents(){
+    return !needToShowScreenControls();
 }
 }
 #endif
@@ -1218,7 +1222,7 @@ void ArxGame::doFrame() {
 	}
 
 #ifdef ANDROID   
-    needToShowScreenControls = ARXmenu.mode() != Mode_MainMenu;
+    showOnScreenControls = ARXmenu.mode() != Mode_MainMenu;
 #endif
     
 	if(cinematicIsStopped()

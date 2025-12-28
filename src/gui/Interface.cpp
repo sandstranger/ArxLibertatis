@@ -1605,11 +1605,11 @@ void ArxGame::manageKeyMouse() {
 
 #ifdef ANDROID
 extern "C" {
-    JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_resumeSpellsSound(JNIEnv *env, jobject thisObject) {
+    void resumeSpellsSound() {
         needToPlaySpellSound = true;
     }
 
-    JNIEXPORT void JNICALL Java_com_arxlibertatis_engine_activity_EngineActivity_pauseSpellsSound(JNIEnv *env, jobject thisObject) {
+    void pauseSpellsSound() {
         needToPlaySpellSound = false;
         ARX_SOUND_Stop(player.magic_ambient);
         player.magic_ambient = audio::SourcedSample();
