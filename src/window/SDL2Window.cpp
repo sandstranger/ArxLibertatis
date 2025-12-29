@@ -184,6 +184,26 @@ bool SDL2Window::initializeFramework() {
 		return false;
 	}
 
+#ifdef ANDROID
+    SDL_SetHint(SDL_HINT_TV_REMOTE_AS_JOYSTICK, "0");
+    SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT_CORRELATE_XINPUT, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS3, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_WII, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_SWITCH, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_JOY_CONS, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5, "1");
+#endif
+    
     if(SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         LogWarning << "Failed to initialize SDL GameControllers: " << SDL_GetError();
     }
@@ -239,7 +259,7 @@ bool SDL2Window::initializeFramework() {
 }
 
 static Uint32 getSDLFlagsForMode(const Vec2i & size, bool fullscreen) {
-	
+#ifndef ANDROID
 	Uint32 flags = 0;
 	
 	if(fullscreen) {
@@ -249,8 +269,10 @@ static Uint32 getSDLFlagsForMode(const Vec2i & size, bool fullscreen) {
 			flags |= SDL_WINDOW_FULLSCREEN;
 		}
 	}
-	
 	return flags;
+#else
+    return SDL_WINDOW_FULLSCREEN;
+#endif            
 }
 
 int SDL2Window::createWindowAndGLContext(const char * profile) {
@@ -437,11 +459,13 @@ bool SDL2Window::initialize() {
                 }
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, flags);
 
-                // TODO OpenGL ES 2.0+ is not supported yet
+                bool useLegacyOpenGLES2_0 = strcmp(getenv("LIBGL_ES"), "2") == 0;
+                SDL_Log(useLegacyOpenGLES2_0 ? "Legacy OpenGL ES 2.0 is using for rendering" :
+                        "OpenGL ES 3.2 is using for rendering");
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, useLegacyOpenGLES2_0 ? 2 : 3);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, useLegacyOpenGLES2_0 ? 0 : 2);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 1);
                 samples = createWindowAndGLContext("OpenGL ES");
 
             }
@@ -778,7 +802,15 @@ void SDL2Window::processEvents(bool waitForEvent) {
 	while(ret) {
 		
 		switch(event.type) {
-			
+#if ANDROID
+            case SDL_APP_WILLENTERFOREGROUND:
+                onFocus(true);                
+                break;
+
+            case SDL_APP_WILLENTERBACKGROUND :
+                onFocus(false);                
+                break;
+#endif            
 			case SDL_WINDOWEVENT: {
 				switch(event.window.event) {
 					
@@ -801,9 +833,10 @@ void SDL2Window::processEvents(bool waitForEvent) {
 					case SDL_WINDOWEVENT_MINIMIZED:    onMinimize();   break;
 					case SDL_WINDOWEVENT_MAXIMIZED:    onMaximize();   break;
 					case SDL_WINDOWEVENT_RESTORED:     onRestore();    break;
+#ifndef ANDROID                   
 					case SDL_WINDOWEVENT_FOCUS_GAINED: onFocus(true);  break;
 					case SDL_WINDOWEVENT_FOCUS_LOST:   onFocus(false); break;
-					
+#endif					
 					case SDL_WINDOWEVENT_MOVED: {
 						if(!m_fullscreen) {
 							updateSize();

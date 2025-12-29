@@ -60,6 +60,10 @@ static const Mouse::Button triggerToArxButton[2] {
 
 static constexpr float mouseSpeed = 80.0f;
 
+#if ANDROID
+static SDL2InputBackend *instance = nullptr;
+#endif
+
 SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	: m_pad(nullptr)
     , m_window(window)
@@ -73,9 +77,9 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	, cursorInWindow(false)
 	, currentWheel(0)
 {
-	
-	arx_assert(window != nullptr);
+    arx_assert(window != nullptr);
 #ifdef ANDROID
+    instance = this;
     char *pathToSdl2ControllerDb = getenv("PATH_TO_SDL2_CONTROLLER_DB");
     if (SDL_GameControllerAddMappingsFromFile(pathToSdl2ControllerDb) < 0) {
         SDL_Log("Couldn't load mappings: %s\n", SDL_GetError());
@@ -83,7 +87,7 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
         SDL_Log("Custom controller db was loaded from: %s", pathToSdl2ControllerDb);
     }    
 #endif    
-    connectGamePad(0);
+    rescanGameControllers();
     
     SDL_EventState(SDL_WINDOWEVENT, SDL_ENABLE);
 	SDL_EventState(SDL_KEYDOWN, SDL_ENABLE);
@@ -489,15 +493,40 @@ void SDL2InputBackend::destroyGamePad(){
     }
 }
 
+void SDL2InputBackend::rescanGameControllers(){
+    destroyGamePad();
+    SDL_GameControllerUpdate();
+    int numJoysticks = SDL_NumJoysticks();
+    int virtualControllerIndex = -1;
+
+    for (int i = 0; i < numJoysticks; i++) {
+        if(SDL_JoystickIsVirtual(i)){
+            virtualControllerIndex = i;
+            break;
+        }
+    }
+
+    for (int jidx = 0; jidx < numJoysticks; ++jidx) {
+        if (virtualControllerIndex!=-1 && jidx!=virtualControllerIndex){
+            continue;
+        }
+        if (SDL_IsGameController(jidx)) {
+            connectGamePad(jidx);
+            break;
+        }
+    }
+}    
+
 void SDL2InputBackend::onEvent(const SDL_Event & event) {
 	
 	switch(event.type) {
-        case SDL_CONTROLLERDEVICEADDED:{
-            connectGamePad(event.cdevice.which);
-            break;
-        }
-        case SDL_CONTROLLERDEVICEREMOVED:  {
-            destroyGamePad();
+        case SDL_JOYDEVICEADDED:
+        case SDL_JOYDEVICEREMOVED:
+        case SDL_CONTROLLERDEVICEADDED:
+        case SDL_CONTROLLERDEVICEREMOVED:
+        case SDL_CONTROLLERDEVICEREMAPPED:
+        {
+            rescanGameControllers();
             break;
         }
 		case SDL_WINDOWEVENT: {
@@ -632,3 +661,14 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 		
 	}
 }
+
+#if ANDROID
+extern "C"{
+void rescanGameControllersForced(){
+    if (instance!= nullptr){
+        instance->rescanGameControllers();
+    }
+}
+}
+#endif
+

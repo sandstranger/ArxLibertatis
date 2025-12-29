@@ -57,6 +57,7 @@ public:
 	
 	void onEvent(const SDL_Event & event);
     void destroyGamePad();
+    void rescanGameControllers();
     
 private:
     SDL_GameController * m_pad;
