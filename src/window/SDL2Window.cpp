@@ -690,7 +690,7 @@ bool SDL2Window::setGamma(float gamma) {
 }
 
 void SDL2Window::changeMode(DisplayMode mode, bool fullscreen) {
-	
+#ifndef ANDROID	
 	if(!m_window) {
 		m_mode = mode;
 		m_fullscreen = fullscreen;
@@ -756,6 +756,7 @@ void SDL2Window::changeMode(DisplayMode mode, bool fullscreen) {
 	}
 	
 	processEvents(false);
+#endif    
 }
 
 void SDL2Window::updateSize(bool force) {
