@@ -682,8 +682,8 @@ bool SDL2Window::setGamma(float gamma) {
 	m_gamma = gamma;
 	return true;
 #else
-    const GLfloat global_ambient[] = {gamma};
-    glLightModelfv(0x4242, global_ambient);
+    const GLfloat gammaArray[] = {gamma};
+    glLightModelfv(0x4242, gammaArray);
     m_gamma = gamma;
     return true;
 #endif    
