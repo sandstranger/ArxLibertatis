@@ -345,12 +345,6 @@ SystemPaths::InitParams cmdLineInitParams;
 
 ExitStatus SystemPaths::init(const InitParams & initParams) {
 	
-#ifdef ANDROID
-    m_userDir = getenv("ARX_DATA_PATH");
-    m_configDir = m_userDir;
-    m_additionalDataDirs = initParams.dataDirs;
-    m_additionalDataDirs.emplace_back(m_userDir);
-#else    
 	m_userDir = findUserPath("user", initParams.forceUser, "UserDir", platform::UserDirPrefixes,
 	                         user_dir_prefixes, user_dir, current_path(), !initParams.displaySearchDirs);
 	
@@ -358,9 +352,7 @@ ExitStatus SystemPaths::init(const InitParams & initParams) {
 	                           config_dir_prefixes, config_dir, m_userDir, !initParams.displaySearchDirs);
 	
 	m_additionalDataDirs = initParams.dataDirs;
-#endif	
-	m_findDataDirs = initParams.findData;
-	
+    m_findDataDirs = initParams.findData;
 	m_dataDirs = getSearchPaths(true);
 	
 	if(initParams.displaySearchDirs) {

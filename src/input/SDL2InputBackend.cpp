@@ -76,8 +76,12 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	
 	arx_assert(window != nullptr);
 #ifdef ANDROID
-    std::string pathToGameControllerDb = std::string(getenv("ARX_DATA_PATH")) + std::string("/gamecontrollerdb.txt");
-    SDL_GameControllerAddMappingsFromFile(pathToGameControllerDb.c_str());
+    char *pathToSdl2ControllerDb = getenv("PATH_TO_SDL2_CONTROLLER_DB");
+    if (SDL_GameControllerAddMappingsFromFile(pathToSdl2ControllerDb) < 0) {
+        SDL_Log("Couldn't load mappings: %s\n", SDL_GetError());
+    } else{
+        SDL_Log("Custom controller db was loaded from: %s", pathToSdl2ControllerDb);
+    }    
 #endif    
     connectGamePad(0);
     
