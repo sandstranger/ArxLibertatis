@@ -280,7 +280,9 @@ static Uint32 getSDLFlagsForMode(const Vec2i & size, bool fullscreen) {
 }
 
 int SDL2Window::createWindowAndGLContext(const char * profile) {
-	
+#if ANDROID
+    m_fullscreen = true;
+#endif    
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 	Uint32 windowFlags = getSDLFlagsForMode(m_mode.resolution, m_fullscreen);
 	windowFlags |= SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;
