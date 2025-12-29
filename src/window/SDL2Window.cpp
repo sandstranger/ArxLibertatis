@@ -61,6 +61,10 @@
 #include "platform/profiler/Profiler.h"
 #include "window/SDL2X11Util.h"
 
+#if ANDROID
+#include "GL/gl.h"
+#endif
+
 // Avoid including SDL_syswm.h without SDL_PROTOTYPES_ONLY on non-Windows systems
 // it includes X11 stuff which pollutes the global namespace.
 struct ARX_SDL_SysWMinfo {
@@ -666,6 +670,7 @@ void SDL2Window::restoreGamma() {
 }
 
 bool SDL2Window::setGamma(float gamma) {
+#ifndef ANDROID   
 	if(m_window && m_fullscreen) {
 		if(!m_gammaOverridden) {
 			m_gammaOverridden = (SDL_GetWindowGammaRamp(m_window, m_gammaRed, m_gammaGreen, m_gammaBlue) == 0);
@@ -676,6 +681,12 @@ bool SDL2Window::setGamma(float gamma) {
 	}
 	m_gamma = gamma;
 	return true;
+#else
+    const GLfloat global_ambient[] = {gamma};
+    glLightModelfv(0x4242, global_ambient);
+    m_gamma = gamma;
+    return true;
+#endif    
 }
 
 void SDL2Window::changeMode(DisplayMode mode, bool fullscreen) {
