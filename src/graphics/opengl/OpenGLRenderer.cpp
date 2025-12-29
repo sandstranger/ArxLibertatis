@@ -308,9 +308,12 @@ void OpenGLRenderer::initialize() {
 		m_hasClearDepthf = gl.has("GL_ARB_ES2_compatibility", 4, 1) || gl.has("GL_OES_single_precision");
 	}
 	
+#ifndef ANDROID   
 	// Introduced in OpenGL 1.4, no extension available for OpenGL ES
 	m_hasVertexFogCoordinate = !gl.isES();
-	
+#else
+    m_hasVertexFogCoordinate = false;
+#endif
 	if(gl.isES()) {
 		m_hasSampleShading = gl.has("GL_OES_sample_shading", 3, 2);
 	} else {
@@ -329,7 +332,6 @@ void OpenGLRenderer::initialize() {
 		m_hasFogx = false;
 		m_hasFogDistanceMode = gl.has("GL_NV_fog_distance");
 	}
-	
 }
 
 void OpenGLRenderer::beforeResize(bool wasOrIsFullscreen) {
