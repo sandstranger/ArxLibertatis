@@ -268,35 +268,12 @@ void ARX_SOUND_MixerStop(audio::MixerId mixer_id) {
 
 #ifdef ANDROID
 extern "C" {
-    void resumeSound() {
-        if (ARXmenu.mode() == Mode_InGame) {
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerGame);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerGameSample);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerGameSpeech);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerGameAmbiance);
-        }
-        else {
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuSample);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenu);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuSpeech);
-            ARX_SOUND_MixerResume(ARX_SOUND_MixerMenuAmbiance);
-        }
-    }
-
-    void pauseSound() {
-        if (ARXmenu.mode() == Mode_InGame) {
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerGame);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerGameSample);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerGameSpeech);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerGameAmbiance);
-        }
-        else{
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuSample);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuSpeech);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenuAmbiance);
-            ARX_SOUND_MixerPause(ARX_SOUND_MixerMenu);
-        }
-    }
+__attribute__((used)) __attribute__((visibility("default")))
+void resumeSound() {
+}
+__attribute__((used)) __attribute__((visibility("default")))
+void pauseSound() {
+}
 }
 #endif
 

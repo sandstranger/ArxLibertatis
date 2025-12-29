@@ -216,16 +216,16 @@ ArxGame::ArxGame()
 
 #ifdef ANDROID
 extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
 bool needToShowScreenControls() {
     return showOnScreenControls;
 }
-
+__attribute__((used)) __attribute__((visibility("default")))
 bool needToInvokeMouseButtonsEvents(){
     return !needToShowScreenControls();
 }
 }
 #endif
-
 
 bool ArxGame::initialize() {
 	

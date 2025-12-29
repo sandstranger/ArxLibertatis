@@ -664,6 +664,7 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 
 #if ANDROID
 extern "C"{
+__attribute__((used)) __attribute__((visibility("default")))    
 void rescanGameControllersForced(){
     if (instance!= nullptr){
         instance->rescanGameControllers();
