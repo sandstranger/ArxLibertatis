@@ -312,7 +312,8 @@ void OpenGLRenderer::initialize() {
 	// Introduced in OpenGL 1.4, no extension available for OpenGL ES
 	m_hasVertexFogCoordinate = !gl.isES();
 #else
-    m_hasVertexFogCoordinate = false;
+    bool useLegacyOpenGLES2_0 = strcmp(getenv("LIBGL_ES"), "2") == 0;
+    m_hasVertexFogCoordinate = useLegacyOpenGLES2_0;
 #endif
 	if(gl.isES()) {
 		m_hasSampleShading = gl.has("GL_OES_sample_shading", 3, 2);
