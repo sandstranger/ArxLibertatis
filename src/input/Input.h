@@ -63,11 +63,9 @@ class TextInputHandler;
 
 extern long EERIEMouseButton;
 extern long LastMouseClick;
-extern bool MouseButton1Pressed;
-extern bool hideScreenControls;
 
 inline bool eeMouseDown1() {
-    return (EERIEMouseButton & 1) && !(LastMouseClick & 1);
+	return (EERIEMouseButton & 1) && !(LastMouseClick & 1);
 }
 
 inline bool eeMouseUp1() {
@@ -76,10 +74,6 @@ inline bool eeMouseUp1() {
 
 inline bool eeMousePressed1() {
 	return (EERIEMouseButton & 1) != 0;
-}
-
-inline bool isMouseButton1Pressed() {
-	return !hideScreenControls ? MouseButton1Pressed : eeMousePressed1();
 }
 
 inline bool eeMouseDoubleClick1() {

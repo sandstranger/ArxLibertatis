@@ -1659,7 +1659,6 @@ public:
 		addControlRow(CONTROLS_CUST_MINIMAP,      "system_menus_options_input_customize_controls_minimap");
 		
         addControlRow(CONTROLS_CUST_CONSOLE, "system_menus_options_input_customize_controls_console");
-        addControlRow(CONTROLS_CUST_MAGIC, "system_menus_options_input_customize_controls_magic");
 		
 		addBackButton(Page_OptionsInput);
 		

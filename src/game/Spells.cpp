@@ -488,12 +488,12 @@ void ARX_SPELLS_ManageMagic() {
 		}
 		
 		if(snip >= 2) {
-			if(!isMouseButton1Pressed() && ARX_FLARES_broken == 0) {
+			if(!eeMousePressed1() && ARX_FLARES_broken == 0) {
 				ARX_FLARES_broken = 2;
 				MagicFlareChangeColor();
 			}
 			
-			if(isMouseButton1Pressed()) {
+			if(eeMousePressed1()) {
 				Vec2f pos = Vec2f(DANAEMouse);
 				if(TRUE_PLAYER_MOUSELOOK_ON) {
 					pos = Vec2f(MemoMouse);
