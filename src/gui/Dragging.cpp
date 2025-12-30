@@ -51,9 +51,14 @@ Vec2f g_draggedIconOffset;
 static Vec2f g_draggedObjectOffset;
 static float g_dragStartAngle = 0;
 static Camera * g_dragStartCamera = nullptr;
+#if ANDROID
+bool allowDrop = false;
+#endif
 
 void setDraggedEntity(Entity * entity) {
-	
+#if ANDROID   
+    allowDrop = false;
+#endif    
 	if(entity != g_draggedEntity) {
 		g_dragStartCamera = g_camera;
 		g_dragStartAngle = g_camera->angle.getYaw();
@@ -187,8 +192,8 @@ EntityDragResult findSpotForDraggedEntity(Vec3f origin, Vec3f dir, Entity * enti
 void updateDraggedEntity() {
 	
 	Entity * entity = g_draggedEntity;
-	
-	if(!entity || BLOCK_PLAYER_CONTROLS || !PLAYER_INTERFACE_SHOW) {
+
+    if(!entity || BLOCK_PLAYER_CONTROLS || !PLAYER_INTERFACE_SHOW) {
 		return;
 	}
 	
@@ -196,9 +201,16 @@ void updateDraggedEntity() {
 	
 	arx_assert(!locateInInventories(entity));
 	
+#ifndef ANDROID   
 	bool drop = eeMouseUp1();
-	
-	Vec2f mouse = Vec2f(DANAEMouse) + g_draggedIconOffset;
+#else
+    bool drop = allowDrop && eeMouseUp1();
+
+    if (drop) {
+        allowDrop = false;
+    }
+#endif    
+    Vec2f mouse = Vec2f(DANAEMouse) + g_draggedIconOffset;
 	
 	g_dragStatus = EntityDragStatus_OverHud;
 	entity->show = SHOW_FLAG_ON_PLAYER;
