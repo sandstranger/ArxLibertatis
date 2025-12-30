@@ -20,11 +20,21 @@
 #include "math/Random.h"
 
 #include <ctime>
-
+#if ANDROID
+#include <ctime>
+#include <cstdint>
+#endif
 thread_local Random::Generator * Random::rng = nullptr;
 
 void Random::seed() {
+#if ANDROID
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    u64 seedVal = (static_cast<u64>(ts.tv_sec) * 1000000000ULL) + static_cast<u64>(ts.tv_nsec);
+    seed(seedVal);
+#else    
 	seed(u64(std::time(nullptr)));
+#endif    
 }
 
 void Random::seed(u64 seedVal) {
