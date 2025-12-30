@@ -222,7 +222,7 @@ bool needToShowScreenControls() {
 }
 __attribute__((used)) __attribute__((visibility("default")))
 bool needToInvokeMouseButtonsEvents(){
-    return !needToShowScreenControls();
+    return bRenderInCursorMode;
 }
 }
 #endif
