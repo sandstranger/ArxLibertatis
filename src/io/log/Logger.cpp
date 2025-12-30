@@ -29,6 +29,7 @@
 #include "io/log/ConsoleLogger.h"
 #include "io/log/LogBackend.h"
 #include "io/log/MsvcLogger.h"
+#include "io/log/LogcatLogger.h"
 
 #include "platform/ProgramOptions.h"
 
@@ -276,9 +277,12 @@ void Logger::configure(const std::string & settings) {
 }
 
 void Logger::initialize() {
-	
+#ifndef ANDROID
 	add(logger::Console::get());
-	
+#else    
+	add(logger::Logcat::get());
+#endif	
+
 #if ARX_PLATFORM == ARX_PLATFORM_WIN32
 	add(logger::MsvcDebugger::get());
 #endif
