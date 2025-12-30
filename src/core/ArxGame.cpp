@@ -220,9 +220,10 @@ __attribute__((used)) __attribute__((visibility("default")))
 bool needToShowScreenControls() {
     return showOnScreenControls;
 }
+
 __attribute__((used)) __attribute__((visibility("default")))
 bool needToInvokeMouseButtonsEvents(){
-    return bRenderInCursorMode;
+    return !PLAYER_MOUSELOOK_ON;
 }
 }
 #endif
