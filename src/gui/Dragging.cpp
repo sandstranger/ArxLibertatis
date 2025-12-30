@@ -53,6 +53,7 @@ static float g_dragStartAngle = 0;
 static Camera * g_dragStartCamera = nullptr;
 #if ANDROID
 bool allowDrop = false;
+static bool screenControlsHided = false;
 #endif
 
 void setDraggedEntity(Entity * entity) {
@@ -189,6 +190,15 @@ EntityDragResult findSpotForDraggedEntity(Vec3f origin, Vec3f dir, Entity * enti
 	return result;
 }
 
+#ifdef ANDROID
+extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
+void updateScreenControlsHidingState(bool controlsHided) {
+    screenControlsHided = controlsHided;
+}
+}
+#endif
+
 void updateDraggedEntity() {
 	
 	Entity * entity = g_draggedEntity;
@@ -204,7 +214,7 @@ void updateDraggedEntity() {
 #ifndef ANDROID   
 	bool drop = eeMouseUp1();
 #else
-    bool drop = allowDrop && eeMouseUp1();
+    bool drop = (allowDrop || screenControlsHided) && eeMouseUp1();
 
     if (drop) {
         allowDrop = false;
