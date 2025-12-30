@@ -1533,6 +1533,7 @@ void ArxGame::updateTime() {
 	
 }
 
+
 void ArxGame::updateInput() {
 
 	// Update input
@@ -1565,6 +1566,13 @@ void ArxGame::updateInput() {
 		}
 		if(GInput->actionNowReleased(CONTROLS_CUST_USE)) {
 			EERIEMouseButton &= ~2;
+		}
+
+		if(GInput->actionNowPressed(CONTROLS_CUST_MAGIC)) {
+            MouseButton1Pressed = true;
+		}
+		if(GInput->actionNowReleased(CONTROLS_CUST_MAGIC)) {
+            MouseButton1Pressed = false;
 		}
 		
 	} else {
@@ -1760,7 +1768,7 @@ void ArxGame::updateLevel() {
 
 	// Checks Magic Flares Drawing
 	if(!player.m_paralysed) {
-		if(eeMousePressed1()) {
+		if(isMouseButton1Pressed()) {
 			if(!ARX_FLARES_Block) {
 				static PlatformDuration runeDrawPointElapsed = 0;
 				if(!config.input.useAltRuneRecognition) {
