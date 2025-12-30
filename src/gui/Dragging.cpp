@@ -53,7 +53,7 @@ static float g_dragStartAngle = 0;
 static Camera * g_dragStartCamera = nullptr;
 #if ANDROID
 bool allowDrop = false;
-static bool screenControlsHided = false;
+bool screenControlsHided = false;
 #endif
 
 void setDraggedEntity(Entity * entity) {
