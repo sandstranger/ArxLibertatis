@@ -1654,10 +1654,6 @@ void ArxGame::manageEntityDescription() {
 
 EntityHandle LastSelectedIONum = EntityHandle();
 
-#if ANDROID
-extern bool screenControlsHided;
-#endif
-
 void ArxGame::manageEditorControls() {
 	
 	ARX_PROFILE_FUNC();
@@ -1679,13 +1675,9 @@ void ArxGame::manageEditorControls() {
 			s_dragDistance = 0.f;
 		} else if(!DRAGGING) {
 #ifdef ANDROID
-            if (!screenControlsHided){
+            s_dragDistance += 2.f * glm::length(GInput->getRelativeMouseMovement());
+            if (s_dragDistance + glm::length(Vec2f(DANAEMouse - g_dragStartPos)) > 2.f) {
                 DRAGGING = true;
-            } else {
-                s_dragDistance += 5.f * glm::length(GInput->getRelativeMouseMovement());
-                if (s_dragDistance + glm::length(Vec2f(DANAEMouse - g_dragStartPos)) > 5.f) {
-                    DRAGGING = true;
-                }
             }
 #else
             s_dragDistance += 5.f * glm::length(GInput->getRelativeMouseMovement());
