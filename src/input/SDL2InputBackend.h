@@ -85,7 +85,7 @@ private:
     float axisDeadzone[SDL_CONTROLLER_AXIS_MAX];
     float axisScale[SDL_CONTROLLER_AXIS_MAX];
 
-    void connectGamePad(int deviceId);
+    bool connectGamePad(int deviceId);
     void joystickToMouse(const Vec2i & winSize);
 };
 

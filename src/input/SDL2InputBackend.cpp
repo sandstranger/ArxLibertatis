@@ -485,11 +485,12 @@ void SDL2InputBackend::joystickToMouse(const Vec2i & winSize) {
     }
 }
 
-void SDL2InputBackend::connectGamePad(int deviceId){
+bool SDL2InputBackend::connectGamePad(int deviceId){
     m_pad = SDL_GameControllerOpen(deviceId);
     const char *controllername = SDL_GameControllerNameForIndex(deviceId);
     controllername = (controllername != NULL ? controllername : "NULL");
     LogInfo << "Detected controller: " << controllername;
+    return m_pad!= nullptr;
 }
 
 void SDL2InputBackend::destroyGamePad(){
@@ -516,8 +517,7 @@ void SDL2InputBackend::rescanGameControllers(){
         if (virtualControllerIndex!=-1 && jidx!=virtualControllerIndex){
             continue;
         }
-        if (SDL_IsGameController(jidx)) {
-            connectGamePad(jidx);
+        if (SDL_IsGameController(jidx) && connectGamePad(jidx)) {
             break;
         }
     }
