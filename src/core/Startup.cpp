@@ -71,13 +71,10 @@
  * This is needed to initialize NSApplication - otherwise we will later
  * crash when trying to use SDL windowing functions.
  */
-#ifdef ANDROID
-    #include <SDL_main.h>
-#endif
 
-#if ARX_PLATFORM == ARX_PLATFORM_MACOS
+#if ARX_PLATFORM == ARX_PLATFORM_MACOS || ANDROID
 	#include <SDL_main.h>
-#elifndef ANDROID
+#else
 	#undef main /* in case SDL.h was already included */
 #endif
 
