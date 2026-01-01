@@ -63,10 +63,6 @@
 
 #if ANDROID
 #include "GL/gl.h"
-static SDL2Window *instance = nullptr;
-int targetSafeAreaScreenWidth = -1;
-int targetSafeAreaScreenHeight = -1;
-bool safeAreaWasSet = false;
 #endif
 
 // Avoid including SDL_syswm.h without SDL_PROTOTYPES_ONLY on non-Windows systems
@@ -769,18 +765,8 @@ void SDL2Window::updateSize(bool force) {
 	
 	DisplayMode oldMode = m_mode;
 	
-
 	int w, h;
-#if ANDROID
-    if (targetSafeAreaScreenWidth> -1 && targetSafeAreaScreenHeight > -1){
-        w = targetSafeAreaScreenWidth;
-        h = targetSafeAreaScreenHeight;
-    } else{
-        SDL_GetWindowSize(m_window, &w, &h);
-    }
-#else
-    SDL_GetWindowSize(m_window, &w, &h);
-#endif
+	SDL_GetWindowSize(m_window, &w, &h);
 	m_mode.resolution = Vec2i(w, h);
 	
 	int display = SDL_GetWindowDisplayIndex(m_window);
@@ -823,30 +809,12 @@ int SDLCALL SDL2Window::eventFilter(void * userdata, SDL_Event * event) {
 	return 1;
 }
 
-#if ANDROID
-extern "C"{
-__attribute__((used)) __attribute__((visibility("default")))
-void onSafeAreaApplied(int safeAreaScreenWidth, int safeAreaScreenHeight) {
-    targetSafeAreaScreenWidth = safeAreaScreenWidth;
-    targetSafeAreaScreenHeight = safeAreaScreenHeight;
-    safeAreaWasSet = true;
-}
-}
-#endif
 void SDL2Window::processEvents(bool waitForEvent) {
 	
 	SDL_Event event;
 	int ret = waitForEvent ? SDL_WaitEvent(&event) : SDL_PollEvent(&event);
 	while(ret) {
 		
-#if ANDROID       
-        if (safeAreaWasSet){
-            m_renderer->beforeResize(true);
-            updateSize(true);
-            safeAreaWasSet = false;
-        }
-#endif        
-        
 		switch(event.type) {
 #if ANDROID
             case SDL_APP_WILLENTERFOREGROUND:
