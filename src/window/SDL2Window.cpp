@@ -766,7 +766,7 @@ void SDL2Window::updateSize(bool force) {
 	DisplayMode oldMode = m_mode;
 	
 	int w, h;
-	SDL_GetWindowSize(m_window, &w, &h);
+    SDL_GL_GetDrawableSize(m_window, &w, &h);
 	m_mode.resolution = Vec2i(w, h);
 	
 	int display = SDL_GetWindowDisplayIndex(m_window);
@@ -861,7 +861,11 @@ void SDL2Window::processEvents(bool waitForEvent) {
 					
 					case SDL_WINDOWEVENT_SIZE_CHANGED: {
 						Vec2i newSize(event.window.data1, event.window.data2);
+#ifndef ANDROID
 						if(newSize != m_mode.resolution && !m_fullscreen) {
+#else
+                        if(newSize != m_mode.resolution) {
+#endif
 							m_renderer->beforeResize(false);
 							updateSize();
 						} else {
