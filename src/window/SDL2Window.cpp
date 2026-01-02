@@ -863,10 +863,11 @@ void SDL2Window::processEvents(bool waitForEvent) {
 						Vec2i newSize(event.window.data1, event.window.data2);
 #ifndef ANDROID
 						if(newSize != m_mode.resolution && !m_fullscreen) {
+							m_renderer->beforeResize(false);
 #else
                         if(newSize != m_mode.resolution) {
+                            m_renderer->beforeResize(true);
 #endif
-							m_renderer->beforeResize(false);
 							updateSize();
 						} else {
 							// SDL regrettably sends resize events when a fullscreen window
