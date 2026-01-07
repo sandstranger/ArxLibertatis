@@ -275,7 +275,7 @@ static Uint32 getSDLFlagsForMode(const Vec2i & size, bool fullscreen) {
 	}
 	return flags;
 #else
-    return SDL_WINDOW_FULLSCREEN;
+    return SDL_WINDOW_FULLSCREEN_DESKTOP;
 #endif            
 }
 
