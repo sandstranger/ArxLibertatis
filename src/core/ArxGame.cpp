@@ -225,6 +225,10 @@ __attribute__((used)) __attribute__((visibility("default")))
 bool needToInvokeMouseButtonsEvents(){
     return !PLAYER_MOUSELOOK_ON;
 }
+__attribute__((used)) __attribute__((visibility("default")))
+bool needToReInitGameControllers (){
+    return false;
+}
 }
 #endif
 
