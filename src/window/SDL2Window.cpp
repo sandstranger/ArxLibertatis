@@ -75,6 +75,11 @@ struct ARX_SDL_SysWMinfo {
 
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
+#if ANDROID
+typedef void (*forceLandScapeActivityOrientationDelegate)();
+static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
+#endif
+
 SDL2Window::SDL2Window()
 	: m_window(nullptr)
 	, m_glcontext(nullptr)
@@ -127,6 +132,13 @@ SDL2Window::~SDL2Window() {
 #ifndef SDL_HINT_VIDEO_X11_FORCE_EGL // SDL 2.0.12+
 #define SDL_HINT_VIDEO_X11_FORCE_EGL "SDL_VIDEO_X11_FORCE_EGL"
 #endif
+#endif
+
+#if ANDROID
+__attribute__((used)) __attribute__((visibility("default")))
+void registerForceLandscapeActivityOrientationCallback (forceLandScapeActivityOrientationDelegate instance) {
+    activityOrientationChangerInstance = instance;
+}
 #endif
 
 static Window::MinimizeSetting getInitialSDLSetting(const char * hint, Window::MinimizeSetting def) {
@@ -818,7 +830,10 @@ void SDL2Window::processEvents(bool waitForEvent) {
 		switch(event.type) {
 #if ANDROID
             case SDL_APP_WILLENTERFOREGROUND:
-                onFocus(true);                
+                onFocus(true);
+                if (activityOrientationChangerInstance!= nullptr){
+                    activityOrientationChangerInstance();
+                }
                 break;
 
             case SDL_APP_WILLENTERBACKGROUND :
