@@ -826,7 +826,11 @@ void SDL2Window::processEvents(bool waitForEvent) {
 	SDL_Event event;
 	int ret = waitForEvent ? SDL_WaitEvent(&event) : SDL_PollEvent(&event);
 	while(ret) {
-		
+#if ANDROID
+        if (event.type == SDL_APP_DIDENTERFOREGROUND && activityOrientationChangerInstance!= nullptr){
+            activityOrientationChangerInstance();
+        }
+#endif		
 		switch(event.type) {
 #if ANDROID
             case SDL_APP_WILLENTERFOREGROUND:
