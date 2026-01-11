@@ -119,8 +119,10 @@ public:
 		virtual void onDroppedFile(const Window & window, const fs::path & path);
 		
 	};
-	
-	void addListener(Listener * listener);
+
+    void onFocus(bool hasFocus);
+
+    void addListener(Listener * listener);
 	void removeListener(Listener * listener);
 	
 	bool hasFocus() const {
@@ -149,7 +151,6 @@ protected:
 	void onRestore();
 	void onShow(bool isVisible);
 	void onToggleFullscreen(bool fullscreen);
-	void onFocus(bool hasFocus);
 	void onPaint();
 	void onCreate();
 	void onDroppedFile(const fs::path & path);

@@ -76,6 +76,7 @@ struct ARX_SDL_SysWMinfo {
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
 #if ANDROID
+static SDL2Window *windowInstance = nullptr;
 typedef void (*forceLandScapeActivityOrientationDelegate)();
 static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
 #endif
@@ -91,11 +92,12 @@ SDL2Window::SDL2Window()
 	, m_sdlVersion(0)
 	, m_sdlSubsystem(ARX_SDL_SYSWM_UNKNOWN)
 {
+    windowInstance = this;
 	m_renderer = new OpenGLRenderer;
 }
 
 SDL2Window::~SDL2Window() {
-	
+    windowInstance = nullptr;
 	delete m_input;
 	
 	if(m_renderer) {
@@ -824,6 +826,23 @@ int SDLCALL SDL2Window::eventFilter(void * userdata, SDL_Event * event) {
 	return 1;
 }
 
+#ifdef ANDROID
+extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
+void onNativePause() {
+    if (windowInstance!= nullptr){
+        windowInstance->onFocus(false);
+    }
+}
+__attribute__((used)) __attribute__((visibility("default")))
+void onNativeResume() {
+    if (windowInstance!= nullptr){
+        windowInstance->onFocus(true);
+    }
+}
+}
+#endif
+
 void SDL2Window::processEvents(bool waitForEvent) {
 	
 	SDL_Event event;
@@ -835,18 +854,6 @@ void SDL2Window::processEvents(bool waitForEvent) {
         }
 #endif		
 		switch(event.type) {
-#if ANDROID
-            case SDL_APP_WILLENTERFOREGROUND:
-                onFocus(true);
-                if (activityOrientationChangerInstance!= nullptr){
-                    activityOrientationChangerInstance();
-                }
-                break;
-
-            case SDL_APP_WILLENTERBACKGROUND :
-                onFocus(false);                
-                break;
-#endif            
 			case SDL_WINDOWEVENT: {
 				switch(event.window.event) {
 					

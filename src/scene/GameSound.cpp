@@ -266,17 +266,6 @@ void ARX_SOUND_MixerStop(audio::MixerId mixer_id) {
 	}
 }
 
-#ifdef ANDROID
-extern "C" {
-__attribute__((used)) __attribute__((visibility("default")))
-void resumeSound() {
-}
-__attribute__((used)) __attribute__((visibility("default")))
-void pauseSound() {
-}
-}
-#endif
-
 void ARX_SOUND_MixerPause(audio::MixerId mixer_id) {
 	if(g_soundInitialized) {
 		audio::mixerPause(mixer_id);
