@@ -135,9 +135,12 @@ SDL2Window::~SDL2Window() {
 #endif
 
 #if ANDROID
+extern "C" {
 __attribute__((used)) __attribute__((visibility("default")))
-void registerForceLandscapeActivityOrientationCallback (forceLandScapeActivityOrientationDelegate instance) {
+void registerForceLandscapeActivityOrientationCallback(
+        forceLandScapeActivityOrientationDelegate instance) {
     activityOrientationChangerInstance = instance;
+}
 }
 #endif
 
