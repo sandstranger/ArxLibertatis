@@ -1674,17 +1674,10 @@ void ArxGame::manageEditorControls() {
 			DRAGGING = false;
 			s_dragDistance = 0.f;
 		} else if(!DRAGGING) {
-#ifdef ANDROID
-            s_dragDistance += 2.f * glm::length(GInput->getRelativeMouseMovement());
-            if (s_dragDistance + glm::length(Vec2f(DANAEMouse - g_dragStartPos)) > 2.f) {
-                DRAGGING = true;
-            }
-#else
             s_dragDistance += 5.f * glm::length(GInput->getRelativeMouseMovement());
                 if (s_dragDistance + glm::length(Vec2f(DANAEMouse - g_dragStartPos)) > 5.f) {
                     DRAGGING = true;
                 }
-#endif
 		}
 	} else {
 		DRAGGING = false;
