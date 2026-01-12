@@ -33,7 +33,7 @@ static const char * g_exitQuestion = nullptr;
 static CriticalErrorDialog::ExitCommand g_exitCommand = nullptr;
 
 CriticalErrorDialog::~CriticalErrorDialog() {
-	
+#ifndef ANDROID	
 	bool runExitCommand = false;
 	
 	if(!errorString.empty()) {
@@ -63,22 +63,26 @@ CriticalErrorDialog::~CriticalErrorDialog() {
 	if(runExitCommand) {
 		g_exitCommand();
 	}
-	
+#endif	
 }
 
 void CriticalErrorDialog::setExitQuestion(const char * question, ExitCommand command) {
+#ifndef ANDROID
 	if(!g_exitQuestion || !g_exitCommand) {
 		g_exitQuestion = question;
 		g_exitCommand = command;
 	}
+#endif
 }
 
 void CriticalErrorDialog::log(const Source & file, int line, Logger::LogLevel level, std::string_view str) {
+#ifndef ANDROID
 	ARX_UNUSED(file), ARX_UNUSED(line);
 	
 	if(level == Logger::Critical && errorString.empty()) {
 		errorString = str;
 	}
+#endif    
 }
 
 } // namespace logger

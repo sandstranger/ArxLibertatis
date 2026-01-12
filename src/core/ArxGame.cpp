@@ -918,7 +918,7 @@ bool ArxGame::addPaks() {
 		LogInfo << oss.str();
 		
 		// Try to launch the data file installer on non-Windows systems
-		#if ARX_PLATFORM != ARX_PLATFORM_WIN32
+		#if ARX_PLATFORM != ARX_PLATFORM_WIN32 && !ANDROID
 		const char * question = "Install the Arx Fatalis data files now?";
 		logger::CriticalErrorDialog::setExitQuestion(question, runDataFilesInstaller);
 		#endif
