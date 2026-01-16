@@ -79,6 +79,7 @@ SDL2Window * SDL2Window::s_mainWindow = nullptr;
 static SDL2Window *windowInstance = nullptr;
 typedef void (*forceLandScapeActivityOrientationDelegate)();
 static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
+bool g_useGLES2_0 = false;
 #endif
 
 SDL2Window::SDL2Window()
@@ -142,6 +143,10 @@ __attribute__((used)) __attribute__((visibility("default")))
 void registerForceLandscapeActivityOrientationCallback(
         forceLandScapeActivityOrientationDelegate instance) {
     activityOrientationChangerInstance = instance;
+}
+__attribute__((used)) __attribute__((visibility("default")))
+void setUseGLES2_0State(const bool useGLES2_0) {
+    g_useGLES2_0 = useGLES2_0;
 }
 }
 #endif
@@ -482,12 +487,11 @@ bool SDL2Window::initialize() {
                 }
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, flags);
 
-                bool useLegacyOpenGLES2_0 = strcmp(getenv("LIBGL_ES"), "2") == 0;
-                SDL_Log(useLegacyOpenGLES2_0 ? "Legacy OpenGL ES 2.0 is using for rendering" :
+                SDL_Log(g_useGLES2_0 ? "Legacy OpenGL ES 2.0 is using for rendering" :
                         "OpenGL ES 3.2 is using for rendering");
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, useLegacyOpenGLES2_0 ? 2 : 3);
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, useLegacyOpenGLES2_0 ? 0 : 2);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, g_useGLES2_0 ? 2 : 3);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, g_useGLES2_0 ? 0 : 2);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 1);
                 samples = createWindowAndGLContext("OpenGL ES");
 

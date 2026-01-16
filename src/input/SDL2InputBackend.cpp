@@ -30,6 +30,8 @@
 #include "input/Input.h"
 #include "game/Player.h"
 #include "../src/gui/Hud.h"
+#include <string>
+using namespace std;
 #endif
 
 static Keyboard::Key sdlToArxKey[SDL_NUM_SCANCODES];
@@ -68,6 +70,7 @@ static constexpr float mouseSpeed = 80.0f;
 
 #if ANDROID
 static SDL2InputBackend *instance = nullptr;
+static string g_pathToSDLControllerDB;
 #endif
 
 SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
@@ -86,7 +89,7 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
     arx_assert(window != nullptr);
 #ifdef ANDROID
     instance = this;
-    char *pathToSdl2ControllerDb = getenv("PATH_TO_SDL2_CONTROLLER_DB");
+    const auto *pathToSdl2ControllerDb = g_pathToSDLControllerDB.c_str();
     if (SDL_GameControllerAddMappingsFromFile(pathToSdl2ControllerDb) < 0) {
         SDL_Log("Couldn't load mappings: %s\n", SDL_GetError());
     } else{
@@ -691,10 +694,8 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 #if ANDROID
 extern "C"{
 __attribute__((used)) __attribute__((visibility("default")))
-void rescanGameControllersForced(){
-    if (instance!= nullptr){
-        instance->rescanGameControllers();
-    }
+void setPathToSDLControllerDB (const char *pathToSDLControllerDB){
+    g_pathToSDLControllerDB = pathToSDLControllerDB;
 }
 }
 #endif
