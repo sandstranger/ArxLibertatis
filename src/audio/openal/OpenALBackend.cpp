@@ -508,8 +508,9 @@ aalError OpenALBackend::setUnitFactor(float factor) {
 	float speedOfSoundInUnits = speedOfSoundInMetersPerSecond / factor;
 
 #ifndef ANDROID
-	arx_assert(arx::safe_isfinite(speedOfSoundInUnits));
-#endif	
+	arx_assert(std::isfinite(speedOfSoundInUnits));
+#endif
+
 	alSpeedOfSound(speedOfSoundInUnits);
 	AL_CHECK_ERROR("scaling speed of sound to unit factor")
 	
