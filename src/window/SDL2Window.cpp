@@ -831,15 +831,19 @@ int SDLCALL SDL2Window::eventFilter(void * userdata, SDL_Event * event) {
 }
 
 #ifdef ANDROID
+extern void SetMute(bool mute);
+
 extern "C" {
 __attribute__((used)) __attribute__((visibility("default")))
 void onNativePause() {
+    SetMute(true);
     if (windowInstance!= nullptr){
         windowInstance->onFocus(false);
     }
 }
 __attribute__((used)) __attribute__((visibility("default")))
 void onNativeResume() {
+    SetMute(false);
     if (windowInstance!= nullptr){
         windowInstance->onFocus(true);
     }
