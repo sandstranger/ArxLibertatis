@@ -120,6 +120,7 @@ std::string_view ScriptEvent::name(ScriptMessage event) {
 		case SM_INVENTORY2_CLOSE:       return "on inventory2_close";
 		case SM_INVENTORY2_OPEN:        return "on inventory2_open";
 		case SM_INVENTORYIN:            return "on inventoryin";
+		case SM_INVENTORYOUT:           return "on inventoryout";
 		case SM_INVENTORYUSE:           return "on inventoryuse";
 		case SM_KEY_PRESSED:            return "on key_pressed";
 		case SM_LEAVEZONE:              return "on leavezone";
@@ -141,7 +142,6 @@ std::string_view ScriptEvent::name(ScriptMessage event) {
 		case SM_UNDETECTPLAYER:         return "on undetectplayer";
 		case SM_WAYPOINT:               return "on waypoint";
 		case SM_FIGHT:                  return "on fight";
-		case SM_INVENTORYOUT:           return "on inventoryout";
 		case SM_MOVE:                   return "on move";
 		case SM_RESET:                  return "on reset";
 		case SM_SPELLDECISION:          return "on spelldecision";
