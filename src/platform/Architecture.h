@@ -143,6 +143,7 @@ inline const char * getArchitectureName(unsigned arch) {
  * \def ARX_HAVE_SSE3
  * \brief x86/e2k-only: 1 if targeting CPUs with SSE3 support, 0 otherwise
  */
+#ifndef ANDROID
 #if ARX_ARCH == ARX_ARCH_X86_64
 #define ARX_HAVE_SSE 1
 #define ARX_HAVE_SSE2 1
@@ -165,7 +166,11 @@ inline const char * getArchitectureName(unsigned arch) {
 #define ARX_HAVE_SSE3 0
 #endif
 #endif
-
+#else
+#define ARX_HAVE_SSE 1
+#define ARX_HAVE_SSE2 1
+#define ARX_HAVE_SSE3 1
+#endif 
 } // namespace platform
 
 #endif // ARX_PLATFORM_ARCHITECTURE_H
