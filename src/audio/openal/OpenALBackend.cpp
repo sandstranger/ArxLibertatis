@@ -46,6 +46,27 @@
 #include "platform/Platform.h"
 #include "platform/CrashHandler.h"
 
+#if ANDROID
+#include <alext.h>
+
+ALCdevice*	openALDevice;
+
+void SetMute(bool mute){
+    if (openALDevice == nullptr) {
+        return;
+    }
+
+    if( mute )
+    {
+        alcDevicePauseSOFT(openALDevice);
+    }
+    else
+    {
+        alcDeviceResumeSOFT(openALDevice);
+    }
+}
+#endif
+
 namespace audio {
 
 class Sample;
@@ -223,8 +244,12 @@ aalError OpenALBackend::init(std::string_view requestedDeviceName, HRTFAttribute
 		}
 		return AAL_ERROR_SYSTEM;
 	}
-	
-	#if ARX_HAVE_OPENAL_HRTF
+
+#if ANDROID
+    openALDevice = device;
+#endif
+
+#if ARX_HAVE_OPENAL_HRTF
 	m_hasHRTF = (alcIsExtensionPresent(device, "ALC_SOFT_HRTF") != ALC_FALSE);
 	if(m_hasHRTF) {
 		#define ARX_AL_LOAD_FUNC(Name) \

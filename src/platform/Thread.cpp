@@ -23,6 +23,7 @@
 
 #include "platform/Architecture.h"
 
+#ifndef ANDROID
 #if ARX_HAVE_XMMINTRIN
 #include <xmmintrin.h>
 #endif
@@ -30,7 +31,14 @@
 #if ARX_HAVE_PMMINTRIN
 #include <pmmintrin.h>
 #endif
-
+#else
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
+#include "sse2neon.h"
+#else
+#include <xmmintrin.h>
+#include <pmmintrin.h>
+#endif
+#endif
 #if ARX_COMPILER_MSVC && (ARX_ARCH == ARX_ARCH_X86 || ARX_ARCH == ARX_ARCH_X86_64)
 #include <intrin.h>
 #include <immintrin.h>
@@ -302,10 +310,12 @@ void Thread::disableFloatDenormals() {
 	// We would need to drop support for x86 CPUs without SSE(2) and
 	// compile with -msse(2) -mfpmath=sse for this to have an effect
 	
-	#elif ARX_ARCH == ARX_ARCH_X86 || ARX_ARCH == ARX_ARCH_X86_64 || ARX_ARCH == ARX_ARCH_E2K
-	
+	#elif ARX_ARCH == ARX_ARCH_X86 || ARX_ARCH == ARX_ARCH_X86_64 || ARX_ARCH == ARX_ARCH_E2K || ANDROID
+    
+#ifndef ANDROID   
 	static_assert(ARX_HAVE_SSE);
-	
+#endif
+
 	#if ARX_HAVE_XMMINTRIN
 
 	_MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON); // SSE
@@ -372,7 +382,7 @@ void Thread::disableFloatDenormals() {
 	#pragma message ( "Disabling SSE float denormals is not supported for this compiler!" )
 	#endif
 	
-	#elif ARX_ARCH == ARX_ARCH_ARM || ARX_ARCH == ARX_ARCH_ARM64
+	#elif (ARX_ARCH == ARX_ARCH_ARM || ARX_ARCH == ARX_ARCH_ARM64) && !ANDROID
 	
 	// Denormals are always disabled for NEON, disable them for VFP instructions as well
 	#ifdef __VFP_FP__

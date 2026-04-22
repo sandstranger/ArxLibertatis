@@ -410,6 +410,7 @@ list(APPEND ARX_LIBRARIES ${FREETYPE_LIBRARIES})
 if (ANDROID)
     find_package(OpenGL ${OPTIONAL_DEPENDENCY})
     set(ARX_HAVE_OPENGL 1)
+    add_definitions(-DAL_ALEXT_PROTOTYPES)
 endif ()
 
 if (USE_OPENGL AND NOT ANDROID)
@@ -733,8 +734,13 @@ else(MSVC)
 	endif()
 	
 	# CMake has trouble detecting _MM_SET_FLUSH_ZERO_MODE with GCC, check for the includes instead
-	check_include_files("xmmintrin.h" ARX_HAVE_XMMINTRIN)
-	check_include_files("pmmintrin.h" ARX_HAVE_PMMINTRIN)
+	if (NOT ANDROID)
+		check_include_files("xmmintrin.h" ARX_HAVE_XMMINTRIN)
+		check_include_files("pmmintrin.h" ARX_HAVE_PMMINTRIN)
+	else()
+		set(ARX_HAVE_XMMINTRIN 1)
+		set(ARX_HAVE_PMMINTRIN 1)
+	endif()
 	# _fxsave is unreliable with GCC, use the builtin directly
 	check_builtin(ARX_HAVE_BUILTIN_IA32_FXSAVE "__builtin_ia32_fxsave")
 	
