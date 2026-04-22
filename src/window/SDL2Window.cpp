@@ -93,12 +93,16 @@ SDL2Window::SDL2Window()
 	, m_sdlVersion(0)
 	, m_sdlSubsystem(ARX_SDL_SYSWM_UNKNOWN)
 {
+#if ANDROID
     windowInstance = this;
+#endif
 	m_renderer = new OpenGLRenderer;
 }
 
 SDL2Window::~SDL2Window() {
+#if ANDROID
     windowInstance = nullptr;
+#endif
 	delete m_input;
 	
 	if(m_renderer) {
