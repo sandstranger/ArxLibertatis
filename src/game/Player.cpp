@@ -743,7 +743,7 @@ void ARX_PLAYER_MakeSpHero()
 	player.xp = 0;
 	player.poison = 0.f;
 	player.hunger = 100.f;
-	player.skin = 4;
+	player.skin = MAX_CHEAT_PLAYER_SKIN;
 
 	ARX_PLAYER_ComputePlayerStats();
 	player.lifePool.current = player.m_lifeMaxWithoutMods;
@@ -1011,7 +1011,7 @@ void ARX_PLAYER_Restore_Skin() {
 	res::path tx2;
 	res::path tx3;
 	res::path tx4;
-	
+
 	switch(player.skin) {
 		case 0:
 			tx  = "graph/obj3d/textures/npc_human_base_hero_head";
@@ -1019,42 +1019,25 @@ void ARX_PLAYER_Restore_Skin() {
 			tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero_head";
 			tx4 = "graph/obj3d/textures/npc_human_leather_hero_head";
 			break;
-		case 1:
-			tx  = "graph/obj3d/textures/npc_human_base_hero2_head";
-			tx2 = "graph/obj3d/textures/npc_human_chainmail_hero2_head";
-			tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero2_head";
-			tx4 = "graph/obj3d/textures/npc_human_leather_hero2_head";
-			break;
-		case 2:
-			tx  = "graph/obj3d/textures/npc_human_base_hero3_head";
-			tx2 = "graph/obj3d/textures/npc_human_chainmail_hero3_head";
-			tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero3_head";
-			tx4 = "graph/obj3d/textures/npc_human_leather_hero3_head";
-			break;
-		case 3:
-			tx  = "graph/obj3d/textures/npc_human_base_hero4_head";
-			tx2 = "graph/obj3d/textures/npc_human_chainmail_hero4_head";
-			tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero4_head";
-			tx4 = "graph/obj3d/textures/npc_human_leather_hero4_head";
-			break;
-		case 4:
+		case MAX_CHEAT_PLAYER_SKIN:
 			tx  = "graph/obj3d/textures/npc_human_cm_hero_head";
 			tx2 = "graph/obj3d/textures/npc_human_chainmail_hero_head";
 			tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero_head";
 			tx4 = "graph/obj3d/textures/npc_human_leather_hero_head";
 			break;
-		case 5:
+		case EXTRA_PLAYER_SKIN:
 			tx  = "graph/obj3d/textures/npc_human__base_hero_head";
 			tx2 = "graph/obj3d/textures/npc_human_chainmail_hero_head";
 			tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero_head";
 			tx4 = "graph/obj3d/textures/npc_human_leather_hero_head";
 			break;
-		case 6: // Just in case
-			tx  = "graph/obj3d/textures/npc_human__base_hero_head";
-			tx2 = "graph/obj3d/textures/npc_human_chainmail_hero_head";
-			tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero_head";
-			tx4 = "graph/obj3d/textures/npc_human_leather_hero_head";
-			break;
+		default : {
+				std::string skinIndex = std::to_string(static_cast<int>(player.skin + 1));
+				tx  = "graph/obj3d/textures/npc_human_base_hero" + skinIndex + "_head";
+				tx2 = "graph/obj3d/textures/npc_human_chainmail_hero" + skinIndex + "_head";
+				tx3 = "graph/obj3d/textures/npc_human_chainmail_mithril_hero" + skinIndex + "_head";
+				tx4 = "graph/obj3d/textures/npc_human_leather_hero" + skinIndex + "_head";
+			}
 	}
 
 	TextureContainer * tmpTC;
@@ -2342,7 +2325,7 @@ void ARX_PLAYER_AddGold(Entity * gold) {
 	
 	arx_assert(gold->ioflags & IO_GOLD);
 	
-	ARX_PLAYER_AddGold(gold->_itemdata->price * std::max(short(1), gold->_itemdata->count));
+	ARX_PLAYER_AddGold(gold->_itemdata->buyPrice * std::max(short(1), gold->_itemdata->count));
 	
 	ARX_SOUND_PlayInterface(g_snd.GOLD);
 	
@@ -2368,7 +2351,7 @@ void ARX_PLAYER_Start_New_Quest() {
 }
 
 void ARX_PLAYER_AddBag() {
-	entities.player()->inventory->setBags(std::min(entities.player()->inventory->bags() + 1, size_t(3)));
+	entities.player()->inventory->setBags(std::min(entities.player()->inventory->bags() + 1, size_t(10)));
 }
 
 bool ARX_PLAYER_CanStealItem(Entity * item) {

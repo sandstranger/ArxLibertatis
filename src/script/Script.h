@@ -96,6 +96,7 @@ enum ScriptMessage {
 	SM_DEAD,
 	SM_DETECTPLAYER,
 	SM_DIE,
+	SM_DURABILITY_LOSS,
 	SM_ENTERZONE,
 	SM_EQUIPIN,
 	SM_EQUIPOUT,
@@ -109,6 +110,7 @@ enum ScriptMessage {
 	SM_INVENTORY2_CLOSE,
 	SM_INVENTORY2_OPEN,
 	SM_INVENTORYIN,
+	SM_INVENTORYOUT,
 	SM_INVENTORYUSE,
 	SM_KEY_PRESSED,
 	SM_LEAVEZONE,
@@ -132,7 +134,6 @@ enum ScriptMessage {
 	// Events only used by scripts
 	// TODO remove once script event with custom names are indexed and sendevent is fixed in scripts
 	SM_FIGHT,
-	SM_INVENTORYOUT,
 	SM_MOVE,
 	SM_RESET,
 	SM_SPELLDECISION,
