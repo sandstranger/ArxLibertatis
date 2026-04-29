@@ -1026,6 +1026,30 @@ void ArxGame::managePlayerControls() {
 		if(GInput->actionNowPressed(CONTROLS_CUST_PRECAST3)) {
 			ARX_SPELLS_Precast_Launch(PrecastHandle(2));
 		}
+
+		if(GInput->actionNowPressed(CONTROLS_CUST_PRECAST4)) {
+			ARX_SPELLS_Precast_Launch(PrecastHandle(3));
+		}
+
+		if(GInput->actionNowPressed(CONTROLS_CUST_PRECAST5)) {
+			ARX_SPELLS_Precast_Launch(PrecastHandle(4));
+		}
+
+		if(GInput->actionNowPressed(CONTROLS_CUST_PRECAST6)) {
+			ARX_SPELLS_Precast_Launch(PrecastHandle(5));
+		}
+
+		if(GInput->actionNowPressed(CONTROLS_CUST_PRECAST7)) {
+			ARX_SPELLS_Precast_Launch(PrecastHandle(6));
+		}
+
+		if(GInput->actionNowPressed(CONTROLS_CUST_PRECAST8)) {
+			ARX_SPELLS_Precast_Launch(PrecastHandle(7));
+		}
+
+		if(GInput->actionNowPressed(CONTROLS_CUST_PRECAST9)) {
+			ARX_SPELLS_Precast_Launch(PrecastHandle(8));
+		}
 	}
 
 	if(GInput->actionNowPressed(CONTROLS_CUST_WEAPON) || lChangeWeapon) {
@@ -1620,7 +1644,7 @@ void ArxGame::manageEntityDescription() {
 	std::stringstream ss;
 	
 	if(temp->ioflags & IO_GOLD) {
-		ss << temp->_itemdata->price << " ";
+		ss << temp->_itemdata->sellPrice << " / " << temp->_itemdata->buyPrice << " ";
 	}
 	
 	ss << getLocalised(temp->locname);

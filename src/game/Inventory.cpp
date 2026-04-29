@@ -142,6 +142,21 @@ static void ARX_INVENTORY_Declare_InventoryIn(Entity * io, Entity * container) {
 	
 }
 
+/*!
+ * Declares an IO as exiting the player's inventory
+ * Sends appropriate INVENTORYOUT Event to player AND concerned io.
+ */
+static void ARX_INVENTORY_Declare_InventoryOut(Entity * io, Entity * container) {
+	
+	arx_assert(io);
+	
+	SendIOScriptEvent(io, container, SM_INVENTORYOUT);
+	if(container == entities.player()) {
+		// Items only receive the event when they are put in front of the player inventory because scripts expect that
+		SendIOScriptEvent(entities.player(), io, SM_INVENTORYOUT);
+	}
+}
+
 //! Puts an IO in front of the player
 void PutInFrontOfPlayer(Entity * io) {
 	
@@ -443,6 +458,8 @@ void Inventory::remove(Entity & item) {
 	
 	arx_assert(item.ioflags & IO_ITEM);
 	arx_assert(item.owner() == owner());
+
+	Entity * previousOwner = &m_owner;
 	
 	Vec3s pos = item._itemdata->m_inventoryPos;
 	arx_assert(pos.x >= 0 && pos.y >= 0 && pos.z >= 0);
@@ -466,6 +483,8 @@ void Inventory::remove(Entity & item) {
 	item._itemdata->m_inventoryPos = Vec3s(-1);
 	
 	item.updateOwner();
+
+	ARX_INVENTORY_Declare_InventoryOut(&item, previousOwner);
 	
 }
 
@@ -812,9 +831,10 @@ bool combineItemStacks(Entity * target, Entity * source) {
 		return false;
 	}
 	
-	// Gold stacks use price instead of count
+	// Gold stacks use buyPrice instead of count
 	if((target->ioflags & IO_GOLD) && (source->ioflags & IO_GOLD)) {
-		target->_itemdata->price += source->_itemdata->price;
+		target->_itemdata->buyPrice += source->_itemdata->buyPrice;
+		target->_itemdata->sellPrice += source->_itemdata->sellPrice;
 		source->destroy();
 		return true;
 	}
