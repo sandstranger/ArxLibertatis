@@ -408,7 +408,6 @@ list(APPEND ARX_LIBRARIES ${FREETYPE_LIBRARIES})
 
 # OpenGL
 if (ANDROID)
-    find_package(OpenGL ${OPTIONAL_DEPENDENCY})
     set(ARX_HAVE_OPENGL 1)
     add_definitions(-DAL_ALEXT_PROTOTYPES)
 endif ()
@@ -1291,8 +1290,7 @@ endif()
 # Graphics
 
 if (ANDROID)
-    list(APPEND ARX_LIBRARIES ${OPENGL_gl_LIBRARY})
-    include_directories(SYSTEM ${OPENGL_INCLUDE_DIR})
+    include_directories(SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/src/glad")
 endif()    
 
 if (ANDROID)
@@ -1508,9 +1506,8 @@ endif()
 # Add executables
 
 if (ANDROID)
-	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}")
+	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
     target_link_libraries(arx "${ARX_LIBRARIES}")
-    target_link_libraries(arx ${OPENGL_opengl_LIBRARY})
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
     add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")

@@ -62,7 +62,7 @@
 #include "window/SDL2X11Util.h"
 
 #if ANDROID
-#include "GL/gl.h"
+#include "glad.h"
 #endif
 
 // Avoid including SDL_syswm.h without SDL_PROTOTYPES_ONLY on non-Windows systems
@@ -348,7 +348,16 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 			}
 			continue;
 		}
-		
+
+#if ANDROID
+        if (m_glcontext && !gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+            SDL_GL_DeleteContext(this->m_glcontext);
+            SDL_DestroyWindow(m_window);
+            SDL_Quit();
+            return false;
+        }
+#endif
+        
 		// Verify that the MSAA setting matches what was requested
 		if(msaa > 1) {
 			int msaaEnabled, msaaValue;

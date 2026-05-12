@@ -39,8 +39,7 @@
 #elif ARX_HAVE_GLEW
 #include <GL/glew.h>
 #elif ANDROID
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include <glad.h>
 #else
 #error "OpenGL renderer not supported: need ARX_HAVE_EPOXY or ARX_HAVE_GLEW"
 #endif
