@@ -115,6 +115,10 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "util/Cast.h"
 #include "util/Number.h"
 #include "util/String.h"
+#include <array>
+#include <bit>
+#include <cstring>
+#include <type_traits>
 
 
 extern bool GLOBAL_MAGIC_MODE;
@@ -150,6 +154,24 @@ struct Playthrough {
 
 static SaveBlock * g_currentSavedGame = nullptr;
 static Playthrough g_currentPlathrough;
+
+template <class T>
+static T readSaveObject(const char * dat, size_t & pos, size_t size) {
+
+    static_assert(std::is_trivially_copyable<T>::value,
+                  "save structs must be trivially copyable");
+
+    if(pos > size || size - pos < sizeof(T)) {
+        throw std::runtime_error("corrupted save file");
+    }
+
+    alignas(T) unsigned char storage[sizeof(T)];
+
+    std::memcpy(storage, dat + pos, sizeof(T));
+    pos += sizeof(T);
+
+    return *reinterpret_cast<const T *>(storage);
+}
 
 static Entity * convertToValidIO(std::string_view idString) {
 	
@@ -1675,591 +1697,549 @@ static bool loadScriptVariables(SCRIPT_VARIABLES & var, const char * dat, size_t
 }
 
 static Entity * ARX_CHANGELEVEL_Pop_IO(std::string_view idString, EntityInstance instance, AreaId area) {
-	
-	LogDebug("--> loading interactive object " << idString);
-	
-	std::string buffer = g_currentSavedGame->load(idString);
-	if(buffer.empty()) {
-		LogError << "Unable to read " << idString;
-		return nullptr;
-	}
-	
-	const char * dat = buffer.data();
-	
-	size_t pos = 0;
-	
-	const ARX_CHANGELEVEL_IO_SAVE * ais = reinterpret_cast<const ARX_CHANGELEVEL_IO_SAVE *>(dat + pos);
-	pos += sizeof(ARX_CHANGELEVEL_IO_SAVE);
-	
-	if(ais->version != ARX_GAMESAVE_VERSION) {
-		LogError << "Invalid PopIO version " << ais->version;
-		return nullptr;
-	}
-	
-	if(ais->ioflags & IO_NOSAVE) {
-		// This item should not have been saved, yet here it is :(
-		LogWarning << "Tried to load entity that should never have been saved: " << idString;
-		return nullptr;
-	}
-	
-	if(ais->show == SAVED_SHOW_FLAG_DESTROYED || ais->show == SAVED_SHOW_FLAG_KILLED) {
-		// Not supposed to happen anymore, but older saves have these (this is harmless bloat)
-		LogWarning << "Found destroyed entity " << idString << " in save file";
-		return nullptr;
-	}
-	
-	if(area && AreaId(ais->level) != area) {
-		// Entity has been moved to a different level
-		return nullptr;
-	}
-	
-	std::string path(util::loadString(ais->filename));
-	if((!path.empty() && path[0] == '\\')
-	   || (path.length() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':'
-	       && path[2] == '\\')) {
-		// Old save files stored absolute paths,
-		// strip everything before 'graph' when loading.
-		util::makeLowercase(path);
-		size_t graphPos = path.find("graph");
-		if(graphPos != std::string::npos) {
-			path = path.substr(graphPos);
-		}
-	}
-	
-	// TODO when we bump the save version, remove the ext in the save file
-	// if no class names contain dots, we might get away without changing the ver
-	res::path classPath = res::path::load(path).remove_ext();
-	Entity * io = LoadInter_Ex(classPath, instance, ais->pos.toVec3(), ais->angle);
-	
-	if(!io) {
-		LogError << "CHANGELEVEL Error: Unable to load " << idString;
-	} else {
-		
-		// The current entity should be visible at this point to preven infinite loops while resolving
-		// related entities.
-		arx_assert(entities.getById(idString) == io);
-		
-		io->requestRoomUpdate = true;
-		io->room = { };
-		io->no_collide = EntityHandle();
-		io->ioflags = EntityFlags::load(ais->ioflags); // TODO save/load flags
-		
-		io->ioflags &= ~IO_FREEZESCRIPT;
-		
-		io->initpos = ais->initpos.toVec3();
-		arx_assert(isallfinite(io->initpos));
-		
-		io->pos = ais->pos.toVec3();
-		if(!isallfinite(io->pos)) {
-			LogWarning << "Found bad entity pos in " << io->idString();
-			io->pos = io->initpos;
-		}
-		
-		io->lastpos = ais->lastpos.toVec3();
-		if(!isallfinite(io->lastpos)) {
-			LogWarning << "Found bad entity lastpos in " << io->idString();
-			io->lastpos = io->initpos;
-		}
-		
-		io->move = ais->move.toVec3();
-		if(!isallfinite(io->move)) {
-			LogWarning << "Found bad entity move in " << io->idString();
-			io->move = Vec3f(0.f);
-		}
 
-		io->lastmove = ais->lastmove.toVec3();
-		if(!isallfinite(io->lastmove)) {
-			LogWarning << "Found bad entity lastmove in " << io->idString();
-			io->lastmove = Vec3f(0.f);
-		}
-		
-		io->initangle = ais->initangle;
-		io->angle = ais->angle;
-		io->scale = ais->scale;
-		io->weight = ais->weight;
-		io->locname = util::toLowercase(script::toLocalizationKey(util::loadString(ais->locname)));
-		io->gameFlags = GameFlags::load(ais->gameFlags); // TODO save/load flags
-		io->material = Material(ais->material); // TODO save/load enum
-		
-		// Script data
-		io->scriptload = ais->scriptload;
-		
-		io->show = [&]() {
-			switch(ais->show) {
-				case SAVED_SHOW_FLAG_IN_SCENE:     return SHOW_FLAG_IN_SCENE;
-				case SAVED_SHOW_FLAG_LINKED:       return SHOW_FLAG_IN_SCENE; // Real flag is restored along with link
-				case SAVED_SHOW_FLAG_IN_INVENTORY: return SHOW_FLAG_IN_SCENE; // Real flag is restored along with link
-				case SAVED_SHOW_FLAG_HIDDEN:       return SHOW_FLAG_HIDDEN;
-				case SAVED_SHOW_FLAG_TELEPORTING:  return SHOW_FLAG_TELEPORTING;
-				case SAVED_SHOW_FLAG_KILLED:       arx_unreachable();
-				case SAVED_SHOW_FLAG_MEGAHIDE:     return SHOW_FLAG_MEGAHIDE;
-				case SAVED_SHOW_FLAG_ON_PLAYER:    return SHOW_FLAG_ON_PLAYER;
-				case SAVED_SHOW_FLAG_DESTROYED:    arx_unreachable();
-				default: {
-					LogWarning << "Unexpected show flag " << ais->show << " in " << io->idString();
-					return SHOW_FLAG_MEGAHIDE;
-				}
-			}
-		} ();
-		
-		io->collision = IOCollisionFlags::load(ais->collision); // TODO save/load flags
-		io->mainevent = ScriptEventName::parse(util::toLowercase(util::loadString(ais->mainevent)));
-		if(io->mainevent == SM_NULL && io->mainevent.getName().empty()) {
-			io->mainevent = SM_MAIN;
-		}
-		
-		// Physics data
-		io->basespeed = 1;
-		io->speed_modif = 0.f; // TODO why are these not loaded from the savegame?
-		io->rubber = ais->rubber;
-		io->max_durability = ais->max_durability;
-		io->durability = ais->durability;
-		io->poisonous = ais->poisonous;
-		io->poisonous_count = ais->poisonous_count;
-		io->head_rot = ais->head_rot;
-		io->damager_damages = ais->damager_damages;
-		size_t nb_iogroups = ais->nb_iogroups;
-		io->damager_type = DamageType::load(ais->damager_type); // TODO save/load flags
-		io->type_flags = ItemType::load(ais->type_flags); // TODO save/load flags
-		io->secretvalue = ais->secretvalue;
-		io->shop_multiply = ais->shop_multiply;
-		io->isHit = (ais->aflags & 1);
-		io->original_height = ais->original_height;
-		io->original_radius = ais->original_radius;
-		io->ignition = ais->ignition;
-		
-		if(ais->system_flags & SYSTEM_FLAG_USEPATH) {
-			ARX_USE_PATH * aup = io->usepath = new ARX_USE_PATH;
-			aup->aupflags = UsePathFlags::load(ais->usepath_aupflags); // TODO save/load flags
-			aup->_curtime = GameInstant(0) + std::chrono::milliseconds(ais->usepath_curtime);
-			aup->lastWP = ais->usepath_lastWP;
-			aup->_starttime = GameInstant(0) + std::chrono::milliseconds(ais->usepath_starttime);
-			aup->path = getPathByName(util::toLowercase(util::loadString(ais->usepath_name)));
-		}
-		
-		io->shop_category = util::toLowercase(util::loadString(ais->shop_category));
-		
-		io->halo_native = ais->halo;
-		ARX_HALO_SetToNative(io);
-		
-		io->inventory_skin = res::path::load(util::loadString(ais->inventory_skin));
-		io->stepmaterial = util::toLowercase(util::loadString(ais->stepmaterial));
-		io->armormaterial = util::toLowercase(util::loadString(ais->armormaterial));
-		io->weaponmaterial = util::toLowercase(util::loadString(ais->weaponmaterial));
-		io->strikespeech = util::toLowercase(script::toLocalizationKey(util::loadString(ais->strikespeech)));
-		
-		for(size_t i = 0; i < MAX_ANIMS; i++) {
-			
-			if(io->anims[i] != nullptr) {
-				ReleaseAnimFromIO(io, i);
-			}
-			
-			if(ais->anims[i][0] == '\0') {
-				continue;
-			}
-			
-			res::path animPath = res::path::load(util::loadString(ais->anims[i]));
-			
-			io->anims[i] = EERIE_ANIMMANAGER_Load(animPath);
-			if(io->anims[i]) {
-				continue;
-			}
-			
-			if(io->ioflags & IO_NPC) {
-				animPath = res::path("graph/obj3d/anims/npc") / animPath.filename();
-			} else {
-				animPath = res::path("graph/obj3d/anims/fix_inter") / animPath.filename();
-			}
-			
-			io->anims[i] = EERIE_ANIMMANAGER_Load(animPath);
-			if(!io->anims[i]) {
-				LogWarning << "Error loading animation " << animPath;
-			}
-			
-		}
-		
-		io->spellcast_data = ais->spellcast_data;
-		io->physics = ais->physics;
-		
-		if(!isallfinite(io->physics.cyl.origin)) {
-			LogWarning << "Found bad entity physics.cyl.origin in " << io->idString();
-			io->physics.cyl.origin = io->initpos;
-		}
-		
-		arx_assert(SAVED_MAX_ANIM_LAYERS == io->animlayer.size());
-		std::copy(ais->animlayer, ais->animlayer + SAVED_MAX_ANIM_LAYERS, io->animlayer.begin());
-		
-		for(size_t k = 0; k < MAX_ANIM_LAYERS; k++) {
-			AnimLayer & layer = io->animlayer[k];
-			
-			s32 nn = ais->animlayer[k].cur_anim;
-			if(nn == -1) {
-				layer.cur_anim = nullptr;
-			} else {
-				layer.cur_anim = io->anims[nn];
-				if(layer.cur_anim && layer.altidx_cur >= layer.cur_anim->anims.size()) {
-					LogWarning << "Out of bounds animation alternative index " << layer.altidx_cur << " for " << layer.cur_anim->path << ", resetting to 0";
-					layer.altidx_cur = 0;
-				}
-			}
-			
-			arx_assert(ais->animlayer[k].next_anim == -1);
-		}
-		
-		// Target Info
-		io->targetinfo = ReadTargetInfo(ais->id_targetinfo);
-		
-		ARX_SCRIPT_Timer_Clear_For_IO(io);
-		
-		for(int i = 0; i < ais->nbtimers; i++) {
-			
-			const ARX_CHANGELEVEL_TIMERS_SAVE * ats;
-			ats = reinterpret_cast<const ARX_CHANGELEVEL_TIMERS_SAVE *>(dat + pos);
-			pos += sizeof(ARX_CHANGELEVEL_TIMERS_SAVE);
-			
-			std::string name = util::toLowercase(util::loadString(ats->name));
-			
-			EERIE_SCRIPT * script = nullptr;
-			if(name != "_r_a_t_") {
-				script = ats->script ? &io->over_script : &io->script;
-				if(!script || size_t(ats->pos) > script->data.length()) {
-					// TODO also check that the positin matches a timer command and perhaps adjust as needed
-					LogError << "Found bad script timer " << name << " for entity " << io->idString()
-					         << " @ " << (ats->script ? io->idString() : io->className()) << ":" << ats->pos << ": "
-					         << (!script ? "missing script" : "position out of bounds");
-					continue;
-				}
-			}
-			
-			SCR_TIMER & timer = createScriptTimer(io, std::move(name));
-			
-			timer.idle = (ats->flags & 1) != 0;
-			timer.interval = std::chrono::milliseconds(ats->interval); // TODO save/load time
-			timer.es = script;
-			timer.pos = size_t(ats->pos);
-			
-			GameDuration remaining = std::chrono::milliseconds(ats->remaining);
-			if(remaining > timer.interval) {
-				LogWarning << "Found bad script timer " << timer.name << " for entity " << io->idString()
-				           << ": remaining time (" << toMsi(remaining) << "ms) > interval ("
-				           << toMsi(timer.interval) << "ms) " << ats->flags;
-				remaining = timer.interval;
-			}
-			
-			timer.start = (g_gameTime.now() + remaining) - timer.interval;
-			
-			timer.count = ats->count;
-			
-		}
-		
-		io->m_variables.clear();
-		
-		bool scriptLoaded = true;
-		
-		// TODO store m_scriptTimers
-		
-		const ARX_CHANGELEVEL_SCRIPT_SAVE * ass;
-		ass = reinterpret_cast<const ARX_CHANGELEVEL_SCRIPT_SAVE *>(dat + pos);
-		pos += sizeof(ARX_CHANGELEVEL_SCRIPT_SAVE);
-		
-		io->m_disabledEvents = DisabledEvents::load(ass->allowevents); // TODO save/load flags
-		
-		if(ass->nblvar != 0) {
-			io->m_variables.resize(ass->nblvar);
-			scriptLoaded = loadScriptVariables(io->m_variables, dat, pos);
-		}
-		
-		const ARX_CHANGELEVEL_SCRIPT_SAVE * over_ass;
-		over_ass = reinterpret_cast<const ARX_CHANGELEVEL_SCRIPT_SAVE *>(dat + pos);
-		pos += sizeof(ARX_CHANGELEVEL_SCRIPT_SAVE);
-		
-		DisabledEvents over_allowevents = DisabledEvents::load(over_ass->allowevents); // TODO save/load flags
-		if(over_allowevents != 0) {
-			LogWarning << "Unexpected allowevents for entity " << io->idString() << ": "
-			           << io->m_disabledEvents << ' ' << over_allowevents;
-			io->m_disabledEvents |= over_allowevents;
-		}
-		
-		if(over_ass->nblvar != 0) {
-			LogWarning << "Unexpected override script variables for entity " << io->idString();
-			SCRIPT_VARIABLES variables;
-			variables.resize(over_ass->nblvar);
-			loadScriptVariables(variables, dat, pos);
-			io->m_variables.insert(io->m_variables.end(), variables.begin(), variables.end());
-		}
-		
-		if(!scriptLoaded) {
-			LogError << "Save file is corrupted, trying to fix " << io->idString();
-			RestoreInitialIOStatusOfIO(io);
-			SendInitScriptEvent(io);
-			return io;
-		}
-		
-		switch(ais->savesystem_type) {
-			
-			case TYPE_NPC: {
-				
-				const ARX_CHANGELEVEL_NPC_IO_SAVE * as;
-				as = reinterpret_cast<const ARX_CHANGELEVEL_NPC_IO_SAVE *>(dat + pos);
-				pos += sizeof(ARX_CHANGELEVEL_NPC_IO_SAVE);
-				
-				io->_npcdata->absorb = as->absorb;
-				io->_npcdata->aimtime = std::chrono::duration<float, std::milli>(as->aimtime);
-				io->_npcdata->armor_class = as->armor_class;
-				io->_npcdata->behavior = Behaviour::load(as->behavior); // TODO save/load flags
-				io->_npcdata->behavior_param = as->behavior_param;
-				io->_npcdata->cut = as->cut;
-				io->_npcdata->damages = as->damages;
-				io->_npcdata->detect = as->detect;
-				io->_npcdata->fightdecision = as->fightdecision;
-				
-				io->_npcdata->weapon = ConvertToValidIO(as->id_weapon);
-				if(io->_npcdata->weapon) {
-					io->_npcdata->weapon->setOwner(io);
-				}
-				
-				io->_npcdata->lastmouth = as->lastmouth;
-				io->_npcdata->look_around_inc = as->look_around_inc;
-				
-				io->_npcdata->lifePool.current = as->life;
-				io->_npcdata->manaPool.current = as->mana;
-				io->_npcdata->lifePool.max = as->maxlife;
-				io->_npcdata->manaPool.max = as->maxmana;
-				
-				io->_npcdata->movemode = MoveMode(as->movemode); // TODO save/load enum
-				io->_npcdata->moveproblem = as->moveproblem;
-				io->_npcdata->reachedtarget = as->reachedtarget;
-				io->_npcdata->speakpitch = as->speakpitch;
-				io->_npcdata->tohit = as->tohit;
-				io->_npcdata->weaponinhand = as->weaponinhand;
-				io->_npcdata->weapontype = ItemType::load(as->weapontype); // TODO save/load flags
-				io->_npcdata->xpvalue = as->xpvalue;
-				
-				arx_assert(SAVED_MAX_STACKED_BEHAVIOR == io->_npcdata->stacked.size());
-				std::copy(as->stacked, as->stacked + SAVED_MAX_STACKED_BEHAVIOR, io->_npcdata->stacked.begin());
-				// TODO properly load stacked animations
-				
-				for(size_t iii = 0; iii < MAX_STACKED_BEHAVIOR; iii++) {
-					io->_npcdata->stacked[iii].target = ReadTargetInfo(as->stackedtarget[iii]);
-				}
-				
-				io->_npcdata->critical = as->critical;
-				io->_npcdata->reach = as->reach;
-				io->_npcdata->backstab_skill = as->backstab_skill;
-				io->_npcdata->poisonned = as->poisonned;
-				io->_npcdata->resist_poison = as->resist_poison;
-				io->_npcdata->resist_magic = as->resist_magic;
-				io->_npcdata->resist_fire = as->resist_fire;
-				io->_npcdata->walk_start_time = std::chrono::milliseconds(as->walk_start_time);
-				io->_npcdata->aiming_start = GameInstant(0) + std::chrono::milliseconds(as->aiming_start);
-				io->_npcdata->npcflags = NPCFlags::load(as->npcflags); // TODO save/load flags
-				io->_npcdata->fDetect = as->fDetect;
-				io->_npcdata->cuts = DismembermentFlags::load(as->cuts); // TODO save/load flags
-				
-				io->_npcdata->pathfind = IO_PATHFIND();
-				
-				io->_npcdata->pathfind.truetarget = EntityHandle(as->pathfind.truetarget);
-				
-				if(ais->saveflags & SAVEFLAGS_EXTRA_ROTATE) {
-					if(io->_npcdata->ex_rotate == nullptr) {
-						io->_npcdata->ex_rotate = new EERIE_EXTRA_ROTATE();
-					}
-					static_assert(SAVED_MAX_EXTRA_ROTATE <= MAX_EXTRA_ROTATE, "array size mismatch");
-					for(size_t i = 0; i < SAVED_MAX_EXTRA_ROTATE; i++) {
-						if(!io->obj ||
-						   as->ex_rotate.group_number[i] < 0 ||
-						   size_t(as->ex_rotate.group_number[i]) >= io->obj->grouplist.size()) {
-							LogError << "Could not load extra rotation for " << io->idString();
-							io->_npcdata->ex_rotate->group_number[i] = { };
-							io->_npcdata->ex_rotate->group_rotate[i] = { };
-						} else {
-							io->_npcdata->ex_rotate->group_number[i] = VertexGroupId(as->ex_rotate.group_number[i]);
-							io->_npcdata->ex_rotate->group_rotate[i] = as->ex_rotate.group_rotate[i];
-						}
-					}
-					for(size_t i = SAVED_MAX_EXTRA_ROTATE; i < MAX_EXTRA_ROTATE; i++) {
-						io->_npcdata->ex_rotate->group_number[i] = { };
-						io->_npcdata->ex_rotate->group_rotate[i] = { };
-					}
-				}
-				
-				io->_npcdata->blood_color = Color::fromBGRA(ColorBGRA(as->blood_color));
-				
-				break;
-			}
-			
-			case TYPE_ITEM: {
-				
-				const ARX_CHANGELEVEL_ITEM_IO_SAVE * ai;
-				ai = reinterpret_cast<const ARX_CHANGELEVEL_ITEM_IO_SAVE *>(dat + pos);
-				pos += sizeof(ARX_CHANGELEVEL_ITEM_IO_SAVE);
-				
-				io->_itemdata->buyPrice = ai->buyPrice;
-				io->_itemdata->sellPrice = ai->sellPrice;
-				io->_itemdata->count = ai->count;
-				io->_itemdata->maxcount = ai->maxcount;
-				io->_itemdata->food_value = ai->food_value;
-				io->_itemdata->stealvalue = ai->stealvalue;
-				io->_itemdata->playerstacksize = ai->playerstacksize;
-				io->_itemdata->LightValue = ai->LightValue;
-				
-				delete io->_itemdata->equipitem;
-				io->_itemdata->equipitem = nullptr;
-				
-				if(ais->system_flags & SYSTEM_FLAG_EQUIPITEMDATA) {
-					io->_itemdata->equipitem = new IO_EQUIPITEM;
-					*io->_itemdata->equipitem = ai->equipitem;
-				}
-				
-				break;
-			}
-			
-			case TYPE_FIX: {
-				const ARX_CHANGELEVEL_FIX_IO_SAVE * af;
-				af = reinterpret_cast<const ARX_CHANGELEVEL_FIX_IO_SAVE *>(dat + pos);
-				pos += sizeof(ARX_CHANGELEVEL_FIX_IO_SAVE);
-				io->_fixdata->trapvalue = af->trapvalue;
-				break;
-			}
-			
-			case TYPE_CAMERA: {
-				const ARX_CHANGELEVEL_CAMERA_IO_SAVE * ac;
-				ac = reinterpret_cast<const ARX_CHANGELEVEL_CAMERA_IO_SAVE *>(dat + pos);
-				pos += sizeof(ARX_CHANGELEVEL_CAMERA_IO_SAVE);
-				*io->_camdata = *ac;
-				break;
-			}
-			
-			case TYPE_MARKER: {
-				pos += sizeof(ARX_CHANGELEVEL_MARKER_IO_SAVE);
-				break;
-			}
-		}
-		
-		arx_assert(io->inventory == nullptr);
-		if(ais->system_flags & SYSTEM_FLAG_INVENTORY) {
-			
-			const ARX_CHANGELEVEL_INVENTORY_DATA_SAVE * aids
-				= reinterpret_cast<const ARX_CHANGELEVEL_INVENTORY_DATA_SAVE *>(dat + pos);
-			pos += sizeof(ARX_CHANGELEVEL_INVENTORY_DATA_SAVE);
-			
-			io->inventory = std::make_unique<Inventory>(io, Vec2s(aids->sizex, aids->sizey));
-			
-			for(Vec2s slot : util::grid(Vec2s(0), Vec2s(aids->sizex, aids->sizey)))  {
-				Entity * item = ConvertToValidIO(aids->slot_io[slot.x][slot.y]);
-				if(!item || locateInInventories(item).container == io) {
-					continue;
-				}
-				if(!insertIntoInventoryAtNoEvent(item, InventoryPos(io, Vec3s(slot, 0)))) {
-					LogWarning << "Could not load item " << item->idString() << " into inventory of " << io->idString();
-					PutInFrontOfPlayer(item);
-				}
-			}
-			
-		}
-		
-		if(ais->system_flags & SYSTEM_FLAG_TWEAKER_INFO) {
-			
-			if(!io->tweakerinfo) {
-				io->tweakerinfo = new IO_TWEAKER_INFO;
-			}
-			
-			const SavedTweakerInfo * sti = reinterpret_cast<const SavedTweakerInfo *>(dat + pos);
-			pos += sizeof(SavedTweakerInfo);
-			
-			io->tweakerinfo->filename = res::path::load(util::loadString(sti->filename));
-			io->tweakerinfo->skintochange = util::toLowercase(util::loadString(sti->skintochange));
-			io->tweakerinfo->skinchangeto = res::path::load(util::loadString(sti->skinchangeto));
-		}
-		
-		io->groups.clear();
-		for(size_t i = 0; i < nb_iogroups; i++) {
-			const SavedGroupData * sgd = reinterpret_cast<const SavedGroupData *>(dat + pos);
-			pos += sizeof(SavedGroupData);
-			io->groups.insert(util::toLowercase(util::loadString(sgd->name)));
-		}
-		
-		io->tweaks.resize(ais->Tweak_nb);
-		for(TWEAK_INFO & tweak : io->tweaks) {
-			const SavedTweakInfo * sti = reinterpret_cast<const SavedTweakInfo *>(dat + pos);
-			pos += sizeof(SavedTweakInfo);
-			tweak.type = TweakType::load(sti->type); // TODO save/load flags
-			tweak.param1 = res::path::load(util::loadString(sti->param1));
-			tweak.param2 = res::path::load(util::loadString(sti->param2));
-		}
-		
-		ARX_INTERACTIVE_APPLY_TWEAK_INFO(io);
-		
-		if(io->obj) {
-			io->obj->linked.reserve(ais->nb_linked);
-			for(s32 i = 0; i < ais->nb_linked; i++) {
-				Entity * linked = ConvertToValidIO(ais->linked_data[i].linked_id);
-				if(arx_unlikely(!linked || !linked->obj)) {
-					LogError << "Could not load link from " << io->idString() << " to "
-					         << util::loadString(ais->linked_data[i].linked_id) << ": entity missing";
-					continue;
-				}
-				if(arx_unlikely(ais->linked_data[i].lidx < 0 ||
-				                size_t(ais->linked_data[i].lidx) >= io->obj->vertexlist.size())) {
-					LogError << "Could not load link from " << io->idString() << "[" << ais->linked_data[i].lidx
-					         << "] to " << linked->idString() << ": vertex out of bounds";
-					continue;
-				}
-				VertexId vertex = VertexId(ais->linked_data[i].lidx);
-				VertexGroupId group = getGroupForVertex(io->obj, vertex);
-				if(arx_unlikely(!group)) {
-					LogError << "Could not load link from " << io->idString() << "[" << ais->linked_data[i].lidx
-					         << "] to " << linked->idString() << ": vertex not in group";
-					continue;
-				}
-				if(arx_unlikely(ais->linked_data[i].lidx2 < 0 ||
-				                size_t(ais->linked_data[i].lidx2) >= linked->obj->vertexlist.size())) {
-					LogError << "Could not load link from " << io->idString() << " to "
-					         << util::loadString(ais->linked_data[i].linked_id)
-					         << "[" << ais->linked_data[i].lidx2 << "]: vertex out of bounds";
-					continue;
-				}
-				if(InventoryPos invPos = locateInInventories(linked); invPos && invPos.container != io) {
-					LogError << "Could not load link from " << io->idString() << " to "
-					         << util::loadString(ais->linked_data[i].linked_id)
-					         << ": linked entity is in the inventory of " << invPos.container->idString();
-					continue;
-				}
-				unlinkEntity(*linked);
-				EERIE_LINKED & link = io->obj->linked.emplace_back();
-				link.lgroup = group;
-				link.lidx = vertex;
-				link.lidx2 = VertexId(ais->linked_data[i].lidx2);
-				link.io = linked;
-				link.obj = linked->obj;
-				linked->setOwner(io);
-			}
-		}
-		
-		bool unhideNonGore = (!(io->ioflags & IO_NPC) || io->_npcdata->lifePool.current <= 0.f);
-		ARX_INTERACTIVE_HideGore(io, unhideNonGore);
-		
-		if(io->ioflags & IO_NPC) {
-			
-			if(io->_npcdata->weaponinhand == 1) {
-				SetWeapon_On(io);
-			} else {
-				SetWeapon_Back(io);
-			}
-			
-			
-			if(io->_npcdata->behavior == BEHAVIOUR_NONE) {
-				io->targetinfo = EntityHandle();
-			}
-			
-		}
-		
-	}
-	
-	arx_assert_msg(pos <= buffer.size(), "pos=%lu size=%lu", static_cast<unsigned long>(pos),
-	               static_cast<unsigned long>(buffer.size()));
-	
-	return io;
+    LogDebug("--> loading interactive object " << idString);
+
+    std::string buffer = g_currentSavedGame->load(idString);
+    if(buffer.empty()) {
+        LogError << "Unable to read " << idString;
+        return nullptr;
+    }
+
+    const char * dat = buffer.data();
+    size_t pos = 0;
+
+    try {
+
+        ARX_CHANGELEVEL_IO_SAVE ais = readSaveObject<ARX_CHANGELEVEL_IO_SAVE>(dat, pos, buffer.size());
+
+        if(ais.version != ARX_GAMESAVE_VERSION) {
+            LogError << "Invalid PopIO version " << ais.version;
+            return nullptr;
+        }
+
+        if(ais.ioflags & IO_NOSAVE) {
+            LogWarning << "Tried to load entity that should never have been saved: " << idString;
+            return nullptr;
+        }
+
+        if(ais.show == SAVED_SHOW_FLAG_DESTROYED || ais.show == SAVED_SHOW_FLAG_KILLED) {
+            LogWarning << "Found destroyed entity " << idString << " in save file";
+            return nullptr;
+        }
+
+        if(area && AreaId(ais.level) != area) {
+            return nullptr;
+        }
+
+        std::string path(util::loadString(ais.filename));
+        if((!path.empty() && path[0] == '\\')
+           || (path.length() >= 3 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':'
+               && path[2] == '\\')) {
+            util::makeLowercase(path);
+            size_t graphPos = path.find("graph");
+            if(graphPos != std::string::npos) {
+                path = path.substr(graphPos);
+            }
+        }
+
+        res::path classPath = res::path::load(path).remove_ext();
+        Entity * io = LoadInter_Ex(classPath, instance, ais.pos.toVec3(), ais.angle);
+
+        if(!io) {
+            LogError << "CHANGELEVEL Error: Unable to load " << idString;
+        } else {
+
+            arx_assert(entities.getById(idString) == io);
+
+            io->requestRoomUpdate = true;
+            io->room = { };
+            io->no_collide = EntityHandle();
+            io->ioflags = EntityFlags::load(ais.ioflags);
+            io->ioflags &= ~IO_FREEZESCRIPT;
+
+            io->initpos = ais.initpos.toVec3();
+            arx_assert(isallfinite(io->initpos));
+
+            io->pos = ais.pos.toVec3();
+            if(!isallfinite(io->pos)) {
+                LogWarning << "Found bad entity pos in " << io->idString();
+                io->pos = io->initpos;
+            }
+
+            io->lastpos = ais.lastpos.toVec3();
+            if(!isallfinite(io->lastpos)) {
+                LogWarning << "Found bad entity lastpos in " << io->idString();
+                io->lastpos = io->initpos;
+            }
+
+            io->move = ais.move.toVec3();
+            if(!isallfinite(io->move)) {
+                LogWarning << "Found bad entity move in " << io->idString();
+                io->move = Vec3f(0.f);
+            }
+
+            io->lastmove = ais.lastmove.toVec3();
+            if(!isallfinite(io->lastmove)) {
+                LogWarning << "Found bad entity lastmove in " << io->idString();
+                io->lastmove = Vec3f(0.f);
+            }
+
+            io->initangle = ais.initangle;
+            io->angle = ais.angle;
+            io->scale = ais.scale;
+            io->weight = ais.weight;
+            io->locname = util::toLowercase(script::toLocalizationKey(util::loadString(ais.locname)));
+            io->gameFlags = GameFlags::load(ais.gameFlags);
+            io->material = Material(ais.material);
+
+            io->scriptload = ais.scriptload;
+
+            io->show = [&]() {
+                switch(ais.show) {
+                    case SAVED_SHOW_FLAG_IN_SCENE:     return SHOW_FLAG_IN_SCENE;
+                    case SAVED_SHOW_FLAG_LINKED:       return SHOW_FLAG_IN_SCENE;
+                    case SAVED_SHOW_FLAG_IN_INVENTORY: return SHOW_FLAG_IN_SCENE;
+                    case SAVED_SHOW_FLAG_HIDDEN:       return SHOW_FLAG_HIDDEN;
+                    case SAVED_SHOW_FLAG_TELEPORTING:   return SHOW_FLAG_TELEPORTING;
+                    case SAVED_SHOW_FLAG_KILLED:        arx_unreachable();
+                    case SAVED_SHOW_FLAG_MEGAHIDE:      return SHOW_FLAG_MEGAHIDE;
+                    case SAVED_SHOW_FLAG_ON_PLAYER:     return SHOW_FLAG_ON_PLAYER;
+                    case SAVED_SHOW_FLAG_DESTROYED:     arx_unreachable();
+                    default: {
+                        LogWarning << "Unexpected show flag " << ais.show << " in " << io->idString();
+                        return SHOW_FLAG_MEGAHIDE;
+                    }
+                }
+            }();
+
+            io->collision = IOCollisionFlags::load(ais.collision);
+            io->mainevent = ScriptEventName::parse(util::toLowercase(util::loadString(ais.mainevent)));
+            if(io->mainevent == SM_NULL && io->mainevent.getName().empty()) {
+                io->mainevent = SM_MAIN;
+            }
+
+            io->basespeed = 1;
+            io->speed_modif = 0.f;
+            io->rubber = ais.rubber;
+            io->max_durability = ais.max_durability;
+            io->durability = ais.durability;
+            io->poisonous = ais.poisonous;
+            io->poisonous_count = ais.poisonous_count;
+            io->head_rot = ais.head_rot;
+            io->damager_damages = ais.damager_damages;
+            size_t nb_iogroups = ais.nb_iogroups;
+            io->damager_type = DamageType::load(ais.damager_type);
+            io->type_flags = ItemType::load(ais.type_flags);
+            io->secretvalue = ais.secretvalue;
+            io->shop_multiply = ais.shop_multiply;
+            io->isHit = (ais.aflags & 1);
+            io->original_height = ais.original_height;
+            io->original_radius = ais.original_radius;
+            io->ignition = ais.ignition;
+
+            if(ais.system_flags & SYSTEM_FLAG_USEPATH) {
+                ARX_USE_PATH * aup = io->usepath = new ARX_USE_PATH;
+                aup->aupflags = UsePathFlags::load(ais.usepath_aupflags);
+                aup->_curtime = GameInstant(0) + std::chrono::milliseconds(ais.usepath_curtime);
+                aup->lastWP = ais.usepath_lastWP;
+                aup->_starttime = GameInstant(0) + std::chrono::milliseconds(ais.usepath_starttime);
+                aup->path = getPathByName(util::toLowercase(util::loadString(ais.usepath_name)));
+            }
+
+            io->shop_category = util::toLowercase(util::loadString(ais.shop_category));
+
+            io->halo_native = ais.halo;
+            ARX_HALO_SetToNative(io);
+
+            io->inventory_skin = res::path::load(util::loadString(ais.inventory_skin));
+            io->stepmaterial = util::toLowercase(util::loadString(ais.stepmaterial));
+            io->armormaterial = util::toLowercase(util::loadString(ais.armormaterial));
+            io->weaponmaterial = util::toLowercase(util::loadString(ais.weaponmaterial));
+            io->strikespeech = util::toLowercase(script::toLocalizationKey(util::loadString(ais.strikespeech)));
+
+            for(size_t i = 0; i < MAX_ANIMS; i++) {
+
+                if(io->anims[i] != nullptr) {
+                    ReleaseAnimFromIO(io, i);
+                }
+
+                if(ais.anims[i][0] == '\0') {
+                    continue;
+                }
+
+                res::path animPath = res::path::load(util::loadString(ais.anims[i]));
+
+                io->anims[i] = EERIE_ANIMMANAGER_Load(animPath);
+                if(io->anims[i]) {
+                    continue;
+                }
+
+                if(io->ioflags & IO_NPC) {
+                    animPath = res::path("graph/obj3d/anims/npc") / animPath.filename();
+                } else {
+                    animPath = res::path("graph/obj3d/anims/fix_inter") / animPath.filename();
+                }
+
+                io->anims[i] = EERIE_ANIMMANAGER_Load(animPath);
+                if(!io->anims[i]) {
+                    LogWarning << "Error loading animation " << animPath;
+                }
+            }
+
+            io->spellcast_data = ais.spellcast_data;
+            io->physics = ais.physics;
+
+            if(!isallfinite(io->physics.cyl.origin)) {
+                LogWarning << "Found bad entity physics.cyl.origin in " << io->idString();
+                io->physics.cyl.origin = io->initpos;
+            }
+
+            arx_assert(SAVED_MAX_ANIM_LAYERS == io->animlayer.size());
+            std::copy(ais.animlayer, ais.animlayer + SAVED_MAX_ANIM_LAYERS, io->animlayer.begin());
+
+            for(size_t k = 0; k < MAX_ANIM_LAYERS; k++) {
+                AnimLayer & layer = io->animlayer[k];
+
+                s32 nn = ais.animlayer[k].cur_anim;
+                if(nn == -1) {
+                    layer.cur_anim = nullptr;
+                } else {
+                    layer.cur_anim = io->anims[nn];
+                    if(layer.cur_anim && layer.altidx_cur >= layer.cur_anim->anims.size()) {
+                        LogWarning << "Out of bounds animation alternative index " << layer.altidx_cur << " for " << layer.cur_anim->path << ", resetting to 0";
+                        layer.altidx_cur = 0;
+                    }
+                }
+
+                arx_assert(ais.animlayer[k].next_anim == -1);
+            }
+
+            io->targetinfo = ReadTargetInfo(ais.id_targetinfo);
+
+            ARX_SCRIPT_Timer_Clear_For_IO(io);
+
+            for(int i = 0; i < ais.nbtimers; i++) {
+
+                ARX_CHANGELEVEL_TIMERS_SAVE ats = readSaveObject<ARX_CHANGELEVEL_TIMERS_SAVE>(dat, pos, buffer.size());
+
+                std::string name = util::toLowercase(util::loadString(ats.name));
+
+                EERIE_SCRIPT * script = nullptr;
+                if(name != "_r_a_t_") {
+                    script = ats.script ? &io->over_script : &io->script;
+                    if(!script || size_t(ats.pos) > script->data.length()) {
+                        LogError << "Found bad script timer " << name << " for entity " << io->idString()
+                                 << " @ " << (ats.script ? io->idString() : io->className()) << ":" << ats.pos << ": "
+                                 << (!script ? "missing script" : "position out of bounds");
+                        continue;
+                    }
+                }
+
+                SCR_TIMER & timer = createScriptTimer(io, std::move(name));
+
+                timer.idle = (ats.flags & 1) != 0;
+                timer.interval = std::chrono::milliseconds(ats.interval);
+                timer.es = script;
+                timer.pos = size_t(ats.pos);
+
+                GameDuration remaining = std::chrono::milliseconds(ats.remaining);
+                if(remaining > timer.interval) {
+                    LogWarning << "Found bad script timer " << timer.name << " for entity " << io->idString()
+                               << ": remaining time (" << toMsi(remaining) << "ms) > interval ("
+                               << toMsi(timer.interval) << "ms) " << ats.flags;
+                    remaining = timer.interval;
+                }
+
+                timer.start = (g_gameTime.now() + remaining) - timer.interval;
+                timer.count = ats.count;
+            }
+
+            io->m_variables.clear();
+
+            bool scriptLoaded = true;
+
+            ARX_CHANGELEVEL_SCRIPT_SAVE ass = readSaveObject<ARX_CHANGELEVEL_SCRIPT_SAVE>(dat, pos, buffer.size());
+
+            io->m_disabledEvents = DisabledEvents::load(ass.allowevents);
+
+            if(ass.nblvar != 0) {
+                io->m_variables.resize(ass.nblvar);
+                scriptLoaded = loadScriptVariables(io->m_variables, dat, pos);
+            }
+
+            ARX_CHANGELEVEL_SCRIPT_SAVE over_ass = readSaveObject<ARX_CHANGELEVEL_SCRIPT_SAVE>(dat, pos, buffer.size());
+
+            DisabledEvents over_allowevents = DisabledEvents::load(over_ass.allowevents);
+            if(over_allowevents != 0) {
+                LogWarning << "Unexpected allowevents for entity " << io->idString() << ": "
+                           << io->m_disabledEvents << ' ' << over_allowevents;
+                io->m_disabledEvents |= over_allowevents;
+            }
+
+            if(over_ass.nblvar != 0) {
+                LogWarning << "Unexpected override script variables for entity " << io->idString();
+                SCRIPT_VARIABLES variables;
+                variables.resize(over_ass.nblvar);
+                loadScriptVariables(variables, dat, pos);
+                io->m_variables.insert(io->m_variables.end(), variables.begin(), variables.end());
+            }
+
+            if(!scriptLoaded) {
+                LogError << "Save file is corrupted, trying to fix " << io->idString();
+                RestoreInitialIOStatusOfIO(io);
+                SendInitScriptEvent(io);
+                return io;
+            }
+
+            switch(ais.savesystem_type) {
+
+                case TYPE_NPC: {
+                    ARX_CHANGELEVEL_NPC_IO_SAVE as = readSaveObject<ARX_CHANGELEVEL_NPC_IO_SAVE>(dat, pos, buffer.size());
+
+                    io->_npcdata->absorb = as.absorb;
+                    io->_npcdata->aimtime = std::chrono::duration<float, std::milli>(as.aimtime);
+                    io->_npcdata->armor_class = as.armor_class;
+                    io->_npcdata->behavior = Behaviour::load(as.behavior);
+                    io->_npcdata->behavior_param = as.behavior_param;
+                    io->_npcdata->cut = as.cut;
+                    io->_npcdata->damages = as.damages;
+                    io->_npcdata->detect = as.detect;
+                    io->_npcdata->fightdecision = as.fightdecision;
+
+                    io->_npcdata->weapon = ConvertToValidIO(as.id_weapon);
+                    if(io->_npcdata->weapon) {
+                        io->_npcdata->weapon->setOwner(io);
+                    }
+
+                    io->_npcdata->lastmouth = as.lastmouth;
+                    io->_npcdata->look_around_inc = as.look_around_inc;
+
+                    io->_npcdata->lifePool.current = as.life;
+                    io->_npcdata->manaPool.current = as.mana;
+                    io->_npcdata->lifePool.max = as.maxlife;
+                    io->_npcdata->manaPool.max = as.maxmana;
+
+                    io->_npcdata->movemode = MoveMode(as.movemode);
+                    io->_npcdata->moveproblem = as.moveproblem;
+                    io->_npcdata->reachedtarget = as.reachedtarget;
+                    io->_npcdata->speakpitch = as.speakpitch;
+                    io->_npcdata->tohit = as.tohit;
+                    io->_npcdata->weaponinhand = as.weaponinhand;
+                    io->_npcdata->weapontype = ItemType::load(as.weapontype);
+                    io->_npcdata->xpvalue = as.xpvalue;
+
+                    arx_assert(SAVED_MAX_STACKED_BEHAVIOR == io->_npcdata->stacked.size());
+                    std::copy(as.stacked, as.stacked + SAVED_MAX_STACKED_BEHAVIOR, io->_npcdata->stacked.begin());
+
+                    for(size_t iii = 0; iii < MAX_STACKED_BEHAVIOR; iii++) {
+                        io->_npcdata->stacked[iii].target = ReadTargetInfo(as.stackedtarget[iii]);
+                    }
+
+                    io->_npcdata->critical = as.critical;
+                    io->_npcdata->reach = as.reach;
+                    io->_npcdata->backstab_skill = as.backstab_skill;
+                    io->_npcdata->poisonned = as.poisonned;
+                    io->_npcdata->resist_poison = as.resist_poison;
+                    io->_npcdata->resist_magic = as.resist_magic;
+                    io->_npcdata->resist_fire = as.resist_fire;
+                    io->_npcdata->walk_start_time = std::chrono::milliseconds(as.walk_start_time);
+                    io->_npcdata->aiming_start = GameInstant(0) + std::chrono::milliseconds(as.aiming_start);
+                    io->_npcdata->npcflags = NPCFlags::load(as.npcflags);
+                    io->_npcdata->fDetect = as.fDetect;
+                    io->_npcdata->cuts = DismembermentFlags::load(as.cuts);
+
+                    io->_npcdata->pathfind = IO_PATHFIND();
+                    io->_npcdata->pathfind.truetarget = EntityHandle(as.pathfind.truetarget);
+
+                    if(ais.saveflags & SAVEFLAGS_EXTRA_ROTATE) {
+                        if(io->_npcdata->ex_rotate == nullptr) {
+                            io->_npcdata->ex_rotate = new EERIE_EXTRA_ROTATE();
+                        }
+                        static_assert(SAVED_MAX_EXTRA_ROTATE <= MAX_EXTRA_ROTATE, "array size mismatch");
+                        for(size_t i = 0; i < SAVED_MAX_EXTRA_ROTATE; i++) {
+                            if(!io->obj ||
+                               as.ex_rotate.group_number[i] < 0 ||
+                               size_t(as.ex_rotate.group_number[i]) >= io->obj->grouplist.size()) {
+                                LogError << "Could not load extra rotation for " << io->idString();
+                                io->_npcdata->ex_rotate->group_number[i] = { };
+                                io->_npcdata->ex_rotate->group_rotate[i] = { };
+                            } else {
+                                io->_npcdata->ex_rotate->group_number[i] = VertexGroupId(as.ex_rotate.group_number[i]);
+                                io->_npcdata->ex_rotate->group_rotate[i] = as.ex_rotate.group_rotate[i];
+                            }
+                        }
+                        for(size_t i = SAVED_MAX_EXTRA_ROTATE; i < MAX_EXTRA_ROTATE; i++) {
+                            io->_npcdata->ex_rotate->group_number[i] = { };
+                            io->_npcdata->ex_rotate->group_rotate[i] = { };
+                        }
+                    }
+
+                    io->_npcdata->blood_color = Color::fromBGRA(ColorBGRA(as.blood_color));
+                    break;
+                }
+
+                case TYPE_ITEM: {
+                    ARX_CHANGELEVEL_ITEM_IO_SAVE ai = readSaveObject<ARX_CHANGELEVEL_ITEM_IO_SAVE>(dat, pos, buffer.size());
+
+                    io->_itemdata->buyPrice = ai.buyPrice;
+                    io->_itemdata->sellPrice = ai.sellPrice;
+                    io->_itemdata->count = ai.count;
+                    io->_itemdata->maxcount = ai.maxcount;
+                    io->_itemdata->food_value = ai.food_value;
+                    io->_itemdata->stealvalue = ai.stealvalue;
+                    io->_itemdata->playerstacksize = ai.playerstacksize;
+                    io->_itemdata->LightValue = ai.LightValue;
+
+                    delete io->_itemdata->equipitem;
+                    io->_itemdata->equipitem = nullptr;
+
+                    if(ais.system_flags & SYSTEM_FLAG_EQUIPITEMDATA) {
+                        io->_itemdata->equipitem = new IO_EQUIPITEM;
+                        *io->_itemdata->equipitem = ai.equipitem;
+                    }
+                    break;
+                }
+
+                case TYPE_FIX: {
+                    ARX_CHANGELEVEL_FIX_IO_SAVE af = readSaveObject<ARX_CHANGELEVEL_FIX_IO_SAVE>(dat, pos, buffer.size());
+                    io->_fixdata->trapvalue = af.trapvalue;
+                    break;
+                }
+
+                case TYPE_CAMERA: {
+                    ARX_CHANGELEVEL_CAMERA_IO_SAVE ac = readSaveObject<ARX_CHANGELEVEL_CAMERA_IO_SAVE>(dat, pos, buffer.size());
+                    *io->_camdata = ac;
+                    break;
+                }
+
+                case TYPE_MARKER: {
+                    ARX_CHANGELEVEL_MARKER_IO_SAVE am = readSaveObject<ARX_CHANGELEVEL_MARKER_IO_SAVE>(dat, pos, buffer.size());
+                    (void)am;
+                    break;
+                }
+            }
+
+            arx_assert(io->inventory == nullptr);
+            if(ais.system_flags & SYSTEM_FLAG_INVENTORY) {
+
+                ARX_CHANGELEVEL_INVENTORY_DATA_SAVE aids = readSaveObject<ARX_CHANGELEVEL_INVENTORY_DATA_SAVE>(dat, pos, buffer.size());
+
+                io->inventory = std::make_unique<Inventory>(io, Vec2s(aids.sizex, aids.sizey));
+
+                for(Vec2s slot : util::grid(Vec2s(0), Vec2s(aids.sizex, aids.sizey)))  {
+                    Entity * item = ConvertToValidIO(aids.slot_io[slot.x][slot.y]);
+                    if(!item || locateInInventories(item).container == io) {
+                        continue;
+                    }
+                    if(!insertIntoInventoryAtNoEvent(item, InventoryPos(io, Vec3s(slot, 0)))) {
+                        LogWarning << "Could not load item " << item->idString() << " into inventory of " << io->idString();
+                        PutInFrontOfPlayer(item);
+                    }
+                }
+            }
+
+            if(ais.system_flags & SYSTEM_FLAG_TWEAKER_INFO) {
+
+                if(!io->tweakerinfo) {
+                    io->tweakerinfo = new IO_TWEAKER_INFO;
+                }
+
+                SavedTweakerInfo sti = readSaveObject<SavedTweakerInfo>(dat, pos, buffer.size());
+
+                io->tweakerinfo->filename = res::path::load(util::loadString(sti.filename));
+                io->tweakerinfo->skintochange = util::toLowercase(util::loadString(sti.skintochange));
+                io->tweakerinfo->skinchangeto = res::path::load(util::loadString(sti.skinchangeto));
+            }
+
+            io->groups.clear();
+            for(size_t i = 0; i < nb_iogroups; i++) {
+                SavedGroupData sgd = readSaveObject<SavedGroupData>(dat, pos, buffer.size());
+                io->groups.insert(util::toLowercase(util::loadString(sgd.name)));
+            }
+
+            io->tweaks.resize(ais.Tweak_nb);
+            for(TWEAK_INFO & tweak : io->tweaks) {
+                SavedTweakInfo sti = readSaveObject<SavedTweakInfo>(dat, pos, buffer.size());
+                tweak.type = TweakType::load(sti.type);
+                tweak.param1 = res::path::load(util::loadString(sti.param1));
+                tweak.param2 = res::path::load(util::loadString(sti.param2));
+            }
+
+            ARX_INTERACTIVE_APPLY_TWEAK_INFO(io);
+
+            if(io->obj) {
+                io->obj->linked.reserve(ais.nb_linked);
+                for(s32 i = 0; i < ais.nb_linked; i++) {
+                    Entity * linked = ConvertToValidIO(ais.linked_data[i].linked_id);
+                    if(arx_unlikely(!linked || !linked->obj)) {
+                        LogError << "Could not load link from " << io->idString() << " to "
+                                 << util::loadString(ais.linked_data[i].linked_id) << ": entity missing";
+                        continue;
+                    }
+                    if(arx_unlikely(ais.linked_data[i].lidx < 0 ||
+                                    size_t(ais.linked_data[i].lidx) >= io->obj->vertexlist.size())) {
+                        LogError << "Could not load link from " << io->idString() << "[" << ais.linked_data[i].lidx
+                                 << "] to " << linked->idString() << ": vertex out of bounds";
+                        continue;
+                    }
+                    VertexId vertex = VertexId(ais.linked_data[i].lidx);
+                    VertexGroupId group = getGroupForVertex(io->obj, vertex);
+                    if(arx_unlikely(!group)) {
+                        LogError << "Could not load link from " << io->idString() << "[" << ais.linked_data[i].lidx
+                                 << "] to " << linked->idString() << ": vertex not in group";
+                        continue;
+                    }
+                    if(arx_unlikely(ais.linked_data[i].lidx2 < 0 ||
+                                    size_t(ais.linked_data[i].lidx2) >= linked->obj->vertexlist.size())) {
+                        LogError << "Could not load link from " << io->idString() << " to "
+                                 << util::loadString(ais.linked_data[i].linked_id)
+                                 << "[" << ais.linked_data[i].lidx2 << "]: vertex out of bounds";
+                        continue;
+                    }
+                    if(InventoryPos invPos = locateInInventories(linked); invPos && invPos.container != io) {
+                        LogError << "Could not load link from " << io->idString() << " to "
+                                 << util::loadString(ais.linked_data[i].linked_id)
+                                 << ": linked entity is in the inventory of " << invPos.container->idString();
+                        continue;
+                    }
+                    unlinkEntity(*linked);
+                    EERIE_LINKED & link = io->obj->linked.emplace_back();
+                    link.lgroup = group;
+                    link.lidx = vertex;
+                    link.lidx2 = VertexId(ais.linked_data[i].lidx2);
+                    link.io = linked;
+                    link.obj = linked->obj;
+                    linked->setOwner(io);
+                }
+            }
+
+            bool unhideNonGore = (!(io->ioflags & IO_NPC) || io->_npcdata->lifePool.current <= 0.f);
+            ARX_INTERACTIVE_HideGore(io, unhideNonGore);
+
+            if(io->ioflags & IO_NPC) {
+
+                if(io->_npcdata->weaponinhand == 1) {
+                    SetWeapon_On(io);
+                } else {
+                    SetWeapon_Back(io);
+                }
+
+                if(io->_npcdata->behavior == BEHAVIOUR_NONE) {
+                    io->targetinfo = EntityHandle();
+                }
+            }
+        }
+
+        arx_assert_msg(pos <= buffer.size(), "pos=%lu size=%lu",
+                       static_cast<unsigned long>(pos),
+                       static_cast<unsigned long>(buffer.size()));
+        return io;
+
+    } catch(const std::exception & e) {
+        LogError << "Save file is corrupted while loading " << idString << ": " << e.what();
+        return nullptr;
+    }
 }
 
 static void ARX_CHANGELEVEL_PopAllIO(std::string_view buffer, AreaId area) {
