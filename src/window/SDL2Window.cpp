@@ -307,8 +307,11 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 #endif    
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 	Uint32 windowFlags = getSDLFlagsForMode(m_mode.resolution, m_fullscreen);
+#ifndef ANDROID   
 	windowFlags |= SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;
-	
+#else
+    windowFlags |= SDL_WINDOW_OPENGL;
+#endif    
 	for(int msaa = m_maxMSAALevel; true; msaa--) {
 		bool lastTry = (msaa == 0);
 		
