@@ -90,11 +90,16 @@ OpenGLInfo::OpenGLInfo()
     #endif
 
     #ifdef ANDROID
-        GLint no_of_extensions = 0;
-        glGetIntegerv(GL_NUM_EXTENSIONS, &no_of_extensions);
+    const char* ext = (const char*)glGetString(GL_EXTENSIONS);
 
-        for (int i = 0; i < no_of_extensions; ++i)
-            ogl_extensions.insert((const char*)glGetStringi(GL_EXTENSIONS, i));
+    if (ext)
+    {
+        std::stringstream ss(ext);
+        std::string item;
+
+        while (ss >> item)
+            ogl_extensions.insert(item);
+    }    
     #endif
         
 	m_versionString = reinterpret_cast<const char *>(glGetString(GL_VERSION));

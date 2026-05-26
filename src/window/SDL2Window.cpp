@@ -62,7 +62,7 @@
 #include "window/SDL2X11Util.h"
 
 #if ANDROID
-#include "GL/gl.h"
+#include "glad.h"
 #endif
 
 // Avoid including SDL_syswm.h without SDL_PROTOTYPES_ONLY on non-Windows systems
@@ -311,8 +311,11 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 #endif    
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 	Uint32 windowFlags = getSDLFlagsForMode(m_mode.resolution, m_fullscreen);
+#ifndef ANDROID   
 	windowFlags |= SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN;
-	
+#else
+    windowFlags |= SDL_WINDOW_OPENGL;
+#endif    
 	for(int msaa = m_maxMSAALevel; true; msaa--) {
 		bool lastTry = (msaa == 0);
 		
@@ -352,7 +355,16 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 			}
 			continue;
 		}
-		
+
+#if ANDROID
+        if (m_glcontext && !gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+            SDL_GL_DeleteContext(this->m_glcontext);
+            SDL_DestroyWindow(m_window);
+            SDL_Quit();
+            return false;
+        }
+#endif
+        
 		// Verify that the MSAA setting matches what was requested
 		if(msaa > 1) {
 			int msaaEnabled, msaaValue;
