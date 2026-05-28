@@ -14,7 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "graphics/opengl/OpenGLRenderer.h"
@@ -59,6 +59,7 @@ OpenGLRenderer::OpenGLRenderer()
 	, m_MSAALevel(0)
 	, m_hasMSAA(false)
 	, m_hasTextureNPOT(false)
+    , m_textureStagesDirty(false)
 	, m_hasSizedTextureFormats(false)
 	, m_hasIntensityTextures(false)
 	, m_hasBGRTextureTransfer(false)
@@ -120,7 +121,7 @@ void OpenGLRenderer::initialize() {
 	LogInfo << " ├─ Device: " << gl.renderer();
 	CrashHandler::setVariable("OpenGL device", gl.renderer());
 	
-	#if !defined(ANDROID) && defined(GL_CONTEXT_FLAG_DEBUG_BIT) || defined(GL_CONTEXT_FLAG_NO_ERROR_BIT)
+	#if !defined(ANDROID) && (defined(GL_CONTEXT_FLAG_DEBUG_BIT) || defined(GL_CONTEXT_FLAG_NO_ERROR_BIT))
 	if(gl.isES() ? gl.is(3, 2) : gl.is(3, 0)) {
 		GLint flags = 0;
 		glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
@@ -243,9 +244,11 @@ void OpenGLRenderer::initialize() {
 			LogWarning << "Missing OpenGL extension GL_ARB_texture_non_power_of_two";
 		}
 		m_hasSizedTextureFormats = true;
-#ifndef ANDROID       
+		#ifndef ANDROID
 		m_hasIntensityTextures = true;
-#endif        
+		#else
+		m_hasIntensityTextures = false;
+		#endif
 		m_hasBGRTextureTransfer = true;
 	}
 	
@@ -308,13 +311,13 @@ void OpenGLRenderer::initialize() {
 		m_hasClearDepthf = gl.has("GL_ARB_ES2_compatibility", 4, 1) || gl.has("GL_OES_single_precision");
 	}
 	
-#ifndef ANDROID   
+	#ifndef ANDROID
 	// Introduced in OpenGL 1.4, no extension available for OpenGL ES
 	m_hasVertexFogCoordinate = !gl.isES();
-#else
-    extern bool g_useGLES2_0;
-    m_hasVertexFogCoordinate = g_useGLES2_0;
-#endif
+	#else
+	extern bool g_useGLES2_0;
+	m_hasVertexFogCoordinate = g_useGLES2_0;
+	#endif
 	if(gl.isES()) {
 		m_hasSampleShading = gl.has("GL_OES_sample_shading", 3, 2);
 	} else {
@@ -399,7 +402,7 @@ void OpenGLRenderer::reinit() {
 		if(m_hasFogDistanceMode) {
 			// TODO Support radial fogs once all vertices are provided in view-space coordinates
 			glFogi(GL_FOG_DISTANCE_MODE_NV, GL_EYE_PLANE);
-		}
+			}
 	}
 	m_glstate.setFog(false);
 	
@@ -408,7 +411,6 @@ void OpenGLRenderer::reinit() {
 	
 	glEnable(GL_ALPHA_TEST);
 	m_glalphaFunc = -1.f;
-#ifndef ANDROID
 	#ifdef GL_VERSION_4_0
 	if(hasSampleShading()) {
 		#if ARX_HAVE_GLEW
@@ -417,8 +419,7 @@ void OpenGLRenderer::reinit() {
 		glMinSampleShading(1.f);
 		#endif
 	}
-    #endif
-#endif    
+	#endif
 	m_glstate.setAlphaCutout(false);
 	
 	glEnable(GL_DEPTH_TEST);
@@ -445,7 +446,8 @@ void OpenGLRenderer::reinit() {
 	for(size_t i = 0; i < m_TextureStages.size(); ++i) {
 		m_TextureStages[i] = std::make_unique<GLTextureStage>(this, i);
 	}
-	
+    maxTextureStage = 0;
+    m_textureStagesDirty = false;
 	// Clear screen
 	Clear(ColorBuffer | DepthBuffer);
 	
@@ -468,7 +470,8 @@ void OpenGLRenderer::shutdown() {
 	onRendererShutdown();
 	
 	m_TextureStages.clear();
-	
+    maxTextureStage = 0;
+    m_textureStagesDirty = false;
 	m_maximumAnisotropy = 1.f;
 	m_maximumSupportedAnisotropy = 1.f;
 	
@@ -631,7 +634,6 @@ void OpenGLRenderer::Clear(BufferFlags bufferFlags, Color clearColor, float clea
 			glDepthMask(GL_TRUE);
 			m_glstate.setDepthWrite(true);
 		}
-        
 		#ifdef GL_VERSION_4_1
 		if(hasClearDepthf()) {
 			glClearDepthf(clearDepth);
@@ -762,7 +764,7 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	
 	if(renderer->hasMapBufferRange()) {
 		
-		#if GL_ARB_buffer_storage && !ANDROID
+		#if defined(GL_ARB_buffer_storage) && !defined(ANDROID)
 		
 		if(renderer->hasBufferStorage()) {
 			
@@ -780,7 +782,7 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 			}
 			if(setting.empty() || setting == "persistent-x2") {
 				if(usage == Renderer::Stream) {
-					return std::make_unique<GLPersistentFenceVertexBuffer<Vertex, 3>>(renderer, capacity, usage, 2);
+					return std::make_unique<GLPersistentFenceVertexBuffer<Vertex, 2>>(renderer, capacity, usage, 2);
 				}
 				matched = true;
 			}
@@ -1023,9 +1025,12 @@ void OpenGLRenderer::flushState() {
 		
 		m_glstate = m_state;
 	}
-	
-	for(size_t i = 0; i <= maxTextureStage; i++) {
-		GetTextureStage(i)->apply();
-	}
-	
+
+    if(m_textureStagesDirty) {
+        const size_t stageCount = std::min(m_TextureStages.size(), maxTextureStage + 1);
+        for(size_t i = 0; i < stageCount; i++) {
+            GetTextureStage(i)->apply();
+        }
+        m_textureStagesDirty = false;
+    }
 }

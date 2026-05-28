@@ -146,7 +146,7 @@ private:
 	float m_glalphaFunc;
 	GLenum m_glblendSrc;
 	GLenum m_glblendDst;
-	
+    bool m_textureStagesDirty;
 	Rect m_scissor;
 	
 	int m_MSAALevel;

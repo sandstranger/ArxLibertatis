@@ -23,22 +23,33 @@
 #include "graphics/opengl/OpenGLRenderer.h"
 #include "io/log/Logger.h"
 
-GLTextureStage::GLTextureStage(OpenGLRenderer * _renderer, unsigned stage) : TextureStage(stage), renderer(_renderer), tex(nullptr), current(nullptr) {
-	
-	// Set default state
-	
-	if(mStage == 0) {
-		ops[ColorOp] = OpModulate;
-		ops[AlphaOp] = OpSelectArg1;
-		glActiveTexture(GL_TEXTURE0);
-		setTexEnv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
-		setTexEnv(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE); // TODO change the AL default to match OpenGL
-		glEnable(GL_TEXTURE_2D);
-	} else {
-		ops[ColorOp] = OpDisable;
-		ops[AlphaOp] = OpDisable;
-	}
-	
+GLTextureStage::GLTextureStage(OpenGLRenderer * _renderer, unsigned stage)
+        : TextureStage(stage)
+        , renderer(_renderer)
+        , tex(nullptr)
+        , current(nullptr)
+        , m_dirty(false)
+        , m_enabled(false)
+        , m_mipMapLODBias(0.f)
+        , m_appliedMipMapLODBias(0.f)
+{
+    if(mStage == 0) {
+        ops[ColorOp] = OpModulate;
+        ops[AlphaOp] = OpSelectArg1;
+        m_enabled = true;
+
+        glActiveTexture(GL_TEXTURE0);
+        setTexEnv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        setTexEnv(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glEnable(GL_TEXTURE_2D);
+    } else {
+        ops[ColorOp] = OpDisable;
+        ops[AlphaOp] = OpDisable;
+    }
+
+    current = nullptr;
+    tex = nullptr;
+    m_dirty = false;
 }
 
 GLTextureStage::~GLTextureStage() {
@@ -50,14 +61,26 @@ Texture * GLTextureStage::getTexture() const {
 }
 
 void GLTextureStage::setTexture(Texture * texture) {
-	
-	arx_assert(texture != nullptr);
-	
-	tex = reinterpret_cast<GLTexture *>(texture);
+    arx_assert(texture != nullptr);
+
+    GLTexture * newTex = reinterpret_cast<GLTexture *>(texture);
+    if(tex == newTex) {
+        return;
+    }
+
+    tex = newTex;
+    m_dirty = true;
+    renderer->m_textureStagesDirty = true;
 }
 
 void GLTextureStage::resetTexture() {
-	tex = nullptr;
+    if(tex == nullptr) {
+        return;
+    }
+
+    tex = nullptr;
+    m_dirty = true;
+    renderer->m_textureStagesDirty = true;
 }
 
 struct GLTexEnvParam {
@@ -94,72 +117,31 @@ void GLTextureStage::setOp(OpType alpha, GLint op, GLint scale) {
 }
 
 void GLTextureStage::setOp(OpType alpha, TextureOp op) {
-	
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0 + mStage);
-	}
-		
-	bool wasEnabled = isEnabled();
-	
-	ops[alpha] = op;
-	
-	bool enabled = isEnabled();
-	if(wasEnabled != enabled) {
-		if(enabled) {
-			glEnable(GL_TEXTURE_2D);
-			setTexEnv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
-			renderer->maxTextureStage = std::max<size_t>(mStage, renderer->maxTextureStage);
-		} else {
-			glDisable(GL_TEXTURE_2D);
-			if(renderer->maxTextureStage == mStage) {
-				renderer->maxTextureStage = 0;
-				for(int stage = mStage - 1; stage >= 0; stage--) {
-					if(renderer->GetTextureStage(stage)->isEnabled()) {
-						renderer->maxTextureStage = stage;
-						break;
-					}
-				}
-			}
-		}
-	}
-	
-	switch(op) {
-		
-		case OpDisable: {
-			setOp(alpha, GL_REPLACE, 1);
-			setArg(alpha, GL_PREVIOUS);
-			break;
-		}
-		
-		case OpSelectArg1: {
-			setOp(alpha, GL_REPLACE, 1);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
-		case OpModulate: {
-			setOp(alpha, GL_MODULATE, 1);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
-		case OpModulate2X: {
-			setOp(alpha, GL_MODULATE, 2);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
-		case OpModulate4X: {
-			setOp(alpha, GL_MODULATE, 4);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
-	}
 
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0);
-	}
+    if(ops[alpha] == op) {
+        return;
+    }
+
+    bool wasEnabled = isEnabled();
+    ops[alpha] = op;
+    bool enabled = isEnabled();
+
+    if(wasEnabled != enabled) {
+        if(enabled) {
+            renderer->maxTextureStage = std::max<size_t>(mStage, renderer->maxTextureStage);
+        } else if(renderer->maxTextureStage == mStage) {
+            renderer->maxTextureStage = 0;
+            for(int stage = int(mStage) - 1; stage >= 0; --stage) {
+                if(renderer->GetTextureStage(stage)->isEnabled()) {
+                    renderer->maxTextureStage = size_t(stage);
+                    break;
+                }
+            }
+        }
+    }
+
+    m_dirty = true;
+    renderer->m_textureStagesDirty = true;
 }
 
 void GLTextureStage::setTexEnv(GLenum target, GLenum pname, GLint param) {
@@ -180,61 +162,92 @@ void GLTextureStage::setAlphaOp(TextureOp op) {
 }
 
 void GLTextureStage::setMipMapLODBias(float bias) {
-	
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0 + mStage);
-	}
-	
-	glTexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS, bias);
-	
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0);
-	}
+    if(m_mipMapLODBias == bias) {
+        return;
+    }
+
+    m_mipMapLODBias = bias;
+    m_dirty = true;
+    renderer->m_textureStagesDirty = true;
 }
 
 void GLTextureStage::apply() {
-	
-	if(!tex && !current) {
-		return;
-	}
-	
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0 + mStage);
-	}
-	
-	if(tex != current) {
-		glBindTexture(GL_TEXTURE_2D, tex ? tex->tex : GL_NONE), current = tex;
-	}
-	
-	if(tex) {
-		
-		bool apply = true;
-		for(size_t i = 0; i < mStage; i++) {
-			GLTextureStage * stage = renderer->GetTextureStage(i);
-			if(stage->tex == tex && stage->isEnabled()) {
-				apply = false;
-				#ifdef ARX_DEBUG
-				if(stage->getWrapMode() != getWrapMode()
-				   || stage->getMinFilter() != getMinFilter() || stage->getMagFilter() != getMagFilter()) {
+
+    if(!m_dirty) {
+        return;
+    }
+
+    if(mStage != 0) {
+        glActiveTexture(GL_TEXTURE0 + mStage);
+    }
+
+    bool enabled = isEnabled();
+    if(m_enabled != enabled) {
+        if(enabled) {
+            glEnable(GL_TEXTURE_2D);
+            setTexEnv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        } else {
+            glDisable(GL_TEXTURE_2D);
+        }
+        m_enabled = enabled;
+    }
+
+    switch(ops[ColorOp]) {
+        case OpDisable:      setOp(ColorOp, GL_REPLACE, 1); setArg(ColorOp, GL_PREVIOUS); break;
+        case OpSelectArg1:   setOp(ColorOp, GL_REPLACE, 1); setArg(ColorOp, GL_TEXTURE); break;
+        case OpModulate:     setOp(ColorOp, GL_MODULATE, 1); setArg(ColorOp, GL_TEXTURE); break;
+        case OpModulate2X:   setOp(ColorOp, GL_MODULATE, 2); setArg(ColorOp, GL_TEXTURE); break;
+        case OpModulate4X:   setOp(ColorOp, GL_MODULATE, 4); setArg(ColorOp, GL_TEXTURE); break;
+    }
+
+    switch(ops[AlphaOp]) {
+        case OpDisable:      setOp(AlphaOp, GL_REPLACE, 1); setArg(AlphaOp, GL_PREVIOUS); break;
+        case OpSelectArg1:   setOp(AlphaOp, GL_REPLACE, 1); setArg(AlphaOp, GL_TEXTURE); break;
+        case OpModulate:     setOp(AlphaOp, GL_MODULATE, 1); setArg(AlphaOp, GL_TEXTURE); break;
+        case OpModulate2X:   setOp(AlphaOp, GL_MODULATE, 2); setArg(AlphaOp, GL_TEXTURE); break;
+        case OpModulate4X:   setOp(AlphaOp, GL_MODULATE, 4); setArg(AlphaOp, GL_TEXTURE); break;
+    }
+
+    if(m_appliedMipMapLODBias != m_mipMapLODBias) {
+        glTexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS, m_mipMapLODBias);
+        m_appliedMipMapLODBias = m_mipMapLODBias;
+    }
+
+    if(tex != current) {
+        glBindTexture(GL_TEXTURE_2D, tex ? tex->tex : GL_NONE);
+        current = tex;
+    }
+
+    if(tex) {
+        bool apply = true;
+        for(size_t i = 0; i < mStage; i++) {
+            GLTextureStage * stage = renderer->GetTextureStage(i);
+            if(stage->tex == tex && stage->isEnabled()) {
+                apply = false;
+#ifdef ARX_DEBUG
+                if(stage->getWrapMode() != getWrapMode()
+				   || stage->getMinFilter() != getMinFilter()
+				   || stage->getMagFilter() != getMagFilter()) {
 					static bool warned = false;
 					if(!warned) {
 						LogWarning << "Same texture used in multiple stages with different attributes.";
 						warned = true;
 					}
 				}
-				#else
-				break;
-				#endif
-			}
-		}
-		
-		if(apply) {
-			tex->apply(this);
-		}
-		
-	}
+#else
+                break;
+#endif
+            }
+        }
 
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0);
-	}
+        if(apply) {
+            tex->apply(this);
+        }
+    }
+
+    if(mStage != 0) {
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    m_dirty = false;
 }
