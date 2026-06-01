@@ -266,10 +266,17 @@ void OpenGLRenderer::initialize() {
 		                              || gl.has("GL_EXT_draw_elements_base_vertex");
 		m_hasDrawRangeElements = gl.is(3, 0);
 	} else {
+#ifndef ANDROID       
 		m_hasDrawElementsBaseVertex = gl.has("GL_ARB_draw_elements_base_vertex", 3, 2);
 		if(!m_hasDrawElementsBaseVertex) {
 			LogWarning << "Missing OpenGL extension GL_ARB_draw_elements_base_vertex";
 		}
+#else
+        m_hasDrawElementsBaseVertex = gl.has("GL_ARB_draw_elements_base_vertex");
+        if(!m_hasDrawElementsBaseVertex) {
+            LogWarning << "Missing OpenGL extension GL_ARB_draw_elements_base_vertex";
+        }
+#endif        
 		m_hasDrawRangeElements = true; // Introduced in OpenGL 1.2
 	}
 	
@@ -285,11 +292,15 @@ void OpenGLRenderer::initialize() {
 			LogWarning << "Missing OpenGL extension GL_OES_mapbuffer";
 		}
 	} else {
+#ifndef ANDROID       
 		// ARB_map_buffer_range requires OpenGL 2.1
 		m_hasMapBufferRange = gl.has("GL_ARB_map_buffer_range", 3, 0);
 		if(!m_hasMapBufferRange) {
 			LogWarning << "Missing OpenGL extension GL_ARB_map_buffer_range";
 		}
+#else
+        m_hasMapBufferRange = gl.has("GL_ARB_map_buffer_range");
+#endif        
 		m_hasMapBuffer = true; // Introduced in OpenGL 1.5
 	}
 	
@@ -298,15 +309,23 @@ void OpenGLRenderer::initialize() {
 		m_hasBufferStorage = gl.has("GL_EXT_buffer_storage");
 		m_hasBufferUsageStream = gl.is(2, 0);
 	} else {
+#ifndef ANDROID       
 		m_hasBufferStorage = gl.has("GL_ARB_buffer_storage", 4, 4);
+#else
+        m_hasBufferStorage = false;
+#endif        
 		m_hasBufferUsageStream = true; // Introduced in OpenGL 1.5
 	}
 	
+#ifndef ANDROID   
 	if(gl.isES()) {
 		m_hasClearDepthf = true;
 	} else {
 		m_hasClearDepthf = gl.has("GL_ARB_ES2_compatibility", 4, 1) || gl.has("GL_OES_single_precision");
 	}
+#else
+    m_hasClearDepthf = gl.has("GL_ARB_ES2_compatibility" ) || gl.has("GL_OES_single_precision");
+#endif    
 	
 #ifndef ANDROID   
 	// Introduced in OpenGL 1.4, no extension available for OpenGL ES
@@ -318,14 +337,19 @@ void OpenGLRenderer::initialize() {
 	if(gl.isES()) {
 		m_hasSampleShading = gl.has("GL_OES_sample_shading", 3, 2);
 	} else {
+#ifndef ANDROID       
 		#if ARX_HAVE_GLEW
 		// The extension and core version have different entry points
 		m_hasSampleShading = gl.has("GL_ARB_sample_shading");
 		#else
 		m_hasSampleShading = gl.has("GL_ARB_sample_shading", 4, 0);
-		#endif
+        #endif
+#else
+        m_hasSampleShading = gl.has("GL_OES_sample_shading");
+#endif        
 	}
 	
+#ifndef ANDROID   
 	if(gl.isES()) {
 		m_hasFogx = true;
 		m_hasFogDistanceMode = false;
@@ -333,6 +357,10 @@ void OpenGLRenderer::initialize() {
 		m_hasFogx = false;
 		m_hasFogDistanceMode = gl.has("GL_NV_fog_distance");
 	}
+#else
+    m_hasFogx = false;
+    m_hasFogDistanceMode = false;
+#endif
 }
 
 void OpenGLRenderer::beforeResize(bool wasOrIsFullscreen) {
