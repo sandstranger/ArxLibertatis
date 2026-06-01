@@ -349,7 +349,6 @@ void OpenGLRenderer::initialize() {
 #endif        
 	}
 	
-#ifndef ANDROID   
 	if(gl.isES()) {
 		m_hasFogx = true;
 		m_hasFogDistanceMode = false;
@@ -357,10 +356,6 @@ void OpenGLRenderer::initialize() {
 		m_hasFogx = false;
 		m_hasFogDistanceMode = gl.has("GL_NV_fog_distance");
 	}
-#else
-    m_hasFogx = false;
-    m_hasFogDistanceMode = false;
-#endif
 }
 
 void OpenGLRenderer::beforeResize(bool wasOrIsFullscreen) {
