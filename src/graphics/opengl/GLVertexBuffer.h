@@ -533,15 +533,19 @@ protected:
 	
 	virtual void discardBuffer() = 0;
 	
+	
 	void syncPersistent(BufferFlags flags) {
-		
+
 		if(flags & DiscardBuffer) {
 			discardBuffer();
-		} else if(!(flags & NoOverwrite)) {
-			LogWarning << "Blocking buffer upload, use DiscardBuffer or NoOverwrite!";
-			glFinish();
+			return;
 		}
-		
+
+		if(flags & NoOverwrite) {
+			return;
+		}
+
+		discardBuffer();
 	}
 	
 public:
