@@ -48,8 +48,8 @@ public:
 	void apply();
 	
 private:
-
-    bool isEnabled() const { return ((ops[ColorOp] != OpDisable) || (ops[AlphaOp] != OpDisable)); }
+	
+	bool isEnabled() { return ((ops[ColorOp] != OpDisable) || (ops[AlphaOp] != OpDisable)); }
 	
 	OpenGLRenderer * renderer;
 	
@@ -74,10 +74,6 @@ private:
 	IntegerStateCache m_stateCacheIntegers;
 	
 	friend class GLTexture;
-    bool m_dirty;
-    bool m_enabled;
-    float m_mipMapLODBias;
-    float m_appliedMipMapLODBias;
 };
 
 #endif // ARX_GRAPHICS_OPENGL_GLTEXTURESTAGE_H
