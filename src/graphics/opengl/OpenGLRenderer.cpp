@@ -230,7 +230,6 @@ void OpenGLRenderer::initialize() {
 		#endif
 	}
 	
-#ifndef ANDROID   
 	if(gl.isES()) {
 		m_hasTextureNPOT = gl.has("GL_OES_texture_npot", 2, 0);
 		if(!m_hasTextureNPOT) {
@@ -337,51 +336,6 @@ void OpenGLRenderer::initialize() {
 		m_hasFogx = false;
 		m_hasFogDistanceMode = gl.has("GL_NV_fog_distance");
 	}
-#else
-    if(gl.has("GL_ARB_texture_filter_anisotropic", 4, 6) || gl.has("GL_EXT_texture_filter_anisotropic")) {
-        GLfloat limit;
-        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &limit);
-        m_maximumSupportedAnisotropy = limit;
-        setMaxAnisotropy(float(config.video.maxAnisotropicFiltering));
-    } else {
-        m_maximumSupportedAnisotropy = 1.f;
-    }
-    extern bool g_useGLES2_0;
-    if(g_useGLES2_0) {
-        m_hasTextureNPOT = gl.has("GL_ARB_texture_non_power_of_two");
-        m_hasSizedTextureFormats = false;
-        m_hasIntensityTextures = false;
-        m_hasBGRTextureTransfer = false;
-        m_hasDrawElementsBaseVertex = false;
-        m_hasDrawRangeElements = false;
-        m_hasMapBuffer = gl.has("GL_ARB_map_buffer_range");
-        m_hasMapBufferRange = gl.has("GL_EXT_map_buffer_range");
-        m_hasBufferStorage = false;
-        m_hasBufferUsageStream = false;
-        m_hasVertexFogCoordinate = false;
-        m_hasSampleShading = false;
-        m_hasFogDistanceMode = false;
-        m_hasFogx = false;
-        m_hasClearDepthf = true;
-    }
-    else {
-        m_hasTextureNPOT = true;
-        m_hasSizedTextureFormats = true;
-        m_hasIntensityTextures = false;
-        m_hasBGRTextureTransfer = false;
-        m_hasDrawElementsBaseVertex = true;
-        m_hasDrawRangeElements = true;
-        m_hasMapBuffer = true;
-        m_hasMapBufferRange = true;
-        m_hasBufferStorage = false;
-        m_hasBufferUsageStream = true;
-        m_hasVertexFogCoordinate = false;
-        m_hasSampleShading = false;
-        m_hasFogDistanceMode = false;
-        m_hasFogx = false;
-        m_hasClearDepthf = true;
-    }
-#endif    
 }
 
 void OpenGLRenderer::beforeResize(bool wasOrIsFullscreen) {
