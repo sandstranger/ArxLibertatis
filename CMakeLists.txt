@@ -1507,7 +1507,7 @@ endif()
 
 if (ANDROID)
 	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
-    target_link_libraries(arx "${ARX_LIBRARIES}")
+    target_link_libraries(arx "${ARX_LIBRARIES}" AngleShaderCache)
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
     add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")

@@ -63,6 +63,7 @@
 
 #if ANDROID
 #include "glad.h"
+#include "AngleShaderCache.h"
 #endif
 
 // Avoid including SDL_syswm.h without SDL_PROTOTYPES_ONLY on non-Windows systems
@@ -357,6 +358,11 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		}
 
 #if ANDROID
+        if (m_glcontext) {
+            SDL_GL_MakeCurrent(m_window, m_glcontext);
+            angle_blobcache_install("arx_libertatis");
+        }
+        
         if (m_glcontext && !gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
             SDL_GL_DeleteContext(this->m_glcontext);
             SDL_DestroyWindow(m_window);
