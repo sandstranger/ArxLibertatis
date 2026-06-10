@@ -72,7 +72,7 @@
  * crash when trying to use SDL windowing functions.
  */
 
-#if ARX_PLATFORM == ARX_PLATFORM_MACOS || ANDROID
+#if ARX_PLATFORM == ARX_PLATFORM_MACOS || defined(ANDROID)
 	#include <SDL_main.h>
 #else
 	#undef main /* in case SDL.h was already included */

@@ -51,13 +51,13 @@ Vec2f g_draggedIconOffset;
 static Vec2f g_draggedObjectOffset;
 static float g_dragStartAngle = 0;
 static Camera * g_dragStartCamera = nullptr;
-#if ANDROID
+#ifdef ANDROID
 bool allowDrop = false;
 static bool screenControlsHided = false;
 #endif
 
 void setDraggedEntity(Entity * entity) {
-#if ANDROID   
+#ifdef ANDROID   
     allowDrop = false;
 #endif    
 	if(entity != g_draggedEntity) {

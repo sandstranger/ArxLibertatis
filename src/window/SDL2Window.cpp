@@ -61,7 +61,7 @@
 #include "platform/profiler/Profiler.h"
 #include "window/SDL2X11Util.h"
 
-#if ANDROID
+#ifdef ANDROID
 #include "glad.h"
 #include "AngleShaderCache.h"
 #endif
@@ -76,7 +76,7 @@ struct ARX_SDL_SysWMinfo {
 
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
-#if ANDROID
+#ifdef ANDROID
 static SDL2Window *windowInstance = nullptr;
 typedef void (*forceLandScapeActivityOrientationDelegate)();
 static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
@@ -94,14 +94,14 @@ SDL2Window::SDL2Window()
 	, m_sdlVersion(0)
 	, m_sdlSubsystem(ARX_SDL_SYSWM_UNKNOWN)
 {
-#if ANDROID
+#ifdef ANDROID
     windowInstance = this;
 #endif
 	m_renderer = new OpenGLRenderer;
 }
 
 SDL2Window::~SDL2Window() {
-#if ANDROID
+#ifdef ANDROID
     windowInstance = nullptr;
 #endif
 	delete m_input;
@@ -142,7 +142,7 @@ SDL2Window::~SDL2Window() {
 #endif
 #endif
 
-#if ANDROID
+#ifdef ANDROID
 extern "C" {
 __attribute__((used)) __attribute__((visibility("default")))
 void registerForceLandscapeActivityOrientationCallback(
@@ -307,7 +307,7 @@ static Uint32 getSDLFlagsForMode(const Vec2i & size, bool fullscreen) {
 }
 
 int SDL2Window::createWindowAndGLContext(const char * profile) {
-#if ANDROID
+#ifdef ANDROID
     m_fullscreen = true;
 #endif    
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
@@ -357,7 +357,7 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 			continue;
 		}
 
-#if ANDROID
+#ifdef ANDROID
         if (m_glcontext) {
             SDL_GL_MakeCurrent(m_window, m_glcontext);
             angle_blobcache_install("arx_libertatis");
@@ -878,7 +878,7 @@ void SDL2Window::processEvents(bool waitForEvent) {
 	SDL_Event event;
 	int ret = waitForEvent ? SDL_WaitEvent(&event) : SDL_PollEvent(&event);
 	while(ret) {
-#if ANDROID
+#ifdef ANDROID
         if (event.type == SDL_APP_DIDENTERFOREGROUND && activityOrientationChangerInstance!= nullptr){
             activityOrientationChangerInstance();
         }
