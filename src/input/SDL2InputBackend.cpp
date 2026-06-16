@@ -25,7 +25,7 @@
 #include "math/Rectangle.h"
 #include "platform/PlatformConfig.h"
 #include "SDL_gamecontroller.h"
-#if ANDROID
+#ifdef ANDROID
 #include "game/Entity.h"
 #include "input/Input.h"
 #include "game/Player.h"
@@ -68,7 +68,7 @@ static const Mouse::Button triggerToArxButton[2] {
 
 static constexpr float mouseSpeed = 80.0f;
 
-#if ANDROID
+#ifdef ANDROID
 static SDL2InputBackend *instance = nullptr;
 static string g_pathToSDLControllerDB;
 #endif
@@ -657,7 +657,7 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
             Uint8 button = event.button.button;
             if(button < std::size(sdlToArxButton) && sdlToArxButton[button] != Mouse::Button_Invalid) {
                 size_t i = sdlToArxButton[button] - Mouse::ButtonBase;
-#if ANDROID
+#ifdef ANDROID
                 extern bool allowDrop;
                 int buttonCode = sdlToArxButton[button];
                 bool custActionKeyWasPressed = false;
@@ -670,7 +670,7 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
                 
 #endif                
                 if(event.button.state == SDL_PRESSED) {
-#if ANDROID                    
+#ifdef ANDROID                    
                     extern Entity * g_draggedEntity;
                     bool invokeDropEvent = g_draggedEntity && !BLOCK_PLAYER_CONTROLS && 
                             PLAYER_INTERFACE_SHOW && custActionKeyWasPressed;
@@ -691,7 +691,7 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
     }
 }
 
-#if ANDROID
+#ifdef ANDROID
 extern "C"{
 __attribute__((used)) __attribute__((visibility("default")))
 void setPathToSDLControllerDB (const char *pathToSDLControllerDB){

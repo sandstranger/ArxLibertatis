@@ -785,7 +785,7 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	
 	if(renderer->hasMapBufferRange()) {
 		
-		#if GL_ARB_buffer_storage && !ANDROID
+		#if GL_ARB_buffer_storage && !defined(ANDROID)
 		
 		if(renderer->hasBufferStorage()) {
 			

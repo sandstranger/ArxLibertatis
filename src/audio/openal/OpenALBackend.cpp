@@ -46,7 +46,7 @@
 #include "platform/Platform.h"
 #include "platform/CrashHandler.h"
 
-#if ANDROID
+#ifdef ANDROID
 #include <alext.h>
 
 ALCdevice*	openALDevice;
@@ -245,7 +245,7 @@ aalError OpenALBackend::init(std::string_view requestedDeviceName, HRTFAttribute
 		return AAL_ERROR_SYSTEM;
 	}
 
-#if ANDROID
+#ifdef ANDROID
     openALDevice = device;
 #endif
 
