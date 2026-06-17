@@ -368,60 +368,68 @@ protected:
 
 template <class Vertex>
 class GLMapVertexBuffer : public GLVertexBuffer<Vertex> {
-	
-	typedef GLVertexBuffer<Vertex> Base;
-	
+    using Base = GLVertexBuffer<Vertex>;
+
 public:
-	
-	using Base::capacity;
-	
-	GLMapVertexBuffer(const GLMapVertexBuffer &) = delete;
-	GLMapVertexBuffer & operator=(const GLMapVertexBuffer &) = delete;
-	
-	GLMapVertexBuffer(OpenGLRenderer * renderer, size_t size, Renderer::BufferUsage usage)
-		: Base(renderer, size, usage)
-	{ }
+    using Base::capacity;
+
+    GLMapVertexBuffer(const GLMapVertexBuffer &) = delete;
+    GLMapVertexBuffer & operator=(const GLMapVertexBuffer &) = delete;
+
+    GLMapVertexBuffer(OpenGLRenderer * renderer, size_t size, Renderer::BufferUsage usage)
+            : Base(renderer, size, usage)
+    {
+        m_staging.resize(capacity());
+    }
 
     Vertex * lock(BufferFlags flags, size_t offset, size_t count) override {
         ARX_UNUSED(count);
 
         arx_assert(offset < capacity());
 
+        if(m_staging.size() < capacity()) {
+            m_staging.resize(capacity());
+        }
+
+        m_locked = true;
+        m_discard = (!m_initialized) || (flags & DiscardBuffer);
+
+        return m_staging.data() + offset;
+    }
+
+    void unlock() override {
+        if(!m_locked) {
+            return;
+        }
+
         bindBuffer(m_buffer);
 
-        // Orphan on first use / discard. Do not try to be clever here.
-        if(!m_initialized || (flags & DiscardBuffer)) {
-            glBufferData(GL_ARRAY_BUFFER, capacity() * sizeof(Vertex), nullptr, GL_DYNAMIC_DRAW);
+        if(m_discard) {
+            glBufferData(GL_ARRAY_BUFFER,
+                         capacity() * sizeof(Vertex),
+                         nullptr,
+                         GL_STREAM_DRAW);
             m_initialized = true;
         }
 
-        void * buf = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-        if(!buf) {
-            LogError << "Could not map vertex buffer!";
-            return nullptr;
-        }
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        0,
+                        capacity() * sizeof(Vertex),
+                        m_staging.data());
 
-        return reinterpret_cast<Vertex *>(buf) + offset;
+        m_locked = false;
+        m_discard = false;
     }
-	
-	void unlock() override {
-		
-		bindBuffer(m_buffer);
-		
-		GLboolean ret = glUnmapBuffer(GL_ARRAY_BUFFER);
-		if(ret == GL_FALSE) {
-			LogWarning << "Vertex buffer invalidated";
-		}
-		
-	}
-	
+
 protected:
-	
-	using Base::initialize;
-	
-	using Base::m_buffer;
-	using Base::m_initialized;
-	
+    using Base::initialize;
+    using Base::m_buffer;
+    using Base::m_initialized;
+
+private:
+    std::vector<Vertex> m_staging;
+    bool m_locked = false;
+    bool m_discard = false;
 };
 
 template <class Vertex>

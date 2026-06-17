@@ -780,7 +780,7 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
                                                                     size_t capacity,
                                                                     Renderer::BufferUsage usage,
                                                                     std::string_view setting) {
-	
+#ifndef ANDROID
 	bool matched = false;
 	
 	if(renderer->hasMapBufferRange()) {
@@ -842,6 +842,9 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 		warned = true;
 	}
 	return createVertexBufferImpl<Vertex>(renderer, capacity, usage, std::string_view());
+#else
+    return std::make_unique<GLMapVertexBuffer<Vertex>>(renderer, capacity, usage);
+#endif
 }
 
 template <typename Vertex>
