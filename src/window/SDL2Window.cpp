@@ -64,6 +64,8 @@
 #ifdef ANDROID
 #include "glad.h"
 #include "AngleShaderCache.h"
+#include "SwappyController.h"
+
 #endif
 
 // Avoid including SDL_syswm.h without SDL_PROTOTYPES_ONLY on non-Windows systems
@@ -334,7 +336,11 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, msaa > 1 ? 1 : 0);
 		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, msaa > 1 ? msaa : 0);
+#ifndef ANDROID       
 		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, msaa > 0 ? 24 : 16);
+#else
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+#endif        
 		SDL_GL_SetAttribute(SDL_GL_RED_SIZE,   msaa > 0 ? 8 : 3);
 		SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, msaa > 0 ? 8 : 3);
 		SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE,  msaa > 0 ? 8 : 2);
@@ -946,6 +952,9 @@ void SDL2Window::processEvents(bool waitForEvent) {
 			}
 			
 			case SDL_QUIT: {
+#ifdef ANDROID
+                DestroySwappy();
+#endif                
 				// The user has requested to close the whole program
 				// TODO onDestroy() fits SDL_WINDOWEVENT_CLOSE better, but SDL captures Ctrl+C
 				// evenst and *only* sends the SDL_QUIT event for them while normal close
@@ -979,6 +988,11 @@ void SDL2Window::processEvents(bool waitForEvent) {
 
 void SDL2Window::showFrame() {
 	ARX_PROFILE_FUNC();
+#ifdef ANDROID
+    if (SwappySwapBuffers()){
+        return;
+    }
+#endif    
 	SDL_GL_SwapWindow(m_window);
 }
 
