@@ -97,7 +97,14 @@ void EntityManager::init() {
 }
 
 void EntityManager::clear() {
-	
+
+	// Clear owner links while all referenced entities are still alive.
+	for(size_t i = 1; i < size(); i++) {
+		if(entries[i]) {
+			entries[i]->setOwner(nullptr);
+		}
+	}
+
 	// Free all entities, ignoring the player.
 	for(size_t i = 1; i < size(); i++) {
 		delete entries[i];
