@@ -79,6 +79,11 @@
 #endif
 
 #ifdef ANDROID
+#include "SwappyController.h"
+#endif
+
+
+#ifdef ANDROID
 int SDL_main(int argc, char **argv) {
 #else
 int utf8_main(int argc, char ** argv) {
@@ -171,8 +176,12 @@ int utf8_main(int argc, char ** argv) {
 	}
 	
 	benchmark::shutdown();
-	
-	// Shutdown the logging system
+
+#ifdef ANDROID
+    DestroySwappy();
+#endif
+
+    // Shutdown the logging system
 	// If there has been a critical error, a dialog will be shown now
 	Logger::shutdown();
 	

@@ -948,9 +948,6 @@ void SDL2Window::processEvents(bool waitForEvent) {
 			}
 			
 			case SDL_QUIT: {
-#ifdef ANDROID
-                DestroySwappy();
-#endif                
 				// The user has requested to close the whole program
 				// TODO onDestroy() fits SDL_WINDOWEVENT_CLOSE better, but SDL captures Ctrl+C
 				// evenst and *only* sends the SDL_QUIT event for them while normal close
