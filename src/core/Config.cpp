@@ -152,6 +152,7 @@ constexpr const ActionKey actions[NUM_ACTION_KEY] = {
 	ActionKey(Keyboard::Key_E), // LEANRIGHT
 	ActionKey(Keyboard::Key_X), // CROUCH
 	ActionKey(Keyboard::Key_F, Keyboard::Key_Enter), // USE
+	ActionKey(Mouse::Button_2), // COLLECT
 	ActionKey(Mouse::Button_0), // ACTION
 	ActionKey(Keyboard::Key_I), // INVENTORY
 	ActionKey(Keyboard::Key_Backspace), // BOOK
@@ -309,6 +310,7 @@ constexpr const std::string_view actions[NUM_ACTION_KEY] = {
 	"lean_right",
 	"crouch",
 	"mouselook", // TODO rename to "use"?
+	"collect",
 	"action_combine",
 	"inventory",
 	"book",

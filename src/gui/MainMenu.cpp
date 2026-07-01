@@ -1633,6 +1633,7 @@ public:
 		reserveBottom();
 		
 		addControlRow(CONTROLS_CUST_USE,          "system_menus_options_input_customize_controls_mouselook");
+		addControlRow(CONTROLS_CUST_COLLECT,     "system_menus_options_input_customize_controls_collect");
 		
 		addControlRow(CONTROLS_CUST_ACTION,       "system_menus_options_input_customize_controls_action_combine");
 		addControlRow(CONTROLS_CUST_JUMP,         "system_menus_options_input_customize_controls_jump");

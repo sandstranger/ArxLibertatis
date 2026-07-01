@@ -1273,6 +1273,39 @@ void ARX_INTERFACE_Reset()
 	g_hudRoot.quickSaveIconGui.hide();
 }
 
+static bool collectItem(Entity * io) {
+
+	if(!io || g_draggedEntity || (io->ioflags & IO_MOVABLE) || !(io->ioflags & IO_ITEM)) {
+		return false;
+	}
+
+	Entity * container = locateInInventories(io).container;
+	if(container && (container->ioflags & IO_SHOP)) {
+		// Cannot collect items in shop inventories
+		return false;
+	}
+
+	if(g_playerInventoryHud.containsPos(DANAEMouse) || ARX_INTERFACE_MouseInBook() || eMouseState == MOUSE_IN_NOTE) {
+		return false;
+	}
+
+	FlyingOverIO = io;
+
+	if(FlyingOverIO->ioflags & IO_GOLD) {
+		ARX_SOUND_PlayInterface(g_snd.GOLD);
+	}
+
+	ARX_SOUND_PlayInterface(g_snd.INVSTD);
+
+	while(FlyingOverIO && entities.player()->inventory->insert(FlyingOverIO)) {
+		FlyingOverIO = InterClick(DANAEMouse);
+		ARX_INVENTORY_IdentifyIO(FlyingOverIO);
+	}
+	// If there is no space, leave the item where it is
+
+	FlyingOverIO = nullptr;
+	return true;
+}
 
 void ArxGame::manageKeyMouse() {
 	arx_assert(entities.player());
@@ -1309,6 +1342,10 @@ void ArxGame::manageKeyMouse() {
 			FlyingOverIO = pIO;
 		}
 		
+		if(!BLOCK_PLAYER_CONTROLS && GInput->actionNowPressed(CONTROLS_CUST_COLLECT)) {
+			collectItem(pIO);
+		}
+
 		if(pIO
 		   && (pIO->gameFlags & GFLAG_INTERACTIVITY)
 		   && !g_cursorOverBook
@@ -1750,34 +1787,13 @@ void ArxGame::manageEditorControls() {
 		
 		SendIOScriptEvent(entities.player(), FlyingOverIO, SM_CLICKED);
 		
-		bool bOk = true;
-		Entity * container = locateInInventories(FlyingOverIO).container;
-		if(container && (container->ioflags & IO_SHOP)) {
-			// Cannot shift click items in shop inventories
-			bOk = false;
-		}
-		
 		if(   !(FlyingOverIO->ioflags & IO_MOVABLE)
 		   && (FlyingOverIO->ioflags & IO_ITEM)
-		   && bOk
 		   && GInput->actionPressed(CONTROLS_CUST_STEALTHMODE)
 		   && !g_playerInventoryHud.containsPos(DANAEMouse)
 		   && !ARX_INTERFACE_MouseInBook()
 		) {
-			
-			if(FlyingOverIO->ioflags & IO_GOLD) {
-				ARX_SOUND_PlayInterface(g_snd.GOLD);
-			}
-			
-			ARX_SOUND_PlayInterface(g_snd.INVSTD);
-			
-			while(FlyingOverIO && entities.player()->inventory->insert(FlyingOverIO)) {
-				FlyingOverIO = InterClick(DANAEMouse);
-				ARX_INVENTORY_IdentifyIO(FlyingOverIO);
-			}
-			// If there is no space, leave the item where it is
-			
-			FlyingOverIO = nullptr;
+			collectItem(FlyingOverIO);
 		}
 	}
 	
