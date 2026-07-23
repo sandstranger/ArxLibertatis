@@ -379,68 +379,57 @@ public:
     GLMapVertexBuffer(OpenGLRenderer * renderer, size_t size, Renderer::BufferUsage usage)
             : Base(renderer, size, usage)
     {
-        m_shadow.resize(capacity());
-    }
-
-    void setData(const Vertex * vertices, size_t count, size_t offset, BufferFlags flags) override {
-        arx_assert(offset < capacity());
-        arx_assert(offset + count <= capacity());
-
-        if (count > 0) {
-            std::memcpy(m_shadow.data() + offset, vertices, count * sizeof(Vertex));
-        }
-
-        uploadFullBuffer();
+        m_staging.resize(capacity());
     }
 
     Vertex * lock(BufferFlags flags, size_t offset, size_t count) override {
         ARX_UNUSED(count);
-        ARX_UNUSED(flags);
+
         arx_assert(offset < capacity());
-        if (m_shadow.size() < capacity()) {
-            m_shadow.resize(capacity());
+
+        if(m_staging.size() < capacity()) {
+            m_staging.resize(capacity());
         }
 
         m_locked = true;
-        return m_shadow.data() + offset;
+        m_discard = (!m_initialized) || (flags & DiscardBuffer);
+
+        return m_staging.data() + offset;
     }
 
     void unlock() override {
-        if (!m_locked) {
+        if(!m_locked) {
             return;
         }
 
-        uploadFullBuffer();
+        bindBuffer(m_buffer);
+
+        if(m_discard) {
+            glBufferData(GL_ARRAY_BUFFER,
+                         capacity() * sizeof(Vertex),
+                         nullptr,
+                         GL_STREAM_DRAW);
+            m_initialized = true;
+        }
+
+        glBufferSubData(GL_ARRAY_BUFFER,
+                        0,
+                        capacity() * sizeof(Vertex),
+                        m_staging.data());
+
         m_locked = false;
+        m_discard = false;
     }
 
 protected:
     using Base::initialize;
-    using Base::m_buffer;      
-    using Base::m_initialized;   
-    using Base::m_usage;        
-    using Base::m_renderer;  
+    using Base::m_buffer;
+    using Base::m_initialized;
 
 private:
-    void uploadFullBuffer() {
-        bindBuffer(m_buffer);
-
-        GLenum usage = GL_DYNAMIC_DRAW;
-        if (m_usage == Renderer::Static) {
-            usage = GL_STATIC_DRAW;
-        } else if (m_usage == Renderer::Stream && m_renderer->hasBufferUsageStream()) {
-            usage = GL_STREAM_DRAW;
-        }
-
-        const GLsizeiptr totalBytes = capacity() * sizeof(Vertex);
-        glBufferData(GL_ARRAY_BUFFER, totalBytes, nullptr, usage);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, totalBytes, m_shadow.data());
-
-        m_initialized = true;
-    }
-
-    std::vector<Vertex> m_shadow;
+    std::vector<Vertex> m_staging;
     bool m_locked = false;
+    bool m_discard = false;
 };
 
 template <class Vertex>
