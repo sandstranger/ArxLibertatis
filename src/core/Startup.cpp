@@ -80,6 +80,8 @@
 
 #ifdef ANDROID
 #include "SwappyController.h"
+#include <string>
+static std::string g_pathToResources;
 #endif
 
 
@@ -87,7 +89,10 @@
 int SDL_main(int argc, char **argv) {
 #else
 int utf8_main(int argc, char ** argv) {
-#endif	
+#endif
+#ifdef ANDROID
+    chdir(g_pathToResources.c_str());
+#endif    
 	// GCC -ffast-math disables denormal before main() - do the same for other compilers
 	Thread::disableFloatDenormals();
 	
@@ -191,3 +196,11 @@ int utf8_main(int argc, char ** argv) {
 	
 	return (status == ExitFailure) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
+#ifdef ANDROID
+extern "C" {
+__attribute__((used)) __attribute__((visibility("default")))
+void setPathToResources (const char *pathToResources){
+    g_pathToResources = pathToResources;
+}
+}
+#endif
