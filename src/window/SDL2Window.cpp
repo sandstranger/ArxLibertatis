@@ -79,7 +79,6 @@ struct ARX_SDL_SysWMinfo {
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
 #ifdef ANDROID
-static SDL2Window *windowInstance = nullptr;
 typedef void (*forceLandScapeActivityOrientationDelegate)();
 static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
 bool g_useGLES2_0 = false;
@@ -96,16 +95,10 @@ SDL2Window::SDL2Window()
 	, m_sdlVersion(0)
 	, m_sdlSubsystem(ARX_SDL_SYSWM_UNKNOWN)
 {
-#ifdef ANDROID
-    windowInstance = this;
-#endif
 	m_renderer = new OpenGLRenderer;
 }
 
 SDL2Window::~SDL2Window() {
-#ifdef ANDROID
-    windowInstance = nullptr;
-#endif
 	delete m_input;
 	
 	if(m_renderer) {
@@ -218,6 +211,7 @@ bool SDL2Window::initializeFramework() {
 	}
 
 #ifdef ANDROID
+    SDL_AddEventWatch(EventFilter, this);
     SDL_SetHint(SDL_HINT_TV_REMOTE_AS_JOYSTICK, "0");
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
     SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
@@ -860,17 +854,9 @@ extern void SetMute(bool mute);
 extern "C" {
 __attribute__((used)) __attribute__((visibility("default")))
 void onNativePause() {
-    SetMute(true);
-    if (windowInstance!= nullptr){
-        windowInstance->onFocus(false);
-    }
 }
 __attribute__((used)) __attribute__((visibility("default")))
 void onNativeResume() {
-    SetMute(false);
-    if (windowInstance!= nullptr){
-        windowInstance->onFocus(true);
-    }
 }
 }
 #endif
@@ -979,6 +965,24 @@ void SDL2Window::processEvents(bool waitForEvent) {
 	}
 }
 
+#ifdef ANDROID   
+int SDLCALL SDL2Window::EventFilter(void* userdata, SDL_Event* event){   
+    auto* sdl2Window = static_cast<SDL2Window*>(userdata);
+    switch (event->type)
+    {
+        case SDL_APP_WILLENTERBACKGROUND:
+            SetMute(true);
+            sdl2Window->onFocus(false);            
+            break;
+        case SDL_APP_DIDENTERFOREGROUND:
+            SetMute(false);
+            sdl2Window->onFocus(true);
+            break;
+    }
+    return 1;
+}    
+#endif    
+    
 void SDL2Window::showFrame() {
 	ARX_PROFILE_FUNC();
 #ifdef ANDROID

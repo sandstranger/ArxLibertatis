@@ -50,6 +50,9 @@ public:
 	~SDL2Window() override;
 	
 	bool initializeFramework() override;
+#ifdef ANDROID
+    static int SDLCALL EventFilter(void* userdata, SDL_Event* event);
+#endif
 	void setTitle(const std::string & title) override;
 	bool setVSync(int vsync) override;
 	void setFullscreenMode(const DisplayMode & mode) override;
