@@ -42,10 +42,12 @@ static std::vector<uint8_t> s_etc2Buffer;
 static std::vector<uint8_t> s_etc2CacheBuffer;
 static std::mutex s_textureBuffersMutex;
 static bool s_textureBuffersInited = false;
+static bool g_EnableETC2TextureSupport = true;
 
 extern "C"{
     __attribute__((used)) __attribute__((visibility("default")))    
-    void setTextureCacheData(const char* pathToTextureCacheDir){
+    void setTextureData(const bool enableETC2TextureSupport, const char* pathToTextureCacheDir){
+        g_EnableETC2TextureSupport = enableETC2TextureSupport;
         TextureCache::Instance().Init(pathToTextureCacheDir,30ULL * 1024ULL * 1024ULL * 1024ULL);        
     }
 }
@@ -372,7 +374,7 @@ void GLTexture::upload() {
             m_format == Image::Format_A8 ||
             m_format == Image::Format_L8A8);
     
-    if (!g_useGLES2_0 && isSupportedForEtc2 && m_image.isValid()) {
+    if (!g_useGLES2_0 && g_EnableETC2TextureSupport && isSupportedForEtc2 && m_image.isValid()) {
 
         int upW = int(getStoredSize().x);
         int upH = int(getStoredSize().y);
