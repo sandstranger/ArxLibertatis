@@ -81,6 +81,7 @@
 #ifdef ANDROID
 #include "SwappyController.h"
 #include <string>
+#include "../graphics/opengl/TextureCache.h"
 static std::string g_pathToResources;
 #endif
 
@@ -184,6 +185,7 @@ int utf8_main(int argc, char ** argv) {
 
 #ifdef ANDROID
     DestroySwappy();
+    TextureCache::Instance().Shutdown();
 #endif
 
     // Shutdown the logging system
