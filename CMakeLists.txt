@@ -7,6 +7,14 @@ endif()
 
 project(arx-libertatis)
 
+set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+set (CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS ON)
+
+include_directories(SYSTEM ${ETC_PAK_INCLUDE_DIR})
 
 # Define configuration options
 
@@ -1049,6 +1057,7 @@ set(GRAPHICS_OPENGL_SOURCES
 	src/graphics/opengl/GLTextureStage.cpp
 	src/graphics/opengl/GLVertexBuffer.cpp
 	src/graphics/opengl/OpenGLRenderer.cpp
+	src/graphics/opengl/TextureCache.cpp
 	src/graphics/opengl/OpenGLUtil.cpp
 )
 
@@ -1507,7 +1516,7 @@ endif()
 
 if (ANDROID)
 	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
-    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer)
+    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak)
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
     add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")

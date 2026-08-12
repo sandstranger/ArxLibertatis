@@ -966,13 +966,19 @@ void SDL2Window::processEvents(bool waitForEvent) {
 }
 
 #ifdef ANDROID   
+extern void ClearRamCache();   
+    
 int SDLCALL SDL2Window::EventFilter(void* userdata, SDL_Event* event){   
     auto* sdl2Window = static_cast<SDL2Window*>(userdata);
     switch (event->type)
     {
+        case SDL_APP_LOWMEMORY:
+            ClearRamCache();
+            break;
         case SDL_APP_WILLENTERBACKGROUND:
             SetMute(true);
             sdl2Window->onFocus(false);            
+            ClearRamCache();
             break;
         case SDL_APP_DIDENTERFOREGROUND:
             SetMute(false);
