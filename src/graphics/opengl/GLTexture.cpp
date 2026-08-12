@@ -37,7 +37,6 @@
 #endif
 
 extern bool g_useGLES2_0;
-
 static std::vector<uint8_t> s_decodeBuffer;
 static std::vector<uint8_t> s_etc2Buffer;
 static std::vector<uint8_t> s_etc2CacheBuffer;
@@ -45,10 +44,10 @@ static std::mutex s_textureBuffersMutex;
 static bool s_textureBuffersInited = false;
 
 extern "C"{
-__attribute__((used)) __attribute__((visibility("default")))
-void setTextureCacheData(const char* pathToTextureCacheDir){
-    TextureCache::Instance().Init(pathToTextureCacheDir,30ULL * 1024ULL * 1024ULL * 1024ULL);
-}
+    __attribute__((used)) __attribute__((visibility("default")))    
+    void setTextureCacheData(const char* pathToTextureCacheDir){
+        TextureCache::Instance().Init(pathToTextureCacheDir,30ULL * 1024ULL * 1024ULL * 1024ULL);        
+    }
 }
 
 static inline void EnsureTextureBuffersInited()
@@ -86,12 +85,13 @@ static inline void SwapRB_NEON(uint8_t* dpic, size_t pixelCount) {
 #endif
 }
 
+
 static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                                     Image::Format format,
                                     int width, int height, int dstStridePixels)
 {
     const size_t strideBytes = static_cast<size_t>(dstStridePixels) * 4;
-
+    
     switch (format) {
         case Image::Format_R8G8B8A8:
             for (int y = 0; y < height; ++y) {
@@ -100,7 +100,7 @@ static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                        static_cast<size_t>(width) * 4);
             }
             break;
-
+            
         case Image::Format_B8G8R8A8:
             for (int y = 0; y < height; ++y) {
                 const unsigned char* srow = src + static_cast<size_t>(y) * width * 4;
@@ -113,7 +113,7 @@ static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                 }
             }
             break;
-
+            
         case Image::Format_R8G8B8:
             for (int y = 0; y < height; ++y) {
                 const unsigned char* srow = src + static_cast<size_t>(y) * width * 3;
@@ -126,7 +126,7 @@ static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                 }
             }
             break;
-
+            
         case Image::Format_B8G8R8:
             for (int y = 0; y < height; ++y) {
                 const unsigned char* srow = src + static_cast<size_t>(y) * width * 3;
@@ -139,7 +139,7 @@ static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                 }
             }
             break;
-
+            
         case Image::Format_L8:
             for (int y = 0; y < height; ++y) {
                 const unsigned char* srow = src + static_cast<size_t>(y) * width;
@@ -152,7 +152,7 @@ static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                 }
             }
             break;
-
+            
         case Image::Format_A8:
             for (int y = 0; y < height; ++y) {
                 const unsigned char* srow = src + static_cast<size_t>(y) * width;
@@ -165,7 +165,7 @@ static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                 }
             }
             break;
-
+            
         case Image::Format_L8A8:
             for (int y = 0; y < height; ++y) {
                 const unsigned char* srow = src + static_cast<size_t>(y) * width * 2;
@@ -178,30 +178,29 @@ static inline bool ConvertRawToRgba(const unsigned char* src, uint8_t* dst,
                 }
             }
             break;
-
+            
         default:
             return false;
     }
     return true;
 }
 
-#include "SDL_log.h"
 
 static bool UploadAsEtc2(GLuint tex, int width, int height,
                          const unsigned char* srcData, Image::Format format,
-                         const char* textureName,
-                         int* outPaddedWidth, int* outPaddedHeight)
+                         const char* textureName)
 {
     EnsureTextureBuffersInited();
-
+    
     std::lock_guard<std::mutex> lock(s_textureBuffersMutex);
-
+    
+    
     const size_t paddedWidth  = ((static_cast<size_t>(width) + 3) / 4) * 4;
     const size_t paddedHeight = ((static_cast<size_t>(height) + 3) / 4) * 4;
     const size_t blocks = (paddedWidth / 4) * (paddedHeight / 4);
     const size_t etc2CompressedSize = blocks * 16;
     const size_t decodeSize = paddedWidth * paddedHeight * 4;
-
+    
     size_t rawSourceSize = 0;
     switch (format) {
         case Image::Format_R8G8B8A8:
@@ -223,14 +222,15 @@ static bool UploadAsEtc2(GLuint tex, int width, int height,
             rawSourceSize = static_cast<size_t>(width) * height * 4;
             break;
     }
-
-    const uint64_t hash = ComputeTextureHash(srcData, rawSourceSize, width, height, GL_COMPRESSED_RGBA8_ETC2_EAC);
-
+    
+    const uint64_t hash = ComputeTextureHash(srcData, rawSourceSize, width, height,GL_COMPRESSED_RGBA8_ETC2_EAC);
+    
     bool cacheHit = false;
     uint8_t* etc2Data = nullptr;
     size_t cachedSize = 0;
-
+    
     cacheHit = TextureCache::Instance().TryGetFromRamCache(hash, s_etc2CacheBuffer, &cachedSize);
+        
     if (!cacheHit) {
         cacheHit = TextureCache::Instance().TryGetCachedETC2(
                 textureName ? textureName : "",
@@ -239,58 +239,57 @@ static bool UploadAsEtc2(GLuint tex, int width, int height,
                 GL_COMPRESSED_RGBA8_ETC2_EAC,
                 1,
                 s_etc2CacheBuffer, &cachedSize
-        );
+            );
+            
         if (cacheHit) {
-            TextureCache::Instance().SaveToRamCache(hash,
-                                                    reinterpret_cast<std::byte *>(s_etc2CacheBuffer.data()),
-                                                    cachedSize, width, height,
-                                                    GL_COMPRESSED_RGBA8_ETC2_EAC);
+            TextureCache::Instance().SaveToRamCache(hash,reinterpret_cast<std::byte*>(s_etc2CacheBuffer.data()),
+                    cachedSize, width, height, GL_COMPRESSED_RGBA8_ETC2_EAC);
+            }
         }
-    }
+             
     if (cacheHit) {
-        etc2Data = reinterpret_cast<uint8_t *>(s_etc2CacheBuffer.data());
+        etc2Data = reinterpret_cast<uint8_t*>(s_etc2CacheBuffer.data());
     }
-
+    
     if (!cacheHit) {
         if (s_decodeBuffer.size() < decodeSize) {
             s_decodeBuffer.resize(decodeSize);
         }
         uint8_t* rgbaBuffer = s_decodeBuffer.data();
-        memset(rgbaBuffer, 0, decodeSize);  
-
+        memset(rgbaBuffer, 0, decodeSize);
         
         if (!ConvertRawToRgba(srcData, rgbaBuffer, format, width, height,
                               static_cast<int>(paddedWidth))) {
             return false;
         }
-
+        
         SwapRB_NEON(rgbaBuffer, paddedWidth * paddedHeight);
-
+        
         if (s_etc2Buffer.size() < etc2CompressedSize) {
             s_etc2Buffer.resize(etc2CompressedSize);
         }
         etc2Data = s_etc2Buffer.data();
-
+        
         CompressEtc2Rgba(
-                reinterpret_cast<const uint32_t*>(rgbaBuffer),
-                reinterpret_cast<uint64_t*>(etc2Data),
-                blocks,
-                paddedWidth,
-                true
+            reinterpret_cast<const uint32_t*>(rgbaBuffer),
+            reinterpret_cast<uint64_t*>(etc2Data),
+            blocks,
+            paddedWidth,
+            true
         );
 
-            TextureCache::Instance().SaveToRamCache(hash, etc2Data, etc2CompressedSize,
-                                                    width, height, GL_COMPRESSED_RGBA8_ETC2_EAC);
-            TextureCache::Instance().SaveToCacheAsync(
-                    textureName ? textureName : "",
-                    srcData, rawSourceSize,
-                    width, height,
-                    GL_COMPRESSED_RGBA8_ETC2_EAC,
-                    1,
-                    etc2Data, etc2CompressedSize
-            );
+        TextureCache::Instance().SaveToRamCache(hash, etc2Data, etc2CompressedSize,
+                                                width, height, GL_COMPRESSED_RGBA8_ETC2_EAC);
+        TextureCache::Instance().SaveToCacheAsync(
+                textureName ? textureName : "",
+                srcData, rawSourceSize,
+                width, height,
+                GL_COMPRESSED_RGBA8_ETC2_EAC,
+                1,
+                etc2Data, etc2CompressedSize
+        );
     }
-
+    
     glBindTexture(GL_TEXTURE_2D, tex);
     glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA8_ETC2_EAC,
                            static_cast<GLsizei>(paddedWidth),
@@ -298,82 +297,46 @@ static bool UploadAsEtc2(GLuint tex, int width, int height,
                            0,
                            static_cast<GLsizei>(etc2CompressedSize),
                            etc2Data);
-
-    if (glGetError() != GL_NO_ERROR) {
-        return false;  
-    }
-
-    if (outPaddedWidth)  *outPaddedWidth  = static_cast<int>(paddedWidth);
-    if (outPaddedHeight) *outPaddedHeight = static_cast<int>(paddedHeight);
-    return true;
+    
+    return (glGetError() == GL_NO_ERROR);
 }
 
 GLTexture::GLTexture(OpenGLRenderer * _renderer)
-        : renderer(_renderer)
-        , tex(GL_NONE)
-        , wrapMode(TextureStage::WrapRepeat)
-        , minFilter(TextureStage::FilterLinear)
-        , magFilter(TextureStage::FilterNearest)
-        , isNPOT(false)
+	: renderer(_renderer)
+	, tex(GL_NONE)
+	, wrapMode(TextureStage::WrapRepeat)
+	, minFilter(TextureStage::FilterLinear)
+	, magFilter(TextureStage::FilterNearest)
+	, isNPOT(false)
 { }
 
 GLTexture::~GLTexture() {
-    destroy();
+	destroy();
 }
 
 bool GLTexture::create() {
-
-    arx_assert_msg(tex == GL_NONE, "leaking OpenGL texture");
-
-    glGenTextures(1, &tex);
-
-    wrapMode = TextureStage::WrapRepeat;
-    minFilter = TextureStage::FilterNearest;
-    magFilter = TextureStage::FilterLinear;
-
-    Vec2i nextPowerOfTwo(GetNextPowerOf2(unsigned(getSize().x)), GetNextPowerOf2(unsigned(getSize().y)));
-    m_storedSize = renderer->hasTextureNPOT() ? getSize() : nextPowerOfTwo;
-    isNPOT = (getSize() != nextPowerOfTwo);
-
-    return (tex != GL_NONE);
+	
+	arx_assert_msg(tex == GL_NONE, "leaking OpenGL texture");
+	
+	glGenTextures(1, &tex);
+	
+	wrapMode = TextureStage::WrapRepeat;
+	minFilter = TextureStage::FilterNearest;
+	magFilter = TextureStage::FilterLinear;
+	
+	Vec2i nextPowerOfTwo(GetNextPowerOf2(unsigned(getSize().x)), GetNextPowerOf2(unsigned(getSize().y)));
+	m_storedSize = renderer->hasTextureNPOT() ? getSize() : nextPowerOfTwo;
+	isNPOT = (getSize() != nextPowerOfTwo);
+	
+	return (tex != GL_NONE);
 }
 
 void GLTexture::upload() {
-
     arx_assert(tex != GL_NONE);
 
     glBindTexture(GL_TEXTURE_2D, tex);
     renderer->GetTextureStage(0)->current = this;
-
-    Image::Format fmt = getFormat();
-    bool isSupportedForEtc2 = (fmt == Image::Format_R8G8B8A8 ||
-                               fmt == Image::Format_B8G8R8A8 ||
-                               fmt == Image::Format_R8G8B8 ||
-                               fmt == Image::Format_B8G8R8 ||
-                               fmt == Image::Format_L8 ||
-                               fmt == Image::Format_A8 ||
-                               fmt == Image::Format_L8A8);
     
-    if (!g_useGLES2_0 && isSupportedForEtc2) {
-
-        int paddedW = 0, paddedH = 0;
-        bool uploaded = UploadAsEtc2(tex, getSize().x, getSize().y,
-                                     m_image.getData(), fmt, nullptr,
-                                     &paddedW, &paddedH);
-
-        if (uploaded) {
-            m_storedSize = Vec2i(paddedW, paddedH);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            return;
-        }
-        
-    }
-
     if(!renderer->hasIntensityTextures() && isIntensity()) {
         arx_assert(getFormat() == Image::Format_L8);
         Image converted;
@@ -397,6 +360,46 @@ void GLTexture::upload() {
         m_format = rgbFormat;
     }
 
+    if(getStoredSize() != getSize()) {
+        m_flags &= ~HasMipmaps;
+    }
+    
+    const bool isSupportedForEtc2 = (m_format == Image::Format_R8G8B8A8 ||
+            m_format == Image::Format_B8G8R8A8 ||
+            m_format == Image::Format_R8G8B8 ||
+            m_format == Image::Format_B8G8R8 ||
+            m_format == Image::Format_L8 ||
+            m_format == Image::Format_A8 ||
+            m_format == Image::Format_L8A8);
+    
+    if (!g_useGLES2_0 && isSupportedForEtc2 && m_image.isValid()) {
+
+        int upW = int(getStoredSize().x);
+        int upH = int(getStoredSize().y);
+        int finalW = int(((unsigned(upW) + 3) / 4) * 4);
+        int finalH = int(((unsigned(upH) + 3) / 4) * 4);
+        if (finalW < 4) finalW = 4;
+        if (finalH < 4) finalH = 4;
+
+        const unsigned char* srcData = nullptr;
+        Image extended;
+
+        if (finalW != int(getSize().x) || finalH != int(getSize().y)) {
+            extended.create(size_t(finalW), size_t(finalH), m_image.getFormat());
+            extended.extendClampToEdgeBorder(m_image);
+            srcData = extended.getData();
+        } else {
+            srcData = m_image.getData();
+        }
+
+        if (UploadAsEtc2(tex, finalW, finalH, srcData, m_format, nullptr)) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            return;
+        }
+    }
+    
     GLint internalUnsized, internalSized;
     GLenum format;
     if(isIntensity()) {
@@ -420,11 +423,7 @@ void GLTexture::upload() {
         return;
     }
     GLint internal = renderer->hasSizedTextureFormats() ? internalSized : internalUnsized;
-
-    if(getStoredSize() != getSize()) {
-        m_flags &= ~HasMipmaps;
-    }
-
+    
     if(hasMipmaps()) {
         glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
         if(renderer->getMaxAnisotropy() > 1.f) {
@@ -448,73 +447,73 @@ void GLTexture::upload() {
 }
 
 void GLTexture::destroy() {
-
-    if(tex) {
-        glDeleteTextures(1, &tex), tex = GL_NONE;
-    }
-
-    for(size_t i = 0; i < renderer->getTextureStageCount(); i++) {
-        GLTextureStage * stage = renderer->GetTextureStage(i);
-        if(stage->tex == this) {
-            stage->tex = nullptr;
-        }
-        if(stage->current == this) {
-            stage->current = nullptr;
-        }
-    }
-
+	
+	if(tex) {
+		glDeleteTextures(1, &tex), tex = GL_NONE;
+	}
+	
+	for(size_t i = 0; i < renderer->getTextureStageCount(); i++) {
+		GLTextureStage * stage = renderer->GetTextureStage(i);
+		if(stage->tex == this) {
+			stage->tex = nullptr;
+		}
+		if(stage->current == this) {
+			stage->current = nullptr;
+		}
+	}
+	
 }
 
 static const GLint arxToGlWrapMode[] = {
-        GL_REPEAT, 
-        GL_MIRRORED_REPEAT, 
-        GL_CLAMP_TO_EDGE 
+	GL_REPEAT, 
+	GL_MIRRORED_REPEAT, 
+	GL_CLAMP_TO_EDGE 
 };
 
 static const GLint arxToGlFilter[][2] = {
-        {
-                GL_NEAREST,
-                GL_LINEAR
-        },
-        {
-                GL_NEAREST_MIPMAP_LINEAR,
-                GL_LINEAR_MIPMAP_LINEAR
-        }
+	{
+		GL_NEAREST,
+		GL_LINEAR
+	},
+	{
+		GL_NEAREST_MIPMAP_LINEAR,
+		GL_LINEAR_MIPMAP_LINEAR
+	}
 };
 
 void GLTexture::apply(GLTextureStage * stage) {
-
-    arx_assert(stage != nullptr);
-    arx_assert(stage->tex == this);
-
-    TextureStage::WrapMode newWrapMode = (!isNPOT) ? stage->getWrapMode()
-                                                   : TextureStage::WrapClamp;
-    if(newWrapMode != wrapMode) {
-        wrapMode = newWrapMode;
-        GLint glwrap = arxToGlWrapMode[wrapMode];
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, glwrap);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glwrap);
-    }
-
-    if(stage->getMinFilter() != minFilter) {
-        minFilter = stage->getMinFilter();
-        int mipFilter = hasMipmaps() ? 1 : 0;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, arxToGlFilter[mipFilter][minFilter]);
-    }
-
-    if(stage->getMagFilter() != magFilter) {
-        magFilter = stage->getMagFilter();
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, arxToGlFilter[0][magFilter]);
-    }
-
+	
+	arx_assert(stage != nullptr);
+	arx_assert(stage->tex == this);
+	
+	TextureStage::WrapMode newWrapMode = (!isNPOT) ? stage->getWrapMode()
+	                                               : TextureStage::WrapClamp;
+	if(newWrapMode != wrapMode) {
+		wrapMode = newWrapMode;
+		GLint glwrap = arxToGlWrapMode[wrapMode];
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, glwrap);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glwrap);
+	}
+	
+	if(stage->getMinFilter() != minFilter) {
+		minFilter = stage->getMinFilter();
+		int mipFilter = hasMipmaps() ? 1 : 0;
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, arxToGlFilter[mipFilter][minFilter]);
+	}
+	
+	if(stage->getMagFilter() != magFilter) {
+		magFilter = stage->getMagFilter();
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, arxToGlFilter[0][magFilter]);
+	}
+	
 }
 
 void GLTexture::updateMaxAnisotropy() {
-
-    if(hasMipmaps()) {
-        glBindTexture(GL_TEXTURE_2D, tex);
-        renderer->GetTextureStage(0)->current = this;
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, renderer->getMaxAnisotropy());
-    }
-
+	
+	if(hasMipmaps()) {
+		glBindTexture(GL_TEXTURE_2D, tex);
+		renderer->GetTextureStage(0)->current = this;
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, renderer->getMaxAnisotropy());
+	}
+	
 }
