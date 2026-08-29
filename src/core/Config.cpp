@@ -192,6 +192,13 @@ constexpr const ActionKey actions[NUM_ACTION_KEY] = {
 	ActionKey((Keyboard::Key_LeftAlt << 16) | Keyboard::Key_Enter, (Keyboard::Key_RightAlt << 16) | Keyboard::Key_Enter), // TOGGLE_FULLSCREEN
 	ActionKey(Keyboard::Key_Grave), // CONSOLE
 	ActionKey(Keyboard::Key_ScrollLock, Keyboard::Key_Backslash), // DEBUG
+	ActionKey(Keyboard::Key_F7), // <-- INSTANT_MAGIC
+	ActionKey(Keyboard::Key_LeftBracket),  // SPELL_PREV (РєР»Р°РІРёС€Р° [)
+    ActionKey(Keyboard::Key_RightBracket), // SPELL_NEXT (РєР»Р°РІРёС€Р° ])
+	ActionKey(Keyboard::Key_V), // SPELL_CAST (РєР°СЃС‚ Р·Р°РєР»РёРЅР°РЅРёСЏ)
+	ActionKey(Keyboard::Key_E),            // USE_ITEM (РєР»Р°РІРёС€Р° E)
+	ActionKey(Keyboard::Key_F8), // NEW_INVENTORY
+    ActionKey(Keyboard::Key_G),	// OFFER_ITEM (РєР»Р°РІРёС€Р° G)
 };
 
 } // namespace Default
@@ -350,6 +357,13 @@ constexpr const std::string_view actions[NUM_ACTION_KEY] = {
 	"toggle_fullscreen",
 	"console",
 	"debug",
+	"instant_magic",
+	"spell_prev ",
+    "spell_next ",
+	"spell_cast ",
+	"use_item ",
+	"new_inventory ",
+	"offer_item ",	
 };
 
 // Misc options

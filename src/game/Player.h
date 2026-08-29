@@ -88,7 +88,9 @@ enum PlayerInterfaceFlag {
 	INTER_COMBATMODE   = 1 << 6,
 	INTER_NOTE         = 1 << 7, // TODO remove
 	INTER_STEAL        = 1 << 8,
-	INTER_NO_STRIKE    = 1 << 9
+	INTER_NO_STRIKE    = 1 << 9,
+	INTER_INSTANT_MAGIC = 1 << 10,
+	INTER_NEW_INVENTORY = 1 << 11
 };
 DECLARE_FLAGS(PlayerInterfaceFlag, PlayerInterfaceFlags)
 DECLARE_FLAGS_OPERATORS(PlayerInterfaceFlags)
@@ -266,7 +268,7 @@ struct ARXCHARACTER {
 	bool falling;
 	short doingmagic;
 	PlayerInterfaceFlags Interface;
-	
+	SpellType m_selectedInstantSpell;
 	PlayerMovement m_currentMovement;
 	PlayerMovement m_lastMovement;
 	bool onfirmground;

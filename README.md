@@ -11,6 +11,17 @@ Cross-platform port of Arx Fatalis, a first-person role-playing game
 Arx Libertatis is based on the publicly released [Arx Fatalis source code](https://web.archive.org/web/20180105233341/https://www.arkane-studios.com/uk/arx_downloads.php).
 The source code is available under the GPLv3+ license with some additional terms - see the COPYING and LICENSE files for details.
 
+Easy magic menu:
+F7 open menu
+[  ] chose magic
+V use magic
+
+Fast user item menu
+F8 open menu
+[ ] chose item
+E use item
+G pick up item for use on npc or objects
+
 ## Contact
 
 Website: [arx-libertatis.org](https://arx-libertatis.org/)

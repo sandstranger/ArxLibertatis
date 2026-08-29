@@ -183,6 +183,9 @@ PlayerInterfaceFlags lOldInterface;
 
 static TextureContainer * inventory_font = nullptr;
 
+Entity * g_offeredItem = nullptr;
+Entity * g_itemToUse = nullptr;
+
 void ARX_INTERFACE_DrawNumberInit() {
 	inventory_font = TextureContainer::LoadUI("graph/interface/font/font10x10_inventory");
 }
@@ -1131,9 +1134,10 @@ void ArxGame::managePlayerControls() {
 	// Checks INVENTORY Key Status.
 	if(GInput->actionNowPressed(CONTROLS_CUST_INVENTORY)) {
 		
-		if(player.Interface & INTER_COMBATMODE) {
-			ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
-		}
+		if (!(player.Interface & INTER_INSTANT_MAGIC)) {
+         if(player.Interface & INTER_COMBATMODE) {
+             ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
+         }
 		
 		bInverseInventory = !bInverseInventory;
 		lOldTruePlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
@@ -1147,6 +1151,100 @@ void ArxGame::managePlayerControls() {
 	// Checks BOOK Key Status.
 	if(GInput->actionNowPressed(CONTROLS_CUST_BOOK))
 		g_playerBook.toggle();
+
+// --- РќРђР§РђР›Рћ: Р›РѕРіРёРєР° РјРіРЅРѕРІРµРЅРЅРѕР№ РјР°РіРёРё (СЃ Р·Р°РґРµСЂР¶РєРѕР№) ---
+
+// РЎС‚Р°С‚РёС‡РµСЃРєРёРµ РїРµСЂРµРјРµРЅРЅС‹Рµ РґР»СЏ РѕС‚Р»РѕР¶РµРЅРЅРѕРіРѕ РєР°СЃС‚Р°
+static SpellType pendingInstantSpell = SPELL_NONE;
+static PlatformInstant instantCastStartTime = 0;
+static bool bIsCastingInCombat = false; // Р¤Р»Р°Рі РґР»СЏ РєР°СЃС‚Р° РІ Р±РѕСЋ
+
+// 1. РћР±СЂР°Р±РѕС‚РєР° РЅР°Р¶Р°С‚РёСЏ РєРЅРѕРїРєРё РєР°СЃС‚Р°
+if (player.m_selectedInstantSpell != SPELL_NONE && GInput->actionNowPressed(CONTROLS_CUST_SPELL_CAST)) {
+    Entity * io = entities.player();
+    
+    // Р—Р°РїРѕРјРёРЅР°РµРј Р·Р°РєР»РёРЅР°РЅРёРµ РґР»СЏ РѕС‚Р»РѕР¶РµРЅРЅРѕРіРѕ РєР°СЃС‚Р°
+    pendingInstantSpell = player.m_selectedInstantSpell;
+    instantCastStartTime = g_platformTime.frameStart();
+    bIsCastingInCombat = (player.Interface & INTER_COMBATMODE) ? true : false;
+    
+    // Р—Р°РїСѓСЃРєР°РµРј Р°РЅРёРјР°С†РёСЋ РєР°СЃС‚Р° РўРћР›Р¬РљРћ РµСЃР»Рё РёРіСЂРѕРє РќР• РІ Р±РѕРµРІРѕРј СЂРµР¶РёРјРµ.
+    if (io && !(player.Interface & INTER_COMBATMODE)) {
+        if (io->anims[ANIM_CAST_CYCLE]) {
+            io->animlayer[1].cur_anim = io->anims[ANIM_CAST_CYCLE];
+            io->animlayer[1].ctime = AnimationDuration(0);
+        }
+    }
+    // Р’ Р±РѕРµРІРѕРј СЂРµР¶РёРјРµ Р°РЅРёРјР°С†РёСЋ РќР• Р·Р°РїСѓСЃРєР°РµРј!
+    
+    // Р—Р°РєСЂС‹РІР°РµРј РјРµРЅСЋ РјР°РіРёРё РїРѕСЃР»Рµ РєР°СЃС‚Р°
+    if (player.Interface & INTER_INSTANT_MAGIC) {
+        player.Interface &= ~INTER_INSTANT_MAGIC;
+        TRUE_PLAYER_MOUSELOOK_ON = true;
+        MAGICMODE = false;
+    }
+}
+
+// 2. РћР±СЂР°Р±РѕС‚РєР° РѕС‚Р»РѕР¶РµРЅРЅРѕРіРѕ РєР°СЃС‚Р° (РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ РєР°Р¶РґС‹Р№ РєР°РґСЂ)
+if (pendingInstantSpell != SPELL_NONE) {
+    PlatformDuration elapsed = g_platformTime.frameStart() - instantCastStartTime;
+    
+    // Р–РґРµРј 250 РјРёР»Р»РёСЃРµРєСѓРЅРґ
+    if (elapsed > 250ms) {
+        Entity * io = entities.player();
+        
+        // РџСЂРёРјРµРЅСЏРµРј Р·Р°РєР»РёРЅР°РЅРёРµ
+        if (io) {
+            ARX_SPELLS_Launch(pendingInstantSpell, *io, SpellcastFlags(), -1, nullptr, 0);
+            
+            // РЎР±СЂР°СЃС‹РІР°РµРј Р°РЅРёРјР°С†РёСЋ РўРћР›Р¬РљРћ РµСЃР»Рё РќР• РІ Р±РѕРµРІРѕРј СЂРµР¶РёРјРµ
+            // Р’ Р±РѕРµРІРѕРј СЂРµР¶РёРјРµ Р°РЅРёРјР°С†РёСЋ РѕСЂСѓР¶РёСЏ РќР• РўР РћР“РђР•Рњ!
+            if (!(player.Interface & INTER_COMBATMODE)) {
+                io->animlayer[1].cur_anim = nullptr; 
+                io->animlayer[1].ctime = AnimationDuration(0);
+            }
+        }
+        
+        pendingInstantSpell = SPELL_NONE;
+        instantCastStartTime = 0;
+        bIsCastingInCombat = false;
+    }
+}
+
+// 3. РћС‚РєСЂС‹С‚РёРµ/Р·Р°РєСЂС‹С‚РёРµ РјРµРЅСЋ РјР°РіРёРё (РћР РР“РРќРђР›)
+if (GInput->actionNowPressed(CONTROLS_CUST_INSTANT_MAGIC)) {
+    // Р•СЃР»Рё РёРґРµС‚ РѕС‚Р»РѕР¶РµРЅРЅС‹Р№ РєР°СЃС‚, РѕС‚РјРµРЅСЏРµРј РµРіРѕ
+    if (pendingInstantSpell != SPELL_NONE) {
+        pendingInstantSpell = SPELL_NONE;
+        instantCastStartTime = 0;
+        bIsCastingInCombat = false;
+        Entity * io = entities.player();
+        if (io && !(player.Interface & INTER_COMBATMODE)) {
+            io->animlayer[1].cur_anim = nullptr;
+        }
+    }
+
+    player.Interface ^= INTER_INSTANT_MAGIC;
+    if (player.Interface & INTER_INSTANT_MAGIC) {
+        MAGICMODE = true;
+        bInverseInventory = false;
+        bForceEscapeFreeLook = false;
+    } else {
+        MAGICMODE = false;
+    }
+}
+// --- РљРћРќР•Р¦: Р›РѕРіРёРєР° РјРіРЅРѕРІРµРЅРЅРѕР№ РјР°РіРёРё ---
+// --- РќРђР§РђР›Рћ: Р›РѕРіРёРєР° РЅРѕРІРѕРіРѕ РёРЅРІРµРЅС‚Р°СЂСЏ ---
+if (GInput->actionNowPressed(CONTROLS_CUST_NEW_INVENTORY)) {
+    player.Interface ^= INTER_NEW_INVENTORY;
+    if (player.Interface & INTER_NEW_INVENTORY) {
+        MAGICMODE = true;
+        bInverseInventory = false;
+    } else {
+        MAGICMODE = false;
+    }
+}
+// --- РљРћРќР•Р¦: Р›РѕРіРёРєР° РЅРѕРІРѕРіРѕ РёРЅРІРµРЅС‚Р°СЂСЏ ---
 
 	// Check For Combat Mode ON/OFF
 	if(   eeMousePressed1()
@@ -1168,6 +1266,7 @@ void ArxGame::managePlayerControls() {
 		}
 	}
 	
+if(ARXmenu.mode() == Mode_InGame) {	
 	if(lOldTruePlayerMouseLook != TRUE_PLAYER_MOUSELOOK_ON) {
 		bInverseInventory = false;
 		if(TRUE_PLAYER_MOUSELOOK_ON) {
@@ -1182,7 +1281,8 @@ void ArxGame::managePlayerControls() {
 			SendIOScriptEvent(nullptr, entities.player(), SM_CURSORMODE);
 		}
 	}
-	
+}	
+
 	static PlayerInterfaceFlags lOldInterfaceTemp = 0;
 	
 	if(TRUE_PLAYER_MOUSELOOK_ON) {
@@ -1190,7 +1290,7 @@ void ArxGame::managePlayerControls() {
 			
 			bRenderInCursorMode = true;
 			
-			if(!MAGICMODE) {
+			if(!MAGICMODE && !(player.Interface & INTER_INSTANT_MAGIC)) {  // <-- Р”РћР‘РђР’Р›Р•РќРћ: РїСЂРѕРІРµСЂРєР° РјР°РіРёРё
 				InventoryOpenClose(1);
 			}
 			
@@ -1212,10 +1312,10 @@ void ArxGame::managePlayerControls() {
 					g_secondaryInventoryHud.close();
 				}
 				
-				if(config.input.mouseLookToggle) {
-					TRUE_PLAYER_MOUSELOOK_ON = true;
-					SLID_START = g_platformTime.frameStart();
-				}
+            if(config.input.mouseLookToggle && !(player.Interface & INTER_INSTANT_MAGIC)) {  // <-- Р”РћР‘РђР’Р›Р•РќРћ: РїСЂРѕРІРµСЂРєР° РјР°РіРёРё
+                TRUE_PLAYER_MOUSELOOK_ON = true;
+                SLID_START = g_platformTime.frameStart();
+            }
 				
 			}
 		}
@@ -1231,17 +1331,17 @@ void ArxGame::managePlayerControls() {
 					g_secondaryInventoryHud.close();
 				}
 				
-				if(config.input.mouseLookToggle) {
-					TRUE_PLAYER_MOUSELOOK_ON = true;
-					SLID_START = g_platformTime.frameStart();
-				}
+            if(config.input.mouseLookToggle && !(player.Interface & INTER_INSTANT_MAGIC)) {  // <-- Р”РћР‘РђР’Р›Р•РќРћ: РїСЂРѕРІРµСЂРєР° РјР°РіРёРё
+                TRUE_PLAYER_MOUSELOOK_ON = true;
+                SLID_START = g_platformTime.frameStart();
+            }
 				
 			}
 		} else {
 			
 			bRenderInCursorMode = true;
 			
-			if(!MAGICMODE) {
+        if(!MAGICMODE && !(player.Interface & INTER_INSTANT_MAGIC)) {  // <-- Р”РћР‘РђР’Р›Р•РќРћ: РїСЂРѕРІРµСЂРєР° РјР°РіРёРё
 				if(lOldInterfaceTemp) {
 					lOldInterface = lOldInterfaceTemp;
 					lOldInterfaceTemp = 0;
@@ -1433,15 +1533,11 @@ void ArxGame::manageKeyMouse() {
 			PLAYER_MOUSELOOK_ON = false;
 	}
 
-	if(ARXmenu.mode() != Mode_InGame) {
-		PLAYER_MOUSELOOK_ON = false;
-	}
-	
 	// Checks For MouseGrabbing/Restoration after Grab
 	bool bRestoreCoordMouse = true;
 	
 	static bool LAST_PLAYER_MOUSELOOK_ON = false;
-	bool mouselook = PLAYER_MOUSELOOK_ON && !BLOCK_PLAYER_CONTROLS && !isInCinematic();
+	bool mouselook = PLAYER_MOUSELOOK_ON && !BLOCK_PLAYER_CONTROLS && !isInCinematic() && ARXmenu.mode() == Mode_InGame;
 	if(mouselook && !LAST_PLAYER_MOUSELOOK_ON) {
 		
 		MemoMouse = DANAEMouse;
@@ -1787,9 +1883,9 @@ void ArxGame::manageEditorControls() {
 		
 		SendIOScriptEvent(entities.player(), FlyingOverIO, SM_CLICKED);
 		
-		if(   !(FlyingOverIO->ioflags & IO_MOVABLE)
-		   && (FlyingOverIO->ioflags & IO_ITEM)
-		   && GInput->actionPressed(CONTROLS_CUST_STEALTHMODE)
+ 	if(   bOk
+ 	   && (FlyingOverIO->ioflags & IO_ITEM)
+ 	   && !(FlyingOverIO->ioflags & IO_MOVABLE)
 		   && !g_playerInventoryHud.containsPos(DANAEMouse)
 		   && !ARX_INTERFACE_MouseInBook()
 		) {
@@ -1882,8 +1978,8 @@ void ArxGame::manageEditorControls() {
 		if(eeMouseDoubleClick1() && !COMBINE && FlyingOverIO && (FlyingOverIO->ioflags & IO_ITEM)) {
 			
 			bool accept_combine = true;
-			Entity * container = locateInInventories(FlyingOverIO).container;
-			if(container && (container->ioflags & IO_SHOP)) {
+			Entity * cont = locateInInventories(FlyingOverIO).container;
+			if(cont && (cont->ioflags & IO_SHOP)) {
 				// Cannot combine items in shop inventories
 				accept_combine = false;
 			}
@@ -1951,7 +2047,7 @@ void ArxGame::manageEditorControls() {
 							io->ioflags &= ~IO_UNDERWATER;
 							ARX_SOUND_PlayInterface(g_snd.PLOUF, Random::getf(0.8f, 1.2f));
 						}
-						ARX_SOUND_PlayInterface(g_snd.INVSTD);
+				 		ARX_SOUND_PlayInterface(g_snd.INVSTD);
 					}
 					
 				}
@@ -1999,4 +2095,188 @@ TextureStage::FilterMode getInterfaceTextureFilter() {
 		case UIFilterBilinear: return TextureStage::FilterLinear;
 	}
 	arx_unreachable();
+}
+
+//-----------------------------------------------------------------------------
+// РњРіРЅРѕРІРµРЅРЅР°СЏ РјР°РіРёСЏ - РћР”РќРђ РРљРћРќРљРђ Р’РќРР—РЈ Р­РљР РђРќРђ
+//-----------------------------------------------------------------------------
+void ARX_INTERFACE_RenderInstantMagic() {
+    if (!(player.Interface & INTER_INSTANT_MAGIC)) {
+        return;
+    }
+
+    // РЎРѕР±РёСЂР°РµРј СЃРїРёСЃРѕРє РёР·РІРµСЃС‚РЅС‹С… Р·Р°РєР»РёРЅР°РЅРёР№
+    std::vector<SpellType> knownSpells;
+    for (int i = 0; i < SPELL_TYPES_COUNT; i++) {
+        if (!spellicons[i].bSecret && player.hasAllRunes(spellicons[i].symbols)) {
+            knownSpells.push_back(static_cast<SpellType>(i));
+        }
+    }
+    if (knownSpells.empty()) {
+        return;
+    }
+
+    // РЎС‚Р°С‚РёС‡РµСЃРєРёР№ РёРЅРґРµРєСЃ РІС‹Р±СЂР°РЅРЅРѕРіРѕ Р·Р°РєР»РёРЅР°РЅРёСЏ
+    static int selectedIndex = 0;
+    if (selectedIndex >= (int)knownSpells.size()) selectedIndex = 0;
+
+    // РџСЂРѕРєСЂСѓС‚РєР° РЅР°СЃС‚СЂР°РёРІР°РµРјС‹РјРё РєРЅРѕРїРєР°РјРё (РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ РІ РЅР°СЃС‚СЂРѕР№РєР°С… РёРіСЂС‹)
+if (GInput->actionNowPressed(CONTROLS_CUST_SPELL_PREV)) {
+    selectedIndex--;
+    if (selectedIndex < 0) selectedIndex = (int)knownSpells.size() - 1;
+}
+if (GInput->actionNowPressed(CONTROLS_CUST_SPELL_NEXT)) {
+    selectedIndex++;
+    if (selectedIndex >= (int)knownSpells.size()) selectedIndex = 0;
+}
+
+    // Р—Р°РїРѕРјРёРЅР°РµРј РІС‹Р±СЂР°РЅРЅРѕРµ Р·Р°РєР»РёРЅР°РЅРёРµ
+    player.m_selectedInstantSpell = knownSpells[selectedIndex];
+
+    // РџР°СЂР°РјРµС‚СЂС‹ РѕС‚СЂРёСЃРѕРІРєРё
+    float iconSize = 48.f * g_sizeRatio.x;
+    float startX = (g_size.width() - iconSize) / 2.f;
+    float startY = g_size.height() - iconSize - 60.f * g_sizeRatio.y;
+
+    // Р—РѕР»РѕС‚Р°СЏ СЂР°РјРєР°
+    static TextureContainer * bgTexture = nullptr;
+    if (!bgTexture) {
+        bgTexture = TextureContainer::LoadUI("graph/interface/book/spellbook");
+    }
+    if (bgTexture) {
+        Rectf frameRect(startX - 5.f, startY - 5.f, startX + iconSize + 5.f, startY + iconSize + 5.f);
+        EERIEDrawBitmap(frameRect, 0.00005f, bgTexture, Color(255, 215, 0, 200));
+    }
+
+    // РРєРѕРЅРєР° Р·Р°РєР»РёРЅР°РЅРёСЏ
+    SpellType currentSpell = knownSpells[selectedIndex];
+    if (spellicons[currentSpell].tc) {
+        Rectf iconRect(startX, startY, startX + iconSize, startY + iconSize);
+        EERIEDrawBitmap(iconRect, 0.0001f, spellicons[currentSpell].tc, Color::white);
+    }
+}
+//-----------------------------------------------------------------------------
+// РќРѕРІС‹Р№ РёРЅРІРµРЅС‚Р°СЂСЊ - РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅРѕРµ РјРµРЅСЋ РІРЅРёР·Сѓ СЌРєСЂР°РЅР°
+//-----------------------------------------------------------------------------
+void ARX_INTERFACE_RenderNewInventory() {
+    if (!(player.Interface & INTER_NEW_INVENTORY)) {
+        // РЎР±СЂРѕСЃ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїСЂРµРґРјРµС‚Р° РїСЂРё Р·Р°РєСЂС‹С‚РёРё РјРµРЅСЋ
+        g_offeredItem = nullptr;
+        return;
+    }
+
+    // Р’Р°Р»РёРґР°С†РёСЏ: РµСЃР»Рё РїСЂРµРґРјРµС‚ Р±С‹Р» СѓРЅРёС‡С‚РѕР¶РµРЅ РёР»Рё РІС‹Р±СЂРѕС€РµРЅ
+    if (g_offeredItem) {
+        InventoryPos checkPos = locateInInventories(g_offeredItem);
+        if (!checkPos.container || checkPos.container != entities.player()) {
+            g_offeredItem = nullptr;
+        }
+    }
+
+    // РЎРѕР±РёСЂР°РµРј СЃРїРёСЃРѕРє РїСЂРµРґРјРµС‚РѕРІ РІ РёРЅРІРµРЅС‚Р°СЂРµ
+    std::vector<Entity *> items;
+    for (Entity & entity : entities(IO_ITEM)) {
+        InventoryPos pos = locateInInventories(&entity);
+        if (pos.container && pos.container == entities.player()) {
+            items.push_back(&entity);
+        }
+    }
+
+    if (items.empty()) {
+        return;
+    }
+
+    static int selectedIndex = 0;
+    if (selectedIndex >= (int)items.size()) selectedIndex = 0;
+
+    if (GInput->actionNowPressed(CONTROLS_CUST_SPELL_PREV)) {
+        selectedIndex--;
+        if (selectedIndex < 0) selectedIndex = (int)items.size() - 1;
+    }
+    if (GInput->actionNowPressed(CONTROLS_CUST_SPELL_NEXT)) {
+        selectedIndex++;
+        if (selectedIndex >= (int)items.size()) selectedIndex = 0;
+    }
+
+    // РџР°СЂР°РјРµС‚СЂС‹ РѕС‚СЂРёСЃРѕРІРєРё - РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅРѕРµ РјРµРЅСЋ С‡СѓС‚СЊ РЅРёР¶Рµ РїСЂРёС†РµР»Р°
+    float iconSize = 24.f * g_sizeRatio.x;
+    float spacing = 8.f * g_sizeRatio.x;
+    float menuHeight = iconSize + 20.f * g_sizeRatio.y;
+    float totalWidth = std::min((float)items.size() * (iconSize + spacing) - spacing, g_size.width() * 0.8f);
+    float startX = (g_size.width() - totalWidth) / 2.f;
+    float startY = (g_size.height() / 2.f) + 120.f * g_sizeRatio.y;
+
+    // РџРѕР»СѓРїСЂРѕР·СЂР°С‡РЅС‹Р№ С„РѕРЅ
+    static TextureContainer * bgTexture = nullptr;
+    if (!bgTexture) {
+        bgTexture = TextureContainer::LoadUI("graph/interface/book/spellbook");
+    }
+    if (bgTexture) {
+        Rectf bgRect(startX - 10.f, startY - 10.f, startX + totalWidth + 10.f, startY + menuHeight + 10.f);
+        EERIEDrawBitmap(bgRect, 0.0001f, bgTexture, Color(0, 0, 0, 150));
+    }
+
+    // Р РёСЃСѓРµРј РёРєРѕРЅРєРё РїСЂРµРґРјРµС‚РѕРІ РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅРѕ
+    int visibleItems = std::min((int)items.size(), (int)(totalWidth / (iconSize + spacing)));
+    int startItem = std::max(0, selectedIndex - visibleItems / 2);
+
+    for (int i = 0; i < visibleItems && (startItem + i) < (int)items.size(); i++) {
+        int itemIndex = startItem + i;
+        Entity * item = items[itemIndex];
+        float x = startX + i * (iconSize + spacing);
+        float y = startY + 10.f * g_sizeRatio.y;
+
+        bool isSelected = (itemIndex == selectedIndex);
+
+        // РџРѕРґСЃРІРµС‚РєР° РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїСЂРµРґРјРµС‚Р°
+        if (isSelected && bgTexture) {
+            Rectf highlightRect(x - 3.f, y - 3.f, x + iconSize + 3.f, y + iconSize + 3.f);
+            EERIEDrawBitmap(highlightRect, 0.00005f, bgTexture, Color(255, 215, 0, 150));
+        }
+
+        // РРєРѕРЅРєР° РїСЂРµРґРјРµС‚Р°
+        if (item->m_icon) {
+            Rectf iconRect(x, y, x + iconSize, y + iconSize);
+            // Р•СЃР»Рё РїСЂРµРґРјРµС‚ РІС‹Р±СЂР°РЅ РґР»СЏ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ, СЂРёСЃСѓРµРј РµРіРѕ СЃ Р·РµР»С‘РЅРѕР№ РїРѕРґСЃРІРµС‚РєРѕР№
+            Color iconColor = Color::white;
+            if (g_offeredItem && item == g_offeredItem) {
+                // РџСЂРѕРІРµСЂСЏРµРј, С‡С‚Рѕ РїСЂРµРґРјРµС‚ РІСЃРµ РµС‰Рµ РІ РёРЅРІРµРЅС‚Р°СЂРµ
+                InventoryPos pos = locateInInventories(g_offeredItem);
+                if (pos.container == entities.player()) {
+                    iconColor = Color(100, 255, 100, 255);
+                } else {
+                    g_offeredItem = nullptr;
+                }
+            }
+            EERIEDrawBitmap(iconRect, 0.0001f, item->m_icon, iconColor);
+        }
+    }
+
+    // РћР±СЂР°Р±РѕС‚РєР° РєРЅРѕРїРєРё "РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ" (СЃСЂР°Р·Сѓ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РїСЂРµРґРјРµС‚)
+if (GInput->actionNowPressed(CONTROLS_CUST_USE_ITEM)) {
+    if (selectedIndex < (int)items.size()) {
+        Entity * selectedItem = items[selectedIndex];
+        if (selectedItem) {
+            SendIOScriptEvent(entities.player(), selectedItem, SM_INVENTORYUSE);
+            ARX_SOUND_PlayInterface(g_snd.INVSTD);
+        }
+    }
+}
+
+// РћР±СЂР°Р±РѕС‚РєР° РІС‹Р±РѕСЂР° РїСЂРµРґРјРµС‚Р° РґР»СЏ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ РЅР° С†РµР»Рё (РєРЅРѕРїРєР° G) - РёСЃРїРѕР»СЊР·СѓРµРј COMBINE
+if (GInput->actionNowPressed(CONTROLS_CUST_OFFER_ITEM)) {
+    if (selectedIndex < (int)items.size()) {
+        Entity * selectedItem = items[selectedIndex];
+        if (selectedItem) {
+            // РСЃРїРѕР»СЊР·СѓРµРј СЃС‚Р°СЂСѓСЋ СЃРёСЃС‚РµРјСѓ COMBINE РІРјРµСЃС‚Рѕ g_offeredItem
+            if (COMBINE == selectedItem) {
+                COMBINE = nullptr;
+            } else {
+                COMBINE = selectedItem;
+                updateCombineFlags(COMBINE);
+            }
+            ARX_SOUND_PlayInterface(g_snd.INVSTD);
+        }
+    }
+}
 }

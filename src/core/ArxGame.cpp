@@ -1946,7 +1946,8 @@ void ArxGame::renderLevel() {
 			ARX_MAGICAL_FLARES_Update();
 			g_renderBatcher.render();
 		}
-		
+		ARX_INTERFACE_RenderInstantMagic();
+		ARX_INTERFACE_RenderNewInventory();
 	}
 
 	GRenderer->Clear(Renderer::DepthBuffer);

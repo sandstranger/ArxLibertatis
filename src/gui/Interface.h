@@ -200,4 +200,7 @@ extern bool g_cursorOverBook;
 
 void updateCombineFlagForEntity(Entity * source, Entity * target);
 
+void ARX_INTERFACE_RenderInstantMagic();
+void ARX_INTERFACE_RenderNewInventory();
+
 #endif // ARX_GUI_INTERFACE_H

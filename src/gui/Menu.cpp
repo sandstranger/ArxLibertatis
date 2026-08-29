@@ -96,6 +96,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 extern bool REQUEST_SPEECH_SKIP;
 
+extern Entity * g_itemToUse;
+
+
 ARX_MENU_DATA ARXmenu;
 bool g_canResumeGame = true;
 
@@ -179,6 +182,10 @@ void ARX_Menu_Manage() {
 				} else if((player.Interface & INTER_PLAYERBOOK) || g_note.isOpen()) {
 					g_playerBook.close();
 					ARX_INTERFACE_NoteClose();
+				} else if(g_itemToUse) {
+					// Р•СЃР»Рё РІС‹Р±СЂР°РЅ РїСЂРµРґРјРµС‚ РґР»СЏ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ РЅР° С†РµР»Рё - СЃР±СЂР°СЃС‹РІР°РµРј РІС‹Р±РѕСЂ
+					g_itemToUse = nullptr;
+					ARX_SOUND_PlayInterface(g_snd.MENU_CLICK, Random::getf(0.9f, 1.1f));
 				} else {
 					GRenderer->getSnapshot(savegame_thumbnail, config.interface.thumbnailSize.x, config.interface.thumbnailSize.y);
 					

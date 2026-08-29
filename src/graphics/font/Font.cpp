@@ -365,7 +365,7 @@ Font::TextSize Font::process(int x, int y, std::string_view text, Color color) {
 		m_textures->upload();
 		
 		UseRenderState state(render2D());
-		UseTextureState textureState(TextureStage::FilterNearest, TextureStage::WrapClamp);
+		UseTextureState textureState(TextureStage::FilterLinear, TextureStage::WrapClamp);
 		
 		// Fixed pipeline texture stage operation
 		GRenderer->GetTextureStage(0)->setColorOp(TextureStage::OpDisable);
