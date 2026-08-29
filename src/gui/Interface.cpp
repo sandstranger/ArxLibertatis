@@ -1133,20 +1133,21 @@ void ArxGame::managePlayerControls() {
 	
 	// Checks INVENTORY Key Status.
 	if(GInput->actionNowPressed(CONTROLS_CUST_INVENTORY)) {
-		
-		if (!(player.Interface & INTER_INSTANT_MAGIC)) {
-         if(player.Interface & INTER_COMBATMODE) {
-             ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
-         }
-		
-		bInverseInventory = !bInverseInventory;
-		lOldTruePlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
-		
-		if(!config.input.mouseLookToggle) {
-			bForceEscapeFreeLook = true;
-		}
-		
-	}
+
+        if (!(player.Interface & INTER_INSTANT_MAGIC)) {
+            if (player.Interface & INTER_COMBATMODE) {
+                ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
+            }
+
+            bInverseInventory = !bInverseInventory;
+            lOldTruePlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
+
+            if (!config.input.mouseLookToggle) {
+                bForceEscapeFreeLook = true;
+            }
+
+        }
+    }
 	
 	// Checks BOOK Key Status.
 	if(GInput->actionNowPressed(CONTROLS_CUST_BOOK))
@@ -1883,8 +1884,7 @@ void ArxGame::manageEditorControls() {
 		
 		SendIOScriptEvent(entities.player(), FlyingOverIO, SM_CLICKED);
 		
- 	if(   bOk
- 	   && (FlyingOverIO->ioflags & IO_ITEM)
+ 	if((FlyingOverIO->ioflags & IO_ITEM)
  	   && !(FlyingOverIO->ioflags & IO_MOVABLE)
 		   && !g_playerInventoryHud.containsPos(DANAEMouse)
 		   && !ARX_INTERFACE_MouseInBook()
@@ -2158,6 +2158,7 @@ if (GInput->actionNowPressed(CONTROLS_CUST_SPELL_NEXT)) {
 //-----------------------------------------------------------------------------
 // РќРѕРІС‹Р№ РёРЅРІРµРЅС‚Р°СЂСЊ - РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅРѕРµ РјРµРЅСЋ РІРЅРёР·Сѓ СЌРєСЂР°РЅР°
 //-----------------------------------------------------------------------------
+
 void ARX_INTERFACE_RenderNewInventory() {
     if (!(player.Interface & INTER_NEW_INVENTORY)) {
         // РЎР±СЂРѕСЃ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїСЂРµРґРјРµС‚Р° РїСЂРё Р·Р°РєСЂС‹С‚РёРё РјРµРЅСЋ
@@ -2217,7 +2218,10 @@ void ARX_INTERFACE_RenderNewInventory() {
     }
 
     // Р РёСЃСѓРµРј РёРєРѕРЅРєРё РїСЂРµРґРјРµС‚РѕРІ РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅРѕ
-    int visibleItems = std::min((int)items.size(), (int)(totalWidth / (iconSize + spacing)));
+    int visibleItems = std::max((int)items.size(), (int)(totalWidth / (iconSize + spacing)));
+    if (items.empty()){
+        visibleItems = 0;
+    }
     int startItem = std::max(0, selectedIndex - visibleItems / 2);
 
     for (int i = 0; i < visibleItems && (startItem + i) < (int)items.size(); i++) {
