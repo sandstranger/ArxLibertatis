@@ -212,7 +212,7 @@ constexpr const ActionKey actions[NUM_ACTION_KEY] = {
     ActionKey(Keyboard::Key_N),	// OFFER_ITEM (РєР»Р°РІРёС€Р° G)
 	// COOP_TALK - was on V, which the third person toggle now wants; Z is free
 	// and still under the left hand, where push to talk needs to be
-	ActionKey(Keyboard::Key_O),
+	ActionKey(Keyboard::Key_P),
 	ActionKey(Keyboard::Key_1),      // MMO_SLOT1 - the swing
 	ActionKey(Keyboard::Key_2),      // MMO_SLOT2
 	ActionKey(Keyboard::Key_3),      // MMO_SLOT3
