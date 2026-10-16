@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -57,6 +58,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "script/ScriptEvent.h"
 #include "script/ScriptUtils.h"
 #include "util/Cast.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
 
 
 namespace script {
@@ -252,10 +255,33 @@ public:
 			smooth = test_flag(flg, 's');
 		}
 		
+		// Read the argument before deciding anything. Returning above this line
+		// left the "hide" in the stream to be read as the next command, which
+		// is exactly what the log was reporting as 'unknown command: hide'.
 		std::string command = context.getWord();
-		
+
 		DebugScript(' ' << options << ' ' << command);
-		
+
+		/*
+		 * Hiding is half of a pair, and only half of it can run here.
+		 *
+		 * The SHOW that undoes this sits at the end of the same chain of queued
+		 * script events as the SET_PLAYER_CONTROLS ON - and on a guest sharing
+		 * the host's area that queue is never drained. A guest that hid its
+		 * interface would be left without a cursor or a hand for the rest of
+		 * the session, with no way to ask for it back.
+		 *
+		 * The host is a different case: it drains that queue, so the SHOW does
+		 * arrive. A scene the other player set off is still performed here in
+		 * full, hands and all, and sent over as a viewer copy.
+		 *
+		 * Only hiding is refused. SHOW is always allowed through, whoever asks:
+		 * giving the interface back can never be the thing that strands anyone.
+		 */
+		if(command == "hide" && (coop::isReplica() || !coop::presentsCutscene())) {
+			return Success;
+		}
+
 		if(command == "hide") {
 			g_hudRoot.playerInterfaceFader.requestFade(FadeDirection_Out, smooth);
 		} else if(command == "show") {

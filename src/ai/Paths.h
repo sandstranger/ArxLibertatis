@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -151,6 +152,21 @@ extern std::vector<Zone> g_zones;
 extern std::vector<Path> g_paths;
 
 void ARX_PATH_UpdateAllZoneInOutInside();
+void ARX_PATH_UpdatePlayerZone();
+
+//! The zone the local player is standing in right now, or nullptr.
+[[nodiscard]] Zone * ARX_PATH_GetPlayerZone();
+
+/*!
+ * Fire the zone enter/leave machinery for one entity against one zone.
+ *
+ * Used by co-op to apply the other player's *reported* zone crossings: their
+ * machine knows the exact frame their body crossed, while our replicated copy
+ * of that body trails by a few hundred milliseconds. The reported crossing
+ * runs the same events the local detection would have.
+ */
+void ARX_PATH_EntityEnterZone(Entity * io, Zone * zone);
+void ARX_PATH_EntityLeaveZone(Entity * io, Zone * zone);
 long ARX_PATH_IsPosInZone(const Zone * ap, Vec3f pos);
 void ARX_PATH_ClearAllUsePath();
 void ARX_PATH_ReleaseAllPath();

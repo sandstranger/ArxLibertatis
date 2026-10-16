@@ -1,0 +1,262 @@
+/*
+ * Copyright 2026 kingzmanh
+ *
+ * This file is part of Arx Libertatis.
+ *
+ * Arx Libertatis is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Arx Libertatis is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef ARX_NET_COOPMMO_H
+#define ARX_NET_COOPMMO_H
+
+#include "core/Config.h"
+#include "game/GameTypes.h"
+#include "game/magic/Spell.h"
+#include "math/Angle.h"
+#include "math/Rectangle.h"
+#include "math/Vector.h"
+
+class Entity;
+
+/*!
+ * MMO controls: the camera behind the shoulder, a target that stays picked,
+ * and a bar of twelve keys.
+ *
+ * None of this replaces how Arx plays. Every part of it is off unless
+ * config.input.mmoMode is set, and with it off not one line here changes a
+ * frame - the camera code takes its old branch, the target frame forgets
+ * after a few seconds as it always did, and the number keys still belong to
+ * precast. The point is a second way to play the same game, not a new game.
+ */
+namespace coop {
+
+/*!
+ * \brief Whether MMO controls are offered at all.
+ *
+ * Off: the row is not drawn in the menu, and mmoMode() is false whatever a
+ * config file left behind says - so not one line of the bar, the sticky
+ * target or the key stealing runs, and a player who had it switched on is not
+ * stranded in a mode with no row left to switch off.
+ *
+ * Nothing is deleted. Third person came out of it and is on its own switch
+ * now; the rest is kept whole behind this one word, because "hidden" and
+ * "gone" are different things and only the first can be undone in a second.
+ */
+constexpr bool MmoControlsOffered = false;
+
+//! The whole of this file does nothing unless this is true.
+[[nodiscard]] bool mmoMode();
+
+/*!
+ * \brief MMO's own third person - the mode its CONTROLS answer to.
+ *
+ * Anything that changes what a key or a mouse button DOES asks this, never
+ * thirdPerson(). The plain camera puts the view behind the body and changes
+ * nothing else, so a gate on the wrong one of these is the difference between
+ * playing Arx from behind and not being able to turn around.
+ */
+[[nodiscard]] bool mmoThird();
+
+//! Step the plain camera in or out, as the third person key does.
+void togglePlainThirdPerson();
+
+/*!
+ * True when MMO mode has taken this action's key for itself.
+ *
+ * The bar defaults to 1 2 3 4 5 6 7 8 9 0 - =, and the original game already
+ * spends five of those on precast, cancelling a spell and turning pages, plus
+ * Tab on drawing the weapon. Rather than move anybody's bindings, the handlers
+ * for those actions ask this first: with MMO mode on, whoever shares a key
+ * with the bar, the camera or targeting stands down for as long as it is on.
+ * Rebind either side in the options and the answer follows, with no table here
+ * to keep in step.
+ */
+[[nodiscard]] bool mmoTakesOver(ControlAction action);
+
+// -- the camera ------------------------------------------------------------
+
+/*!
+ * Called first thing in the camera update. Returns true when this frame's
+ * camera belongs to MMO third person, and releases the engine's external
+ * view flag on the frame the mode is switched off.
+ */
+[[nodiscard]] bool beginCameraFrame();
+
+//! True while the camera is out behind the body: the crosshair goes away, and the bow aims from the eye.
+[[nodiscard]] bool thirdPerson();
+
+/*!
+ * Where the camera looks, which in third person is its own affair.
+ *
+ * This is the whole point of the MMO camera: the view has a heading of its
+ * own instead of being another name for which way the character is facing.
+ * The character can be turned to face what it is casting at, or swung round
+ * by auto-attack, and the picture on screen does not move - the same
+ * separation every MMO has and Arx never needed, because in first person the
+ * two are necessarily the same thing.
+ */
+[[nodiscard]] Anglef cameraAngle();
+
+/*!
+ * The mouse is turning something this frame. True when the whole turn was
+ * taken by the camera and the body must not move; false to let the engine's
+ * own mouse-look run on and turn the character as well.
+ *
+ * \param keyTurn the turn came from the turn-left/turn-right keys rather than
+ *                the mouse. Those turn the character, and the camera goes
+ *                with them: a turn the player asked for by hand takes the
+ *                view, a turn the game made for them (aiming a spell) does not.
+ */
+[[nodiscard]] bool mmoTurn(const Vec2f & rotation, bool keyTurn);
+
+//! True while a mouse button is held for the camera: the cursor is grabbed for as long as it lasts.
+[[nodiscard]] bool cameraDragging();
+
+/*!
+ * A and D turn the character instead of stepping sideways.
+ *
+ * True whenever the camera is out and the right button is not held, which is
+ * what an MMO does and for a good reason: with the right button down the
+ * mouse is already turning you, so the keys are free to be something more
+ * useful. In first person Arx keeps its own strafe, untouched.
+ */
+[[nodiscard]] bool strafeIsTurn();
+
+//! Both buttons held runs forward: the way an MMO lets you travel without the keyboard at all.
+[[nodiscard]] bool mouseRunForward();
+
+/*!
+ * Takes over the mouse buttons while the camera is out.
+ *
+ * Returns true when it has dealt with them, and the engine's own handling is
+ * then skipped for that frame. See the definition for why a click has to be
+ * held back rather than acted on at once.
+ */
+bool mmoMouseButtons();
+
+//! Where the camera goes, given the first-person eye and the way the player faces.
+[[nodiscard]] Vec3f thirdPersonCameraPos(const Vec3f & eye, const Anglef & angle);
+
+//! Remember the first-person eye, which the camera has left behind.
+void notePlayerEye(const Vec3f & eye);
+
+/*!
+ * The player's eye, not the camera.
+ *
+ * Aiming a bow raycasts from the camera, which in third person is a couple of
+ * hundred units behind the head and would send arrows off from over the
+ * player's shoulder. Anything that means "where the player looks from" asks
+ * for this instead.
+ */
+[[nodiscard]] Vec3f eyePos();
+
+// -- the target ------------------------------------------------------------
+
+//! Tab, or a click: the next living creature in front becomes the target.
+void cycleTarget();
+
+// -- the frame -------------------------------------------------------------
+
+//! Once a frame before the camera: the wheel, the bar keys, auto-attack, the drag.
+void updateMmo();
+
+//! Drawn with the rest of the HUD, under the cursor and over the book.
+void drawActionBar();
+
+/*!
+ * True while auto-attack wants the attack button down.
+ *
+ * The combat animations are driven entirely by whether the button is held -
+ * hold to wind up, let go to strike - so auto-attack does not simulate a
+ * swing, it holds and releases the same button a player would, and the game
+ * works out the blow exactly as it always does.
+ */
+[[nodiscard]] bool autoAttackHeld();
+
+// -- filling the bar -------------------------------------------------------
+
+//! A spell was picked up off the open spell book page.
+void beginSpellDrag(SpellType spell);
+
+//! Drawn last of all, following the cursor.
+void drawSpellDrag();
+
+// -- filling the bar from the book -----------------------------------------
+
+/*!
+ * A new character: back to first person, and a bar with nothing on it but
+ * the swing.
+ *
+ * The bar otherwise lives in the config and outlives a character, which is
+ * right for a habit and wrong for a new game - nobody wants to begin with
+ * spells they have not learned sitting on their keys.
+ */
+void newGame();
+
+/*!
+ * rief Put the camera back at the player's own eyes.
+ *
+ * Arriving in a world - a new quest, or a save being loaded - starts in first
+ * person whatever the third person setting says. The setting decides whether
+ * the camera CAN come out, not where it is the moment you get there, and
+ * opening a save already looking at your own back is disorienting in a way
+ * that choosing it deliberately is not. V or the wheel takes you out again.
+ */
+void enterWorldAtEyes();
+
+//! How many keys the bar has.
+[[nodiscard]] size_t barSlots();
+
+//! Which key holds this spell, or -1; SPELL_NONE asks after the swing.
+[[nodiscard]] int barSlotOf(SpellType spell);
+
+//! Put a spell on a key, or the swing when the spell is SPELL_NONE.
+void putOnBar(size_t index, SpellType spell);
+
+//! Take whatever is on a key off it.
+void clearBarSlot(size_t index);
+
+/*!
+ * Which bar key went down this frame, or -1.
+ *
+ * The book's action page asks while it draws, so a key pressed with the
+ * cursor on a spell puts that spell there. With the book open the keys only
+ * fill the bar; they never fire it.
+ */
+[[nodiscard]] int barKeyPressed();
+
+//! Draw a spell the way the bar draws it: our painted icon when there is one.
+void drawBarSpell(const Rectf & rect, SpellType spell, bool castable);
+
+//! Draw the swing the way the bar draws it.
+void drawBarAttack(const Rectf & rect, bool lit);
+
+//! Draw one of the bar's keys as it stands: its socket, and whatever is on it.
+void drawBarSocket(const Rectf & rect, size_t index);
+
+//! True while the cursor sits on the bar: a click there is about the bar, not about the world behind it.
+[[nodiscard]] bool cursorOverActionBar();
+
+/*!
+ * The bar's left edge in pixels while it is drawn, else 0.
+ *
+ * The bag sits along the bottom middle of the screen and so does the bar, so
+ * one of them has to move; this is what the inventory measures itself against
+ * to stand beside it rather than under it.
+ */
+[[nodiscard]] float actionBarLeft();
+
+} // namespace coop
+
+#endif // ARX_NET_COOPMMO_H

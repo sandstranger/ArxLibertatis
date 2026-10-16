@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -43,6 +44,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 // Copyright (c) 1999-2000 ARKANE Studios SA. All rights reserved
 
 #include "game/Spells.h"
+#include "game/magic/StudioSpells.h"
 
 #include <algorithm>
 #include <cmath>
@@ -116,6 +118,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "math/Angle.h"
 #include "math/Vector.h"
 
+#include "net/CoopNet.h"
+
 #include "physics/Collisions.h"
 
 #include "platform/Platform.h"
@@ -128,6 +132,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "script/Script.h"
 
 #include "util/Cast.h"
+#include "net/CoopWorld.h"
+#include "net/CoopPlayer.h"
 
 
 bool WILLRETURNTOFREELOOK = false;
@@ -694,6 +700,12 @@ float ARX_SPELLS_GetManaCost(SpellType spell, float casterLevel) {
 	
 	// TODO this data should not be hardcoded
 	
+	// The written-down spells are not in this switch and never will be:
+	// what they cost is in the file they come from.
+	if(isStudioSpell(spell)) {
+		return studioSpellManaCost(spell);
+	}
+	
 	switch(spell)  {
 		
 		default:                          return   0.f;
@@ -755,6 +767,12 @@ float ARX_SPELLS_GetManaCost(SpellType spell, float casterLevel) {
 }
 
 static std::unique_ptr<Spell> createSpellInstance(SpellType type) {
+	
+	// The hundred written-down spells share one class: what each of them
+	// is comes from the file, not from the type.
+	if(isStudioSpell(type)) {
+		return std::make_unique<StudioSpell>();
+	}
 	
 	switch(type) {
 		case SPELL_NONE: return { };
@@ -999,11 +1017,48 @@ bool ARX_SPELLS_Launch(SpellType typ, Entity & source, SpellcastFlags flags, lon
 	}
 	
 	spell->Launch();
-	
+
 	Spell & addedSpell = spells.addSpell(std::move(spell));
-	
+
+	/*
+	 * Tell the other player about anything we cast ourselves. Their machine
+	 * launches the same spell from our body, so a fireball we throw is a
+	 * fireball they see coming - and one that can burn them, since on their
+	 * side it is a real spell and not a light show.
+	 */
+	if(source == *entities.player()) {
+		coop::reportSpell(int(addedSpell.m_type), addedSpell.m_level, u32(addedSpell.m_flags),
+		                  toMsi(addedSpell.m_launchDuration),
+		                  target ? std::string(target->idString()) : std::string());
+	} else if(!coop::isApplyingRemote() && target && coop::isAvatarEntity(target)
+	          && !coop::isAvatarEntity(&source)) {
+		/*
+		 * A creature cast this AT the other player's body - but the body is a
+		 * puppet, and paralysis, slowness or a curse laid on it never reaches
+		 * the human behind it. For the status spells, relay the cast itself:
+		 * their machine launches the same spell from the same creature at
+		 * their real player - full vanilla effect, visuals and all. Damage
+		 * spells stay off this path: their harm already travels through the
+		 * hit interception, and relaying them too would strike twice.
+		 */
+		switch(addedSpell.m_type) {
+			case SPELL_PARALYSE:
+			case SPELL_SLOW_DOWN:
+			case SPELL_CONFUSE:
+			case SPELL_CURSE:
+			case SPELL_MANA_DRAIN:
+			case SPELL_LOWER_ARMOR: {
+				coop::reportSpell(int(addedSpell.m_type), addedSpell.m_level,
+				                  u32(addedSpell.m_flags), toMsi(addedSpell.m_launchDuration),
+				                  "player", std::string(source.idString()));
+				break;
+			}
+			default: break;
+		}
+	}
+
 	SPELLCAST_Notify(addedSpell);
-	
+
 	if(flags & SPELLCAST_FLAG_ORPHAN) {
 		addedSpell.m_caster = EntityHandle();
 	}

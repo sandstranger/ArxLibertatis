@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -93,6 +94,25 @@ enum ControlAction {
 	CONTROLS_CUST_USE_ITEM,
 	CONTROLS_CUST_NEW_INVENTORY,
 	CONTROLS_CUST_OFFER_ITEM,	
+	//! Hold to speak to the other player. Added last so no existing binding moves.
+	CONTROLS_CUST_COOP_TALK,
+	/*
+	 * The MMO action bar and its camera, added after everything else for the
+	 * same reason: a config written by an older build is read back by index,
+	 * so anything inserted above here would silently move a player's keys.
+	 *
+	 * The five slots default to 1 2 3 4 5, and the original game already
+	 * spends four of those on precast and cancel-spell. Nothing is taken
+	 * away: those keys only change hands while MMO mode is on, and
+	 * mmoTakesOver() in CoopMmo.cpp is the single place that decides it.
+	 */
+	CONTROLS_CUST_MMO_SLOT1,
+	CONTROLS_CUST_MMO_SLOT2,
+	CONTROLS_CUST_MMO_SLOT3,
+	CONTROLS_CUST_MMO_SLOT4,
+	CONTROLS_CUST_MMO_SLOT5,
+	CONTROLS_CUST_MMO_THIRDPERSON,
+	CONTROLS_CUST_MMO_TARGET,
 	NUM_ACTION_KEY
 };
 
@@ -111,6 +131,21 @@ enum QuickLevelTransition {
 	NoQuickLevelTransition = 0,
 	JumpToChangeLevel = 1,
 	ChangeLevelImmediately = 2,
+};
+
+/*!
+ * Who watches a story moment when two people share one world.
+ *
+ * Only meaningful while both players are in the same area: apart, each machine
+ * runs its own half of the world and plays its own scenes, which is already
+ * exactly right. Together, only the host simulates, so a scene set off by
+ * either of them fires there and somebody has to decide whose screen it is.
+ */
+enum CutsceneAudience {
+	CutscenesForTrigger = 0, //!< whoever walked into it, and only them
+	CutscenesForBoth = 1,
+	CutscenesForHost = 2,
+	CutscenesForGuest = 3,
 };
 
 enum AutoReadyWeapon {
@@ -229,6 +264,25 @@ public:
 		bool borderTurning;
 		bool useAltRuneRecognition;
 		bool improvedBowAim;
+		int enemyHealth; //!< how much life creatures get: 1 normal, 2 double, 3 triple
+		bool creatureBars; //!< health bars with names over creatures in view
+		bool targetFrame; //!< the top-left frame for the creature being fought
+		bool mmoMode; //!< third-person camera, a sticky target and the action bar
+		/*
+		 * The plain camera, without any of the rest of it.
+		 *
+		 * People asked to see the character and keep playing Arx: mouselook,
+		 * click to use, the cursor and its tooltips, all exactly as shipped.
+		 * mmoMode brings its own camera AND its own controls; this brings only
+		 * the camera, so the two are separate switches. Either one puts the
+		 * view behind the body; only mmoMode changes what the keys do.
+		 */
+		bool thirdPerson;
+		int camDistance; //!< how far behind the body the plain camera sits
+		int camHeight;   //!< and how far above the eyes
+		int camSide;     //!< and how far to the side, so the body is not in the way
+		//! The five bar slots, as spell names, comma separated. "attack" is auto-attack, "" is empty.
+		std::string actionBar;
 		QuickLevelTransition quickLevelTransition;
 		bool allowConsole;
 		
@@ -254,7 +308,9 @@ public:
 		std::string debug; //!< Logger debug levels.
 		
 		std::string realtimeOverride;
-		
+
+		CutsceneAudience cutscenes;
+
 	} misc;
 	
 	bool setActionKey(ControlAction actionId, size_t index, InputKeyId key);

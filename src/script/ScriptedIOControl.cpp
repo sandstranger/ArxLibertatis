@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -61,6 +62,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "gui/Interface.h"
 #include "io/resource/ResourcePath.h"
 #include "physics/Collisions.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+
 #include "scene/Interactive.h"
 #include "scene/LinkedObject.h"
 #include "script/ScriptUtils.h"
@@ -167,6 +171,23 @@ public:
 			}
 		}
 		
+		/*
+		 * Tell the other player it exists.
+		 *
+		 * This is how a thing becomes another thing in Arx - raw bread becomes
+		 * bread, dough becomes a pie - and it happens on whichever machine owns
+		 * the area. The other one has just watched the old item disappear and
+		 * has no idea anything replaced it, so the cooked food is invisible
+		 * there until something else forces it to be described.
+		 *
+		 * Only when it ends up lying in the world. If the init script or the
+		 * re-insert above put it in someone's pack, announcing it as a spawn
+		 * would drop a second copy on the floor at the other end.
+		 */
+		if(ioo->show == SHOW_FLAG_IN_SCENE && !locateInInventories(ioo)) {
+			coop::announceSpawn(*ioo);
+		}
+
 		return removed ? AbortRefuse : Success;
 	}
 	
@@ -501,16 +522,29 @@ public:
 		bool confirm = true;
 		
 		bool teleport_player = false, initpos = false;
+		long angle = -1;
 		HandleFlags("alnpi") {
-			
-			long angle = -1;
-			
+
+			if(flg & flag('p')) {
+				// grabbing "the player" from a cause-less run: the player who
+				// walked up owns whatever scene this is (no-op otherwise)
+				coop::adoptProximitySceneOwner(context.getEntity());
+			}
+
 			if(flg & flag('a')) {
 				float fangle = context.getFloat();
 				angle = static_cast<long>(fangle);
 				if(!(flg & flag('l'))) {
-					player.desiredangle.setYaw(fangle);
-					player.angle.setYaw(fangle);
+					/*
+					 * The facing is part of the move. A player-move that
+					 * belongs to the partner's scene must not turn this
+					 * machine's player either - it rides the redirect below.
+					 */
+					if(!((flg & flag('p')) && coop::isPartnerScriptContext()
+					     && !coop::partyFollowsMover(context.getEntity()))) {
+						player.desiredangle.setYaw(fangle);
+						player.angle.setYaw(fangle);
+					}
 				}
 			}
 			
@@ -528,6 +562,34 @@ public:
 					return Failed;
 				}
 				
+				/*
+				 * These globals are the travel state of THIS machine's player.
+				 * When the second player is the one standing in the door, the
+				 * order belongs on their machine, carrying the same area,
+				 * marker and angle - and this machine's player stays put.
+				 *
+				 * Unless a story mover is doing the moving - a capture, the
+				 * snake-women's send, the endgame. Those assume one hero and
+				 * would strand the other player mid-story, so the party
+				 * travels together: the same order goes to both machines.
+				 */
+				bool party = coop::partyFollowsMover(context.getEntity());
+
+				if(coop::isPartnerScriptContext()) {
+					LogWarning << "[coop-chain] teleport command (for the PARTNER): level "
+					           << level << " target '" << target << "'";
+					coop::sendTravelOrder(u32(level), target, angle, confirm);
+					coop::noteTravelFunnel(context.getEntity());
+					if(!party) {
+						return Success;
+					}
+					// fall through: this machine's player takes the same trip
+				} else if(party) {
+					coop::sendTravelOrder(u32(level), target, angle, confirm);
+				}
+
+				LogWarning << "[coop-chain] teleport command (local): level " << level
+				           << " target '" << target << "'";
 				g_teleportToArea = AreaId(u32(level));
 				TELEPORT_TO_POSITION = target;
 				
@@ -575,9 +637,28 @@ public:
 			}
 			
 			Vec3f pos = GetItemWorldPosition(t);
-			
+
 			if(teleport_player) {
+				if(coop::redirectPartnerTeleport(context.getEntity(), pos, angle)) {
+					// their scene's move; our player was never part of it
+					return Success;
+				}
+				/*
+				 * A marker sending the player to itself is how a level places
+				 * whoever turns up in it - level 15's marker_0391 does exactly
+				 * this the first time the level runs its scripts, which is why
+				 * a warp into a level never visited lands at the entrance and
+				 * a second warp, with no scripts left to run, lands properly.
+				 * An arrival that named its own spot has already been placed.
+				 */
+				if(t == io && deliberateArrivalHolds()) {
+					LogWarning << "[coop-chain] '" << io->idString()
+					           << "' would place us at the level entrance - "
+					              "staying where we arrived";
+					return Success;
+				}
 				ARX_INTERACTIVE_Teleport(entities.player(), pos);
+				coop::reportPartyTeleport(context.getEntity(), pos);
 				return Success;
 			}
 			
@@ -598,7 +679,20 @@ public:
 			
 			if(teleport_player) {
 				Vec3f pos = GetItemWorldPosition(io);
-				ARX_INTERACTIVE_Teleport(entities.player(), pos);
+				// the same placement, written the other way round: an entity
+				// sending the player to where the entity itself started
+				if(deliberateArrivalHolds()) {
+					LogWarning << "[coop-chain] '" << io->idString()
+					           << "' would place us at the level entrance - "
+					              "staying where we arrived";
+					return Success;
+				}
+				if(coop::redirectPartnerTeleport(io, pos, angle)) {
+					// their scene's move; our player was never part of it
+				} else {
+					ARX_INTERACTIVE_Teleport(entities.player(), pos);
+					coop::reportPartyTeleport(io, pos);
+				}
 			} else if(!(io->ioflags & IO_NPC) || io->_npcdata->lifePool.current > 0) {
 				io->setOwner(nullptr);
 				if(io->show != SHOW_FLAG_HIDDEN && io->show != SHOW_FLAG_MEGAHIDE) {

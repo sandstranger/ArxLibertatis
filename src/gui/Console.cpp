@@ -1,5 +1,6 @@
 /*
  * Copyright 2016-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -104,6 +105,13 @@ bool ScriptConsole::keyPressed(Keyboard::Key key, KeyModifiers mod) {
 	switch(key) {
 		
 		case Keyboard::Key_Escape: {
+			close();
+			return true;
+		}
+
+		// The same key that opens it closes it. Escape is meant to work too, but
+		// it has to get past everything else that wants Escape first; ` does not.
+		case Keyboard::Key_Grave: {
 			close();
 			return true;
 		}
@@ -418,7 +426,23 @@ void ScriptConsole::execute() {
 	// TODO Allow the "context.command" syntax in scripts too
 	size_t pos = 0;
 	ScriptEvent::resume(&es, entity, pos);
-	
+
+	/*
+	 * A teleport typed here has to carry itself the rest of the way.
+	 *
+	 * "teleport -l 10 MARKER_0033" only arms the destination; the travel is
+	 * consumed by ArxGame once CHANGE_LEVEL_ICON says the player agreed to it,
+	 * and that agreement normally comes from clicking the icon a DOOR puts on
+	 * screen. Typed into the console there is no door and no icon, so the
+	 * destination just sat there and nothing happened.
+	 *
+	 * Only console-issued travel is confirmed this way: doors still ask first.
+	 */
+	if(g_teleportToArea) {
+		CHANGE_LEVEL_ICON = ChangeLevelNow;
+		close();   // it is about to load a level; do not do that behind a console
+	}
+
 }
 
 bool ScriptConsole::addContextSuggestion(void * self, std::string_view suggestion) {

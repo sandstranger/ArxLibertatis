@@ -43,6 +43,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "animation/AnimationRender.h"
 
+#include "game/Inventory.h"
+#include "game/magic/StudioWorld.h"
+
 #include <stddef.h>
 #include <cstdlib>
 #include <cstring>
@@ -69,6 +72,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/Math.h"
 #include "graphics/Renderer.h"
 #include "graphics/Vertex.h"
+#include "graphics/data/AttachTurn.h"
 #include "graphics/data/Mesh.h"
 #include "graphics/data/MeshManipulation.h"
 #include "graphics/data/TextureContainer.h"
@@ -365,7 +369,13 @@ void Cedric_ApplyLightingFirstPartRefactor(Entity & io) {
 							}
 						} else {
 							io.sfx_flag &= ~SFX_TYPE_YLSIDE_DEATH;
-							ARX_INTERACTIVE_DestroyIOdelayed(&io);
+							if(studioWorldKeepsBody(io)) {
+								// The mod's world edits asked for this body to stay: a
+								// corpse to open, given its pack and dressed next frame.
+								studioWorldBodyKept(io);
+							} else {
+								ARX_INTERACTIVE_DestroyIOdelayed(&io);
+							}
 						}
 					}
 				}
@@ -1100,8 +1110,16 @@ static void Cedric_AnimateDrawEntityRender(EERIE_3DOBJ * eobj, const Vec3f & pos
 			continue;
 		}
 		
+		/*
+		 * The point says where, the bone says which way - and then, if the
+		 * model asked for one, a turn of its own on top. Without that last
+		 * part a body whose hand is modelled at a different angle from the
+		 * hero's carries every weapon off at that angle for ever, and there
+		 * is nothing in the model file that can be moved to correct it.
+		 */
 		TransformInfo t(eobj->vertexWorldPositions[link.lidx].v,
-		                eobj->m_skeleton->bones[link.lgroup].anim.quat,
+		                eobj->m_skeleton->bones[link.lgroup].anim.quat
+		                * attachturn::get(eobj, link.lidx),
 		                link.io ? link.io->scale : 1.f);
 		t.pos = t(link.obj->vertexlist[link.obj->origin].v - link.obj->vertexlist[link.lidx2].v);
 		

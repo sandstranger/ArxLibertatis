@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -91,6 +92,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "scene/Interactive.h"
 #include "scene/Light.h"
 #include "scene/Tiles.h"
+#include "net/CoopNet.h"
 
 
 static const size_t MAX_PARTICLES = 2200;
@@ -237,6 +239,11 @@ static void ARX_PARTICLES_Spawn_Blood3(const Vec3f & pos, float dmgs, Color col,
 
 
 void ARX_PARTICLES_Spawn_Blood2(const Vec3f & pos, float dmgs, Color col, Entity * io) {
+
+	// A fight's blood belongs on both screens.
+	if(io) {
+		coop::broadcastBlood2(pos, dmgs, col.toRGBA().t, io->idString());
+	}
 	
 	bool isNpc = io && (io->ioflags & IO_NPC);
 	
@@ -295,6 +302,9 @@ void ARX_PARTICLES_Spawn_Blood(const Vec3f & pos, float dmgs, EntityHandle sourc
 	if(!sourceIo) {
 		return;
 	}
+
+	// A fight's blood belongs on both screens.
+	coop::broadcastBlood(pos, dmgs, sourceIo->idString());
 	
 	float nearest_dist = std::numeric_limits<float>::max();
 	VertexId nearest;
@@ -912,7 +922,15 @@ void TreatBackgroundActions() {
 			continue;
 		}
 		
-		if((light.extras & EXTRAS_SPAWNFIRE) && light.m_ignitionStatus) {
+		/*
+		 * Burning people is the authority's business, everything else is not.
+		 *
+		 * The rest of this function is what a fire looks and sounds like, and
+		 * both players need that. The damage it deals belongs to whoever is
+		 * simulating the area - registered on a replica too, a player standing
+		 * in a fire would be hurt twice.
+		 */
+		if((light.extras & EXTRAS_SPAWNFIRE) && light.m_ignitionStatus && !coop::isReplica()) {
 			Spell * spell = nullptr; // TODO create a real spell for this?
 			DamageParameters & damage = damageGet(spell, light.m_damage);
 			damage.radius = light.ex_radius;

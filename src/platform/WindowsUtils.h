@@ -1,5 +1,6 @@
 /*
  * Copyright 2015-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -73,6 +74,15 @@ public:
 	explicit WideString(size_t size) : m_size(0) { resize(size); }
 	WideString() : m_size(0) { m_static[0] = '\0'; }
 	
+	/*
+	 * WideString holds its buffer in a union containing a std::wstring, so the
+	 * compiler cannot generate these: it has no way to know which member is live.
+	 * Without them the class is uncopyable and anything returning one by value -
+	 * getSystemDir() among others - fails to compile.
+	 */
+	WideString(const WideString & other);
+	WideString(WideString && other) noexcept;
+
 	~WideString() { if(dynamic()) { str().~DynamicType(); } }
 	
 	WCHAR * data() { return dynamic() ? str().data() : m_static; }

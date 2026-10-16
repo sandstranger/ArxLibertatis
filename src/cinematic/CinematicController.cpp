@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -18,6 +19,8 @@
  */
 
 #include "cinematic/CinematicController.h"
+
+#include <cstdlib>
 
 #include <string>
 
@@ -41,6 +44,7 @@
 #include "input/Input.h"
 
 #include "window/RenderWindow.h"
+#include "net/CoopNet.h"
 
 enum CinematicState {
 	Cinematic_Stopped,
@@ -63,6 +67,11 @@ void cinematicInit() {
 void cinematicDestroy() {
 	delete ControlCinematique, ControlCinematique = nullptr;
 }
+
+bool g_noCinematics = []() {
+	const char * env = std::getenv("ARX_NO_CINE");
+	return env && *env && *env != '0';
+}();
 
 void cinematicPrepare(std::string_view name, bool preload) {
 
@@ -91,6 +100,23 @@ void cinematicLaunchWaiting() {
 
 	// A cinematic is waiting to be played...
 	if(WILL_LAUNCH_CINE.empty()) {
+		return;
+	}
+
+	/*
+	 * The guest never plays lockout cinematics. Story beats belong to the
+	 * host's screen; on the guest they arrive by side effect of shared state
+	 * (joining a fresh game replayed the opening dream over the player, with
+	 * their controls locked under it). Skipping means performing the ENDING
+	 * instantly - the scripts that froze the player are waiting for
+	 * SM_CINE_END to let go, and they get it on the spot.
+	 */
+	if(coop::isGuest() && coop::isPlaying() && !CINE_PRELOAD) {
+		LogInfo << "[coop] skipping cinematic " << WILL_LAUNCH_CINE << " on the guest";
+		LAST_LAUNCHED_CINE = WILL_LAUNCH_CINE;
+		WILL_LAUNCH_CINE.clear();
+		ARX_SPEECH_Reset();
+		SendMsgToAllIO(nullptr, SM_CINE_END, LAST_LAUNCHED_CINE);
 		return;
 	}
 

@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -78,6 +79,52 @@ extern Entity * COMBINE;
 extern res::path LastLoadedScene;
 
 extern AreaId g_teleportToArea;
+
+/*!
+ * A place to come back to, set by the "here" console command.
+ *
+ * Travel normally lands on a MARKER, and there is never a marker where you
+ * happen to be standing - so returning to a spot needs the exact position
+ * carried across the level change and applied once the new level is up.
+ */
+struct RememberedSpot {
+	AreaId area;
+	Vec3f pos;
+	float yaw = 0.f;
+	bool valid = false;
+	//! Set while a return is in flight, so the arrival uses pos instead of a marker.
+	bool pending = false;
+};
+extern RememberedSpot g_rememberedSpot;
+
+/*!
+ * Where the level itself would have started us, and whether we chose otherwise.
+ *
+ * A level places arriving players on its own, and it does that after the
+ * arrival, not before: level 15's marker_0391 runs TELEPORT -P on itself the
+ * first time the level is loaded, which is how everyone who walks in ends up at
+ * the entrance. An arrival that named its own spot - the "warp" and "back"
+ * commands, a summoning spell - has already been placed by then, so that one
+ * teleport lands on top of it and drags the player to the door. It only happens
+ * on a first visit, because a level restored from a save does not run its
+ * scripts again, which is why warping a second time appears to work.
+ *
+ * So a deliberate arrival is remembered for a few seconds, and the one thing
+ * that looks like a level placing its own arrivals is let go of: a marker
+ * teleporting the player onto itself. Nothing else in the game moves a player
+ * that way - a trap, a story move, the snake women's send all name somewhere
+ * other than the entity doing the sending - so every other teleport still
+ * lands, and outside those few seconds nothing changes at all.
+ */
+struct DeliberateArrival {
+	Vec3f spot = Vec3f(0.f);
+	PlatformInstant until = PlatformInstant(0);
+	bool armed = false;
+};
+extern DeliberateArrival g_deliberateArrival;
+
+//! True while an arrival that named its own spot should not be overruled.
+bool deliberateArrivalHolds();
 extern std::string TELEPORT_TO_POSITION;
 
 extern float PULSATE;
@@ -120,6 +167,10 @@ extern Vec3f LastValidPlayerPos;
 void SetEditMode();
 
 void DANAE_StartNewQuest();
+extern bool START_NEW_QUEST;
+
+namespace fs { class path; }
+void ARX_RequestLoadSaveFile(const fs::path & savefile);
 bool AdjustUI();
 
 void levelInit();

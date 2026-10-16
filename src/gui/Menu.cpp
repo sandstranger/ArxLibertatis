@@ -64,6 +64,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/Localisation.h"
 
 #include "game/Player.h"
+#include "game/EntityManager.h"
+#include "game/Equipment.h"
 
 #include "gui/CharacterCreation.h"
 #include "gui/Credits.h"
@@ -101,6 +103,7 @@ extern Entity * g_itemToUse;
 
 ARX_MENU_DATA ARXmenu;
 bool g_canResumeGame = true;
+bool g_ironman = false;
 
 void ARX_Menu_Resources_Release() {
 
@@ -132,7 +135,13 @@ void ARX_MENU_Clicked_NEWQUEST() {
 	ARX_PLAYER_Start_New_Quest();
 	g_playerBook.forcePage(BOOKMODE_STATS);
 	player.skin = 0;
-	ARX_PLAYER_Restore_Skin();
+	player.bodyKind = BodyHuman;
+	// Rebuilt, not repainted: the last character may have left another head shape on the mesh
+	if(entities.get(EntityHandle_Player)) {
+		ARX_EQUIPMENT_RecreatePlayerMesh();
+	} else {
+		ARX_PLAYER_Restore_Skin();
+	}
 	ARXmenu.requestMode(Mode_CharacterCreation);
 }
 

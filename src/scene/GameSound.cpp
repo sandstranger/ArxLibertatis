@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -77,6 +78,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "scene/Interactive.h"
 
 #include "util/String.h"
+#include "net/CoopNet.h"
 
 #ifdef ANDROID
 #include "gui/Menu.h"
@@ -441,6 +443,10 @@ void ARX_SOUND_PlayCollision(Material mat1, Material mat2, float volume, float p
 	if(mat1 == MATERIAL_NONE || mat2 == MATERIAL_NONE)
 		return;
 
+	// Before the local audibility checks: OUR camera may be far away while the
+	// other player stands right next to the impact.
+	coop::broadcastCollisionMats(u8(mat1), u8(mat2), volume, power, position);
+
 	if(mat1 == MATERIAL_WATER || mat2 == MATERIAL_WATER)
 		ARX_PARTICLES_SpawnWaterSplash(position);
 
@@ -481,6 +487,10 @@ void ARX_SOUND_PlayCollision(std::string_view name1, std::string_view name2, flo
 	
 	if(name1.empty() || name2.empty())
 		return;
+
+	// Before the local audibility checks: OUR camera may be far away while the
+	// other player stands right next to the impact.
+	coop::broadcastCollisionNames(name1, name2, volume, power, position);
 	
 	if(name2 == "water")
 		ARX_PARTICLES_SpawnWaterSplash(position);

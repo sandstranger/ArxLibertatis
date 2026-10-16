@@ -1,5 +1,6 @@
 /*
  * Copyright 2014-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -58,6 +59,9 @@
 #include "input/Input.h"
 
 #include "math/RandomVector.h"
+
+#include "net/CoopMmo.h"
+#include "net/CoopPlayer.h"
 
 #include "scene/GameSound.h"
 #include "scene/Interactive.h"
@@ -1481,7 +1485,17 @@ void HudRoot::draw() {
 		manaGauge.draw();
 		
 		healthGauge.draw();
-		
+
+		// The other player's life orb, stacked on top of this one. Drawn here,
+		// inside the interface's own render pass, because these gauges are
+		// alpha-cut textures: outside it they come out as flat pictures that
+		// never drain.
+		coop::drawPartnerHealthOrb(healthGauge.rect());
+		coop::drawCreatureHealthBars();
+		coop::drawTargetFrame();
+		coop::drawActionBar();
+		coop::drawSpellDrag();
+
 		if(bRenderInCursorMode) {
 			if(!MAGICMODE) {
 				mecanismIcon.draw();

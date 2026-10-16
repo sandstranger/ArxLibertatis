@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -23,6 +24,8 @@ namespace logger {
 
 void File::log(const Source & file, int line, Logger::LogLevel level, std::string_view str) {
 	format(ofs, file, line, level, str);
+	// Flush per line: a crashing process must not take its last words with it.
+	ofs.flush();
 }
 
 void File::flush() {

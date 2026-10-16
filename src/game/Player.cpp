@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -65,6 +66,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/Localisation.h"
 #include "core/GameTime.h"
 #include "core/Core.h"
+#include "core/Config.h"
 
 #include "game/Damage.h"
 #include "game/EntityManager.h"
@@ -75,6 +77,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "game/NPC.h"
 #include "game/effect/Quake.h"
 #include "game/magic/Precast.h"
+#include "game/magic/StudioWorld.h"
 #include "game/spell/FlyingEye.h"
 #include "game/spell/Cheat.h"
 
@@ -98,6 +101,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/Renderer.h"
 #include "graphics/Vertex.h"
 #include "graphics/data/TextureContainer.h"
+#include "graphics/data/MeshManipulation.h"
 #include "graphics/effects/Decal.h"
 #include "graphics/effects/Fade.h"
 #include "graphics/effects/Fog.h"
@@ -115,11 +119,16 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "math/Random.h"
 #include "math/Vector.h"
 
+#include "net/CoopNet.h"
+#include "net/CoopMmo.h"
+#include "net/CoopPlayer.h"
+
 #include "physics/Collisions.h"
 #include "physics/Attractors.h"
 #include "physics/Projectile.h"
 
 #include "platform/Platform.h"
+#include "platform/Time.h"
 #include "platform/profiler/Profiler.h"
 
 #include "scene/ChangeLevel.h"
@@ -219,6 +228,9 @@ void ARX_KEYRING_Init() {
 
 //! Add a key to Keyring
 void ARX_KEYRING_Add(std::string_view key) {
+	// A locked door is only locked once. Whoever finds the key, both of them
+	// can open it, or one player ends up shut out of half the fortress.
+	coop::reportKey(key);
 	g_playerKeyring.emplace_back(key);
 }
 
@@ -329,6 +341,11 @@ void ARX_Player_Rune_Add(RuneFlag rune) {
 	});
 	
 	player.rune_flags |= rune;
+
+	// Runes are knowledge, and the two of them are learning the same magic.
+	// reportRunes() ignores this while we are applying THEIR runes, so the two
+	// machines cannot bounce the same discovery back and forth.
+	coop::reportRunes();
 	
 	size_t spellsAfter = std::count_if(spellicons.begin(), spellicons.end(), [](const SPELL_ICON & spell) {
 		return !spell.bSecret && player.hasAllRunes(spell.symbols);
@@ -347,6 +364,9 @@ void ARX_Player_Rune_Remove(RuneFlag rune) {
 
 //! Add quest "quest" to player Questbook
 void ARX_PLAYER_Quest_Add(std::string_view quest) {
+	// One story, one journal. It does not matter which of them was standing
+	// there when it happened; they are both playing the same playthrough.
+	coop::reportQuest(quest);
 	g_playerQuestLogEntries.emplace_back(quest);
 	g_playerBook.clearJournal();
 }
@@ -665,6 +685,17 @@ void ARX_PLAYER_ComputePlayerFullStats() {
 	
 	player.Full_life = player.lifePool.current;
 	player.lifePool.max = player.m_attributeFull.constitution * (player.level + 2);
+	if(player.playerflags & PLAYERFLAGS_INVULNERABILITY) {
+		/*
+		 * Invulnerable means it. A curse strong enough to pull constitution
+		 * below zero makes the pool negative, the clamp below drags current
+		 * life down with it, and the death check fires without a single point
+		 * of damage ever being dealt - the one door the guard in damagePlayer()
+		 * does not cover. Held at one, the pool can shrink but never kill.
+		 */
+		player.lifePool.max = std::max(player.lifePool.max, 1.f);
+		player.lifePool.current = std::max(player.lifePool.current, 1.f);
+	}
 	player.lifePool.current = std::min(player.lifePool.current, player.lifePool.max);
 	player.manaPool.max = player.m_attributeFull.mind * (player.level + 1);
 	player.manaPool.current = std::min(player.manaPool.current, player.manaPool.max);
@@ -904,9 +935,17 @@ static void ARX_PLAYER_LEVEL_UP() {
  * \brief Modify player XP by adding "val" to it
  */
 void ARX_PLAYER_Modify_XP(long val) {
-	
+
+	/*
+	 * Experience is earned individually and awarded to both. Each player keeps
+	 * their own total and levels on their own schedule - they may not even have
+	 * started at the same level - but neither is left behind because the other
+	 * happened to land the killing blow or open the chest.
+	 */
+	coop::reportReward(val, 0);
+
 	player.xp += val;
-	
+
 	for(short i = player.level + 1; i < 11; i++) {
 		if(player.xp >= GetXPforLevel(i)) {
 			ARX_PLAYER_LEVEL_UP();
@@ -931,6 +970,7 @@ void ARX_PLAYER_Poison(float val) {
  * Updates: life/mana recovery, poison evolution, hunger, invisibility
  */
 void ARX_PLAYER_FrameCheck(PlatformDuration delta) {
+	
 	
 	ARX_PROFILE_FUNC();
 	
@@ -1005,14 +1045,35 @@ void ARX_PLAYER_FrameCheck(PlatformDuration delta) {
 }
 TextureContainer * PLAYER_SKIN_TC = nullptr;
 
-void ARX_PLAYER_Restore_Skin() {
+/*!
+ * The four head textures a chosen face uses - bare, chainmail, mithril, leather.
+ *
+ * Lifted out of ARX_PLAYER_Restore_Skin so that the other player's body can ask
+ * the same question without a second copy of the table drifting out of step
+ * with this one.
+ */
+void ARX_PLAYER_SkinTextures(unsigned char skin, res::path & tx, res::path & tx2,
+                             res::path & tx3, res::path & tx4) {
 	
-	res::path tx;
-	res::path tx2;
-	res::path tx3;
-	res::path tx4;
-
-	switch(player.skin) {
+	/*
+	 * Faces past the game's own come from the mod's file: any head texture in
+	 * the data, painted onto the same head. Only the first four faces were
+	 * ever painted with a chainmail hood or a leather cap, so these keep
+	 * their face under every armour. A face the file here does not list (a
+	 * player whose file is longer than ours) shows as the first one.
+	 */
+	if(skin >= 7) {
+		const std::vector<StudioFace> & faces = studioWorldFaces();
+		size_t extra = size_t(skin) - 7;
+		if(extra < faces.size()) {
+			tx = res::path::load("graph/obj3d/textures/" + faces[extra].texture);
+			tx2 = tx3 = tx4 = tx;
+			return;
+		}
+		skin = 0;
+	}
+	
+	switch(skin) {
 		case 0:
 			tx  = "graph/obj3d/textures/npc_human_base_hero_head";
 			tx2 = "graph/obj3d/textures/npc_human_chainmail_hero_head";
@@ -1039,25 +1100,349 @@ void ARX_PLAYER_Restore_Skin() {
 				tx4 = "graph/obj3d/textures/npc_human_leather_hero" + skinIndex + "_head";
 			}
 	}
-
-	TextureContainer * tmpTC;
 	
-	// TODO maybe it would be better to replace the textures in the player object instead of replacing the texture data for all objects that use these textures
+}
 
-	if(PLAYER_SKIN_TC && !tx.empty())
-		PLAYER_SKIN_TC->LoadFile(tx);
+void ARX_PLAYER_KeepBodyTextures(EERIE_3DOBJ * obj) {
+	if(!obj) {
+		return;
+	}
+	for(TextureContainer * material : obj->materials) {
+		if(material) {
+			material->systemflags &= ~TextureContainer::Level;
+		}
+	}
+}
 
-	tmpTC = TextureContainer::Find("graph/obj3d/textures/npc_human_chainmail_hero_head");
-	if(tmpTC && !tx2.empty())
-		tmpTC->LoadFile(tx2);
+namespace {
 
-	tmpTC = TextureContainer::Find("graph/obj3d/textures/npc_human_chainmail_mithril_hero_head");
-	if(tmpTC && !tx3.empty())
-		tmpTC->LoadFile(tx3);
+struct BodyKindInfo {
+	const char * name;
+	const char * mesh;
+	const char * skinFrom; //!< a texture of the mesh repainted, as the game's own scripts do
+	const char * skinTo;
+	unsigned char anims;   //!< which column of the animation table: 0 human, 1 goblin, 2 goblin lord
+	bool armour;
+	bool face;
+	Vec3f creationPos;     //!< the close-up's place for it; the hero's head is at (8, 162, 75)
+	Vec3f sheetPos;        //!< the sheet's place for it in play; the hero stands at (20, 96, 260)
+};
 
-	tmpTC = TextureContainer::Find("graph/obj3d/textures/npc_human_leather_hero_head");
-	if(tmpTC && !tx4.empty())
-		tmpTC->LoadFile(tx4);
+const BodyKindInfo g_bodies[BodyKindCount] = {
+	{ "Human", "graph/obj3d/interactive/npc/human_base/human_base.teo",
+	  "", "", 0, true, true, Vec3f(8.f, 162.f, 75.f), Vec3f(20.f, 96.f, 260.f) },
+	// The guards: the hero's body in their chainmail, repainted with a guard's head, as their script does
+	{ "Guard", "graph/obj3d/interactive/npc/human_base/tweaks/human_chainmail.teo",
+	  "npc_human_chainmail_hero_head", "npc_human_chainmail_guard_head2", 0, true, false, Vec3f(8.f, 162.f, 75.f), Vec3f(20.f, 96.f, 260.f) },
+	// The goblin's head sits sixteen units lower, eight nearer, and is half again as wide
+	{ "Goblin", "graph/obj3d/interactive/npc/goblin_base/goblin_base.teo",
+	  "", "", 1, false, false, Vec3f(8.f, 146.f, 108.f), Vec3f(20.f, 96.f, 260.f) },
+	// The lord stands 215 tall to the hero's 180; his head is 28 units higher and wider still
+	{ "Goblin lord", "graph/obj3d/interactive/npc/goblin_lord/goblin_lord.teo",
+	  "", "", 2, false, false, Vec3f(8.f, 190.f, 114.f), Vec3f(20.f, 114.f, 310.f) },
+};
+
+const BodyKindInfo & bodyInfo(unsigned char kind) {
+	return g_bodies[kind < BodyKindCount ? kind : BodyHuman];
+}
+
+} // anonymous namespace
+
+unsigned char ARX_PLAYER_LocalBodyKind() {
+	return player.bodyKind < BodyKindCount ? player.bodyKind : static_cast<unsigned char>(BodyHuman);
+}
+
+const char * ARX_PLAYER_BodyName(unsigned char kind) {
+	return bodyInfo(kind).name;
+}
+
+const char * ARX_PLAYER_BodyMesh(unsigned char kind) {
+	return bodyInfo(kind).mesh;
+}
+
+bool ARX_PLAYER_BodyWearsArmour(unsigned char kind) {
+	return bodyInfo(kind).armour;
+}
+
+bool ARX_PLAYER_BodyHasFace(unsigned char kind) {
+	return bodyInfo(kind).face;
+}
+
+Vec3f ARX_PLAYER_BodyCreationPos(unsigned char kind) {
+	return bodyInfo(kind).creationPos;
+}
+
+Vec3f ARX_PLAYER_BodySheetPos(unsigned char kind) {
+	return bodyInfo(kind).sheetPos;
+}
+
+bool ARX_PLAYER_LoadBody(Entity * io, unsigned char & kind) {
+	
+	if(!io) {
+		return false;
+	}
+	if(kind >= BodyKindCount) {
+		kind = BodyHuman;
+	}
+	
+	delete io->obj;
+	io->obj = loadObject(ARX_PLAYER_BodyMesh(kind), false).release();
+	if(!io->obj && kind != BodyHuman) {
+		LogWarning << "body " << ARX_PLAYER_BodyName(kind) << " could not be built; the hero stands in";
+		kind = BodyHuman;
+		io->obj = loadObject(ARX_PLAYER_BodyMesh(kind), false).release();
+	}
+	io->faceHeadOn = 0xff;
+	if(!io->obj) {
+		return false;
+	}
+	
+	const BodyKindInfo & body = bodyInfo(kind);
+	if(body.skinFrom[0]) {
+		EERIE_MESH_TWEAK_Skin(io->obj, body.skinFrom, body.skinTo);
+	}
+	ARX_PLAYER_BodyAnimations(io, kind);
+	ARX_PLAYER_KeepBodyTextures(io->obj);
+	
+	return true;
+}
+
+void ARX_PLAYER_BodyAnimations(Entity * io, unsigned char kind) {
+	
+	if(!io) {
+		return;
+	}
+	
+	/*
+	 * The slots the goblin has its own animation for, as its script loads
+	 * them, against what the hero's script loads in the same slots. Every
+	 * other slot keeps the hero's: the goblin's script does the same for its
+	 * attacks. The plain strafes get the goblin's fighting strafes, the only
+	 * ones it has.
+	 *
+	 * The fourth column is the bone warden, and its two entries were not made
+	 * by Arkane or by us: they were generated, and fitted to this rig by
+	 * scratchpad/make_tea.py. Every other slot in that column is the hero's,
+	 * which is what a column is for - a body can have as few animations of its
+	 * own as it likes and still move.
+	 */
+	struct Swap {
+		AnimationNumber slot;
+		const char * file[3]; //!< human, goblin, goblin lord
+	};
+	static const Swap swaps[] = {
+		{ ANIM_WAIT, { "player_wait_short", "goblin_normal_wait", "goblinlord_normal_wait" } },
+		{ ANIM_WAIT_SHORT, { "player_wait_1st", "goblin_normal_wait", "goblinlord_normal_wait" } },
+		{ ANIM_WALK, { "human_normal_walk", "goblin_normal_walk", "goblinlord_normal_walk" } },
+		// Walking forward without sneaking asks for RUN, not WALK - WALK is the
+		// sneak. A body with one walking animation therefore has to put it in
+		// both, or it only ever shows when the player is creeping.
+		{ ANIM_RUN, { "player_normal_run_test", "goblin_normal_run", "goblinlord_normal_run" } },
+		{ ANIM_STRAFE_LEFT, { "human_normal_strafe_left", "goblin_strafe_left", "goblinlord_strafe_left" } },
+		{ ANIM_STRAFE_RIGHT, { "human_normal_strafe_right", "goblin_strafe_right", "goblinlord_strafe_right" } },
+		{ ANIM_HIT1, { "human_fight_receive_damage", "goblin_fight_receive_damage", "goblinlord_fight_receive_damage" } },
+		{ ANIM_DIE, { "human_death5", "goblin_death", "goblinlord_death" } },
+		{ ANIM_TALK_NEUTRAL, { "human_talk_neutral_headonly", "goblin_normal_talk_neutral_headonly", "goblinlord_normal_talk_neutral_headonly" } },
+		{ ANIM_TALK_HAPPY, { "human_talk_happy_headonly", "goblin_normal_talk_happy_headonly", "goblinlord_normal_talk_happy_headonly" } },
+		{ ANIM_TALK_ANGRY, { "human_talk_angry_headonly", "goblin_normal_talk_angry_headonly", "goblinlord_normal_talk_angry_headonly" } },
+		{ ANIM_1H_READY_PART_1, { "human_fight_ready_1handed_start", "goblin_fight_ready_1handed_start", "goblinlord_fight_ready_1handed_start" } },
+		{ ANIM_1H_READY_PART_2, { "human_fight_ready_1handed_end", "goblin_fight_ready_1handed_end", "goblinlord_fight_ready_1handed_end" } },
+		{ ANIM_1H_UNREADY_PART_1, { "human_fight_unready_1handed_start", "goblin_fight_unready_1handed_start", "goblinlord_fight_unready_1handed_start" } },
+		{ ANIM_1H_UNREADY_PART_2, { "human_fight_unready_1handed_end", "goblin_fight_unready_1handed_end", "goblinlord_fight_unready_1handed_end" } },
+		{ ANIM_FIGHT_STRAFE_LEFT, { "player_fight_strafe_left", "goblin_strafe_left", "goblinlord_strafe_left" } },
+		{ ANIM_FIGHT_STRAFE_RIGHT, { "player_fight_strafe_right", "goblin_strafe_right", "goblinlord_strafe_right" } },
+		{ ANIM_FIGHT_WAIT, { "human_fight_wait_player", "goblin_fight_wait_1handed", "goblinlord_fight_wait" } },
+		{ ANIM_FIGHT_WALK_FORWARD, { "player_fight_walk", "goblin_fight_walk", "goblinlord_fight_walk" } },
+	};
+	
+	unsigned char column = bodyInfo(kind).anims;
+	for(const Swap & swap : swaps) {
+		res::path file = (res::path("graph/obj3d/anims/npc") / swap.file[column]).set_ext("tea");
+		ANIM_HANDLE * old = io->anims[swap.slot];
+		if(old && old->path == file) {
+			continue;
+		}
+		ANIM_HANDLE * fresh = EERIE_ANIMMANAGER_Load(file);
+		if(!fresh) {
+			continue;
+		}
+		io->anims[swap.slot] = fresh;
+		// Whatever was playing the old one carries on with the new, mid-stride
+		for(AnimLayer & layer : io->animlayer) {
+			if(old && layer.cur_anim == old) {
+				layer.cur_anim = fresh;
+			}
+		}
+		EERIE_ANIMMANAGER_ReleaseHandle(old);
+	}
+	
+}
+
+const res::path * ARX_PLAYER_FaceHeadMesh(unsigned char skin) {
+	if(skin < 7) {
+		return nullptr;
+	}
+	const std::vector<StudioFace> & faces = studioWorldFaces();
+	size_t extra = size_t(skin) - 7;
+	if(extra >= faces.size() || faces[extra].headMesh.empty()) {
+		return nullptr;
+	}
+	return &faces[extra].headMesh;
+}
+
+/*!
+ * The lowest part of a face's own head painted with one spot of its texture.
+ * The king's head was painted with his fur collar on the neck; one spot of
+ * forehead makes it a plain neck.
+ */
+static void paintFaceNeck(EERIE_3DOBJ * obj, const StudioFace & face) {
+	
+	VertexSelectionId head = EERIE_OBJECT_GetSelection(obj, "head");
+	if(!head) {
+		return;
+	}
+	
+	float bottom = -std::numeric_limits<float>::infinity(); // y grows downwards
+	for(VertexId vertex : obj->selections[head].selected) {
+		bottom = std::max(bottom, obj->vertexlist[vertex].v.y);
+	}
+	float top = bottom - face.neckHeight;
+	
+	for(EERIE_FACE & poly : obj->facelist) {
+		bool neck = true;
+		for(VertexId vertex : poly.vid) {
+			if(!IsInSelection(obj, vertex, head) || obj->vertexlist[vertex].v.y < top) {
+				neck = false;
+				break;
+			}
+		}
+		if(!neck) {
+			continue;
+		}
+		for(size_t k = 0; k < 3; k++) {
+			poly.u[k] = face.neckU;
+			poly.v[k] = face.neckV;
+		}
+	}
+	
+}
+
+void ARX_PLAYER_PutFaceHead(Entity * io, unsigned char skin) {
+	
+	const res::path * head = ARX_PLAYER_FaceHeadMesh(skin);
+	if(!io || !io->obj || !head) {
+		return;
+	}
+	
+	EERIE_MESH_TWEAK_Do(io, TWEAK_HEAD, *head);
+	ARX_PLAYER_KeepBodyTextures(io->obj);
+	
+	io->faceHeadOn = skin;
+	
+	const StudioFace & face = studioWorldFaces()[size_t(skin) - 7];
+	if(face.neckU >= 0.f && io->obj) {
+		paintFaceNeck(io->obj, face);
+	}
+	
+}
+
+void ARX_PLAYER_Restore_Skin(unsigned char wasSkin) {
+	
+	res::path tx;
+	res::path tx2;
+	res::path tx3;
+	res::path tx4;
+	
+	ARX_PLAYER_SkinTextures(player.skin, tx, tx2, tx3, tx4);
+	
+	/*
+	 * Rebind the head textures on this body rather than repainting the shared
+	 * ones - which is what the TODO that used to sit here asked for.
+	 *
+	 * The old way overwrote the PIXELS INSIDE those four textures, so every
+	 * model using them changed at once. With one hero in the world that was
+	 * invisible; with two it meant whoever picked a face last decided what BOTH
+	 * of them looked like, and there was no way to give the other player a face
+	 * of their own.
+	 */
+	/*
+	 * entities.get rather than entities.player(): player() is entries[0] with no
+	 * bounds check, and this is called before the hero entity exists as well as
+	 * after - it used to touch nothing but textures, so it never cared. get()
+	 * answers nullptr instead of reading off the end of an empty list.
+	 */
+	Entity * hero = entities.get(EntityHandle_Player);
+	
+	/*
+	 * The head shape goes with the face, restored where the face is: a mesh
+	 * that lost it (built afresh by something that never heard of faces)
+	 * gets it back before the paint goes on.
+	 */
+	if(hero && hero->obj && ARX_PLAYER_FaceHeadMesh(player.skin)
+	   && ARX_PLAYER_BodyHasFace(ARX_PLAYER_LocalBodyKind()) && hero->faceHeadOn != player.skin) {
+		LogInfo << "[face] the body has " << hero->obj->vertexlist.size() << " vertices and not its head shape; putting it back";
+		ARX_PLAYER_PutFaceHead(hero, player.skin);
+	}
+	
+	ARX_PLAYER_ApplySkin(hero ? hero->obj : nullptr, player.skin, wasSkin);
+
+}
+
+/*!
+ * Put a chosen face on one body.
+ *
+ * Recognises every head texture the game has for a hero, whichever face it
+ * belongs to, so it can be called again to change from one face to another -
+ * and after a mesh rebuild, which brings the default textures back with it.
+ */
+void ARX_PLAYER_ApplySkin(EERIE_3DOBJ * obj, unsigned char skin, unsigned char wasSkin) {
+
+	if(!obj) {
+		return;
+	}
+
+	res::path want[4];
+	ARX_PLAYER_SkinTextures(skin, want[0], want[1], want[2], want[3]);
+
+	/*
+	 * The face it wears now is looked for first: a hooded head texture is
+	 * both a face of its own (from the mod's file) and the first four faces'
+	 * chainmail look, and only the face that was put on says which it is
+	 * here. Then the game's own faces, whose textures a rebuilt mesh comes
+	 * with, then the rest.
+	 */
+	size_t faces = 7 + studioWorldFaces().size();
+	if(faces > 255) {
+		faces = 255;
+	}
+
+	for(TextureContainer *& material : obj->materials) {
+
+		if(!material) {
+			continue;
+		}
+
+		bool replaced = false;
+		for(size_t i = 0; i <= faces && !replaced; i++) {
+			if(i == 0 && wasSkin == 0xff) {
+				continue;
+			}
+			unsigned char face = (i == 0) ? wasSkin : static_cast<unsigned char>(i - 1);
+			res::path known[4];
+			ARX_PLAYER_SkinTextures(face, known[0], known[1], known[2], known[3]);
+			for(size_t slot = 0; slot < 4; slot++) {
+				if(material->m_texName == known[slot]) {
+					if(TextureContainer * chosen = TextureContainer::Load(want[slot])) {
+						material = chosen;
+					}
+					replaced = true;
+					break;
+				}
+			}
+		}
+
+	}
+
 }
 
 /*!
@@ -1076,6 +1461,7 @@ void ARX_PLAYER_LoadHeroAnimsAndMesh() {
 	
 	arx_assert(!io->obj);
 	io->obj = loadObject("graph/obj3d/interactive/npc/human_base/human_base.teo", false).release();
+	io->faceHeadOn = 0xff;
 	PLAYER_SKIN_TC = TextureContainer::Load("graph/obj3d/textures/npc_human_base_hero_head");
 	
 	player.skin = 0;
@@ -1289,6 +1675,11 @@ void ARX_PLAYER_Manage_Visual() {
 		return;
 	}
 	
+	// Whatever emptied the pool while invulnerable, dying is not on the table
+	if((player.playerflags & PLAYERFLAGS_INVULNERABILITY) && player.lifePool.current <= 0) {
+		player.lifePool.current = 1.f;
+	}
+
 	if(player.lifePool.current <= 0) {
 		HERO_SHOW_1ST = -1;
 		io->animlayer[1].cur_anim = nullptr;
@@ -2216,6 +2607,13 @@ static void PlayerMovementIterate(float DeltaTime) {
 
 void ARX_PLAYER_Manage_Movement() {
 	
+	if(coop::travelHoldActive()) {
+		// Suspended mid-air while a travel completes - the same stillness a
+		// level load imposes. No motion, no landing, no fall damage.
+		return;
+	}
+	
+	
 	ARX_PROFILE_FUNC();
 	
 	// Is our player able to move ?
@@ -2268,7 +2666,23 @@ void ARX_PLAYER_Manage_Death() {
 	player.m_paralysed = false;
 	float ratio = (player.DeadTime - 2s) / 5s;
 
+	if(coop::updateReviveOpportunity()) {
+		// Death is not the end while the other player still stands: hold the
+		// fade short of the menu and wait for them to come stand by the body.
+		ratio = std::min(ratio, 0.8f);
+	}
+
 	if(ratio >= 1.f) {
+		/*
+		 * The fade has run out and nobody came. In an iron man run that is the
+		 * end of it: the save goes before the menu is raised, so the menu that
+		 * comes up has nothing left to load.
+		 *
+		 * After the fade rather than at the moment of dying, because the fade
+		 * is exactly the window a partner has to reach the body - and in this
+		 * mode there is no partner, so reaching here means it is really over.
+		 */
+		ARX_IronmanDied();
 		ARX_MENU_Launch(false);
 		player.DeadTime = 0;
 	}
@@ -2318,6 +2732,14 @@ void ARX_PLAYER_PutPlayerInNormalStance() {
  * \brief Add gold to player purse
  */
 void ARX_PLAYER_AddGold(long _lValue) {
+	// A payment taken in the partner's name empties THEIR purse across the
+	// wire; ours was never part of the transaction.
+	if(_lValue < 0 && coop::chargePartner(_lValue)) {
+		return;
+	}
+	// Split the find rather than race for it: both purses grow by the same
+	// amount, so picking up a pile is never something to fall out over.
+	coop::reportReward(0, _lValue);
 	player.gold += _lValue;
 	g_hudRoot.purseIconGui.requestHalo();
 }
@@ -2338,6 +2760,9 @@ void ARX_PLAYER_AddGold(Entity * gold) {
 void ARX_PLAYER_Start_New_Quest() {
 	
 	LogInfo << "Starting a new playthrough";
+	
+	coop::clearStoryLedger();
+	coop::newGame();
 	
 	DanaeClearLevel();
 	SetEditMode();

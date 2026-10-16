@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -68,6 +69,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/GameTime.h"
 #include "core/Config.h"
 #include "core/Core.h"
+#include "platform/Time.h"
 
 #include "game/Camera.h"
 #include "game/Damage.h"
@@ -103,6 +105,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "io/log/Logger.h"
 
 #include "math/Random.h"
+
+#include "net/CoopPlayer.h"
 
 #include "physics/Collisions.h"
 #include "physics/CollisionShapes.h"
@@ -258,10 +262,37 @@ void ARX_INTERACTIVE_Show_Hide_1st(Entity * io, bool hide1st) {
 	
 	HERO_SHOW_1ST = long(hide1st);
 	
-	if(VertexSelectionId selection = EERIE_OBJECT_GetSelection(io->obj, "1st")) {
+	VertexSelectionId selection = EERIE_OBJECT_GetSelection(io->obj, "1st");
+	if(!selection) {
+		// A body cut without a first-person part (the goblin): its head goes instead
+		selection = EERIE_OBJECT_GetSelection(io->obj, "head");
+	}
+	if(selection) {
+		
+		/*
+		 * Which vertices are in the selection, asked once instead of per face.
+		 *
+		 * IsInSelection is a linear search through the selection's list, and
+		 * this called it for all three corners of every face. Arkane's hero is
+		 * 1,305 faces against a 237-vertex selection - a million comparisons,
+		 * never felt. A body of 31,327 faces against a selection of 28,544 is
+		 * about 2.7 BILLION, which is the second the game stopped for whenever
+		 * a race was picked or a body rebuilt.
+		 *
+		 * The selection does not change while the loop runs, so it is turned
+		 * into a flag per vertex first and the loop just reads it.
+		 */
+		const EERIE_SELECTIONS & selected = io->obj->selections[selection];
+		util::HandleVector<VertexId, bool> inSelection(io->obj->vertexlist.size(), false);
+		for(VertexId vertex : selected.selected) {
+			if(size_t(vertex) < inSelection.size()) {
+				inSelection[vertex] = true;
+			}
+		}
+		
 		for(EERIE_FACE & face : io->obj->facelist) {
 			for(VertexId vertex : face.vid) {
-				if(IsInSelection(io->obj, vertex, selection)) {
+				if(inSelection[vertex]) {
 					if(hide1st) {
 						face.facetype |= POLY_HIDE;
 					} else {
@@ -271,6 +302,7 @@ void ARX_INTERACTIVE_Show_Hide_1st(Entity * io, bool hide1st) {
 				}
 			}
 		}
+		
 	}
 	
 	ARX_INTERACTIVE_HideGore(entities.player(), false);
@@ -393,29 +425,61 @@ void PrepareIOTreatZone(long flag) {
 	
 	static long status = -1;
 	static Vec3f lastpos(0.f);
-	
+	static Vec3f lastPartnerPos(0.f);
+
 	const Vec3f cameraPos = g_camera->m_pos;
-	
+
+	/*
+	 * The zone has to be built around both players, not just this one.
+	 *
+	 * Everything the engine bothers to simulate is decided here: creatures
+	 * outside the zone get no AI, are not animated, and are not replicated. A
+	 * zone measured only from this machine's camera therefore leaves a partner
+	 * who has walked off ahead standing among enemies that will not so much as
+	 * turn to look at them, in a room where nothing moves.
+	 */
+	Entity * partner = coop::avatarEntity();
+	const bool hasPartner = (partner != nullptr);
+	const Vec3f partnerPos = hasPartner ? partner->pos : cameraPos;
+
 	if(flag || status == -1) {
 		status = 0;
 		lastpos = cameraPos;
+		lastPartnerPos = partnerPos;
 	} else if(status == 3) {
 		status = 0;
 	}
-	
-	if(fartherThan(cameraPos, lastpos, 100.f)) {
+
+	// Rebuilt when either player has moved. Watching only our own camera would
+	// leave the zone stale for as long as this player stood still, however far
+	// the other one walked.
+	if(fartherThan(cameraPos, lastpos, 100.f)
+	   || (hasPartner && fartherThan(partnerPos, lastPartnerPos, 100.f))) {
 		status = 0;
 		lastpos = cameraPos;
+		lastPartnerPos = partnerPos;
 	}
-	
+
 	if(status++) {
 		return;
 	}
-	
+
 	TREATZONE_Clear();
 	TREATZONE_AddIO(entities.player());
-	
+
+	// The other player themselves is always in, exactly as we always are.
+	if(hasPartner) {
+		TREATZONE_AddIO(partner);
+		if(partner->_npcdata && partner->_npcdata->weapon) {
+			TREATZONE_AddIO(partner->_npcdata->weapon);
+		}
+	}
+
 	RoomHandle cameraRoom = ARX_PORTALS_GetRoomNumForPosition(cameraPos, RoomPositionForCamera);
+	RoomHandle partnerRoom = hasPartner
+	                         ? ARX_PORTALS_GetRoomNumForPosition(partnerPos, RoomPositionForCamera)
+	                         : RoomHandle();
+
 	RoomHandle playerRoom = ARX_PORTALS_GetRoomNumForPosition(player.pos, RoomPositionForCamera);
 	
 	for(EntityHandle equipment : player.equiped) {
@@ -467,26 +531,49 @@ void PrepareIOTreatZone(long flag) {
 		} else if((entity.ioflags & IO_NPC) && (entity._npcdata->pathfind.flags & PATHFIND_ALWAYS)) {
 			treat = true;
 		} else {
+			/*
+			 * Distance to the nearer of the two players. Whichever of them is
+			 * close enough to see this thing is reason enough to keep it alive:
+			 * it is the same shared world either way, and a creature has to be
+			 * simulated to notice anybody at all.
+			 */
 			float dists;
-			if(cameraRoom) {
-				if(entity.show == SHOW_FLAG_TELEPORTING) {
-					Vec3f pos = GetItemWorldPosition(&entity);
-					dists = arx::distance2(cameraPos, pos);
-				} else {
-					if(entity.requestRoomUpdate) {
-						UpdateIORoom(&entity);
-					}
-					dists = square(SP_GetRoomDist(entity.pos, cameraPos, entity.room, cameraRoom));
+			const bool teleporting = (entity.show == SHOW_FLAG_TELEPORTING);
+			const Vec3f probe = teleporting ? GetItemWorldPosition(&entity) : entity.pos;
+
+			if(cameraRoom && !teleporting) {
+				if(entity.requestRoomUpdate) {
+					UpdateIORoom(&entity);
+				}
+				dists = square(SP_GetRoomDist(probe, cameraPos, entity.room, cameraRoom));
+				if(hasPartner && partnerRoom) {
+					/*
+					 * The partner's leg takes whichever is smaller: the room
+					 * graph's answer or the straight line. A walk can honestly
+					 * be longer than the crow flies, but not sixteen times
+					 * longer to a pig the partner is standing beside - and that
+					 * is what the graph claimed (measured: crow 669, graph
+					 * 10822). Outdoors its rooms connect so sparsely that
+					 * everything near the partner alone was refused - frozen,
+					 * unsent - until they stepped into its own room. The
+					 * straight line is already the engine's own fallback, one
+					 * branch below, whenever rooms are unknown.
+					 *
+					 * The camera's leg stays exactly as vanilla shipped it.
+					 */
+					float partnerD = std::min(
+					    square(SP_GetRoomDist(probe, partnerPos, entity.room, partnerRoom)),
+					    arx::distance2(probe, partnerPos));
+					dists = std::min(dists, partnerD);
 				}
 			} else {
-				if(entity.show == SHOW_FLAG_TELEPORTING) {
-					Vec3f pos = GetItemWorldPosition(&entity);
-					dists = arx::distance2(cameraPos, pos);
-				} else {
-					dists = arx::distance2(entity.pos, cameraPos);
+				dists = arx::distance2(probe, cameraPos);
+				if(hasPartner) {
+					dists = std::min(dists, arx::distance2(probe, partnerPos));
 				}
 			}
 			treat = (dists < square(TREATZONE_LIMIT));
+
 		}
 		if(&entity == g_draggedEntity) {
 			treat = true;
@@ -615,6 +702,10 @@ bool ARX_INTERACTIVE_USEMESH(Entity * io, const res::path & temp) {
 	
 	bool pbox = (!(io->ioflags & IO_FIX) && !(io->ioflags & IO_NPC));
 	io->obj = loadObject(io->usemesh, pbox).release();
+	io->faceHeadOn = 0xff;
+	if(io == entities.player()) {
+		LogInfo << "[face] the player's mesh is replaced by " << io->usemesh;
+	}
 	
 	EERIE_COLLISION_Cylinder_Create(io);
 	return true;
@@ -1211,7 +1302,7 @@ static EntityInstance getFreeEntityInstance(const res::path & classPath) {
 	std::string_view className = classPath.filename();
 	res::path classDir = classPath.parent();
 	
-	for(EntityInstance instance = 1; ; instance++) {
+	for(EntityInstance instance = coop::firstFreeInstanceHint(); ; instance++) {
 		
 		std::string idString = EntityId(className, instance).string();
 		
@@ -2052,6 +2143,10 @@ bool ARX_INTERACTIVE_DestroyIOdelayed(Entity * entity) {
 	}
 	
 	return true;
+}
+
+bool ARX_INTERACTIVE_IsDestroyPending(const Entity * entity) {
+	return std::find(toDestroy.begin(), toDestroy.end(), entity) != toDestroy.end();
 }
 
 void ARX_INTERACTIVE_DestroyIOdelayedRemove(Entity * entity) {

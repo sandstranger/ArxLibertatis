@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -207,7 +208,19 @@ struct SCR_TIMER {
 	GameInstant start;
 	Entity * io;
 	const EERIE_SCRIPT * es;
-	
+
+	/*!
+	 * The action that armed this timer belonged to the second co-op player.
+	 *
+	 * Level scripts routinely split an effect across a timer: the jail exit
+	 * fades the screen and then teleports "the player" seven hundred
+	 * milliseconds later, from the timer. The player context that says WHICH
+	 * player is a scoped guard on the call stack, and a timer fires long after
+	 * that stack is gone - so without carrying the answer here, a door the
+	 * second player stepped into would teleport the first.
+	 */
+	bool partnerContext = false;
+
 	explicit SCR_TIMER(Entity * entity = nullptr, std::string && timerName = std::string()) noexcept
 		: name(std::move(timerName))
 		, exist(entity != nullptr)

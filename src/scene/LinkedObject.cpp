@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -52,6 +53,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "game/Entity.h"
 #include "game/EntityManager.h"
 #include "game/Inventory.h"
+#include "io/log/Logger.h"
 #include "scene/Interactive.h"
 #include "scene/Object.h"
 
@@ -160,6 +162,12 @@ void linkEntities(Entity & master, std::string_view masterVertex,
 }
 
 void unlinkEntity(Entity & slave) {
+	
+	if(slave.owner() && !ValidIOAddress(slave.owner())) {
+		LogWarning << "[coop] " << slave.idString() << " unlinked from an already-freed owner";
+		slave.setOwner(nullptr);
+		return;
+	}
 	
 	if(!slave.owner() || !slave.owner()->obj) {
 		return;

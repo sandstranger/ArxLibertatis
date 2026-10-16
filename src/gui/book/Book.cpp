@@ -38,6 +38,9 @@
 #include "game/magic/RuneDraw.h"
 #include "graphics/Draw.h"
 #include "graphics/Renderer.h"
+#include "io/log/Logger.h"
+#include "scene/Object.h"
+#include "graphics/data/MeshManipulation.h"
 #include "graphics/effects/Halo.h"
 #include "graphics/particle/ParticleEffects.h"
 #include "graphics/texture/TextureStage.h"
@@ -48,6 +51,7 @@
 #include "gui/TextManager.h"
 #include "gui/hud/PlayerInventory.h"
 #include "input/Input.h"
+#include "net/CoopMmo.h"
 #include "scene/GameSound.h"
 #include "scene/Interactive.h"
 #include "script/Script.h"
@@ -187,6 +191,7 @@ PlayerBook::PlayerBook()
 bool PlayerBook::canOpenPage(ARX_INTERFACE_BOOK_MODE page) const {
 	switch(page) {
 		case BOOKMODE_SPELLS: return !!player.rune_flags;
+		case BOOKMODE_ACTIONS: return coop::mmoMode();
 		default:              return true;
 	}
 }
@@ -243,6 +248,11 @@ void PlayerBook::manage() {
 	
 	update();
 	
+	// The page belongs to MMO controls; switched off, it is not there to stand on
+	if(currentPage() == BOOKMODE_ACTIONS && !coop::mmoMode()) {
+		forcePage(BOOKMODE_STATS);
+	}
+	
 	switch(currentPage()) {
 		case BOOKMODE_STATS: {
 			stats.manage();
@@ -258,6 +268,10 @@ void PlayerBook::manage() {
 		}
 		case BOOKMODE_QUESTS: {
 			questBook.manage();
+			break;
+		}
+		case BOOKMODE_ACTIONS: {
+			actions.manage();
 			break;
 		}
 	}
@@ -314,7 +328,8 @@ ARX_INTERFACE_BOOK_MODE PlayerBook::nextPage() {
 			case BOOKMODE_STATS:   nextPage = BOOKMODE_SPELLS;  break;
 			case BOOKMODE_SPELLS:  nextPage = BOOKMODE_MINIMAP; break;
 			case BOOKMODE_MINIMAP: nextPage = BOOKMODE_QUESTS;  break;
-			case BOOKMODE_QUESTS:  nextPage = BOOKMODE_QUESTS;  break;
+			case BOOKMODE_QUESTS:  nextPage = BOOKMODE_ACTIONS; break;
+			case BOOKMODE_ACTIONS: nextPage = BOOKMODE_ACTIONS; break;
 		}
 
 		if(canOpenPage(nextPage)) {
@@ -336,6 +351,7 @@ ARX_INTERFACE_BOOK_MODE PlayerBook::prevPage() {
 			case BOOKMODE_SPELLS:  prevPage = BOOKMODE_STATS;   break;
 			case BOOKMODE_MINIMAP: prevPage = BOOKMODE_SPELLS;  break;
 			case BOOKMODE_QUESTS:  prevPage = BOOKMODE_MINIMAP; break;
+			case BOOKMODE_ACTIONS: prevPage = BOOKMODE_QUESTS;  break;
 		}
 
 		if(canOpenPage(prevPage)) {
@@ -437,6 +453,28 @@ void PlayerBook::manageTopTabs() {
 				pTextManage->Clear();
 			}
 		}
+	}
+	
+	/*
+	 * The action bar's own bookmark, first of the row, in the magic ribbon's
+	 * shape because the book has only these four, tinted so it is not taken
+	 * for the spell page. It is there only while MMO controls are on.
+	 */
+	if(coop::mmoMode() && m_currentPage != BOOKMODE_ACTIONS) {
+		
+		Vec2f pos = BOOKMARKS_POS + Vec2f(-32, 0) * scale;
+		DrawBookInterfaceItem(g_bookResouces.bookmark_magic, pos, Color(255, 186, 96), 0.000001f);
+		
+		if(MouseInBookRect(pos, Vec2f(g_bookResouces.bookmark_magic->m_size) * scale)) {
+			UseRenderState state(render2D().blendAdditive());
+			DrawBookInterfaceItem(g_bookResouces.bookmark_magic, pos, Color::gray(1.f / 3), 0.000001f);
+			cursorSetInteraction();
+			if(eeMouseDown1() || eeMouseDown2()) {
+				openPage(BOOKMODE_ACTIONS);
+				pTextManage->Clear();
+			}
+		}
+		
 	}
 	
 	if(m_currentPage != BOOKMODE_QUESTS) {
@@ -1112,11 +1150,12 @@ void StatsPage::RenderBookPlayerCharacter() {
 		constexpr float ANGLE_FOR_ONE_FACE = ANGLE_BETWEEN_FIRST_AND_LAST_FACE / NUMBER_OF_PLAYER_SKINS;
 		ePlayerAngle.setYaw(ANGLE_OF_FIRST_FACE + player.skin * ANGLE_FOR_ONE_FACE);
 
-		pos = Vec3f(8, 162, 75);
+//		pos = Vec3f(8, 162, 75);
+		pos = ARX_PLAYER_BodyCreationPos(ARX_PLAYER_LocalBodyKind());
 		eLight1.pos.z = -90.f;
 	} else {
 		ePlayerAngle.setYaw(-20.f);
-		pos = Vec3f(20.f, 96.f, 260.f);
+		pos = ARX_PLAYER_BodySheetPos(ARX_PLAYER_LocalBodyKind());
 		
 		ARX_EQUIPMENT_AttachPlayerWeaponToHand();
 	}
@@ -1140,6 +1179,7 @@ void StatsPage::RenderBookPlayerCharacter() {
 		
 		EERIEDrawAnimQuatUpdate(eobj, player.bookAnimation, ePlayerAngle, pos, time, nullptr, true);
 		EERIEDrawAnimQuatRender(eobj, pos, nullptr, invisibility);
+		
 	}
 	
 	IN_BOOK_DRAW = 0;
@@ -1450,6 +1490,14 @@ void SpellsPage::drawSpells() const {
 					}
 					
 					player.SpellToMemorize.lTimeCreation = g_gameTime.now();
+					
+					/*
+					 * The same press also picks the spell up, so it can be
+					 * dropped on the MMO action bar along the bottom of the
+					 * screen. Memorising it still happens either way - let go
+					 * anywhere but on the bar and nothing else has changed.
+					 */
+					coop::beginSpellDrag(spellInfo.spellid);
 				}
 			} else {
 				color = Color(168, 208, 223);
@@ -1467,6 +1515,120 @@ void SpellsPage::drawSpells() const {
 		}
 		
 	}
+}
+
+ActionsPage::ActionsPage()
+	: m_currentTab(0)
+{ }
+
+void ActionsPage::manage() {
+	
+	DrawBookInterfaceItem(g_bookResouces.ptexspellbook, g_bookRect.topLeft(), Color::white, 0.9999f);
+	
+	drawLeftTabs();
+	drawSpells();
+	drawBar();
+	
+}
+
+//! One tab per spell level, exactly as the spell page has them.
+void ActionsPage::drawLeftTabs() {
+	long tab = -1;
+	for(const SPELL_ICON & spellInfo : spellicons) {
+		if(tab != spellInfo.level - 1 && !spellInfo.bSecret && player.hasAllRunes(spellInfo.symbols)) {
+			PlayerBookPage::manageLeftTabs(spellInfo.level - 1, m_currentTab);
+			tab = spellInfo.level - 1;
+		}
+	}
+}
+
+void ActionsPage::drawSpells() {
+	
+	float scale = g_bookScale;
+	Vec2f bookPos = g_bookRect.topLeft();
+	int key = coop::barKeyPressed();
+	
+	Vec2f cell(0.f);
+	for(const SPELL_ICON & spellInfo : spellicons) {
+		
+		if(spellInfo.level != (m_currentTab + 1) || spellInfo.bSecret
+		   || !player.hasAllRunes(spellInfo.symbols)) {
+			continue;
+		}
+		
+		Vec2f pos = bookPos + Vec2f(73.f, 71.f) * scale + cell * Vec2f(85.f, 70.f) * scale;
+		Rectf icon(pos, 48.f * scale, 48.f * scale);
+		
+		if(MouseInBookRect(pos, Vec2f(48.f, 48.f) * scale)) {
+			
+			cursorSetInteraction();
+			UNICODE_ARXDrawTextCenter(hFontInBook, bookPos + Vec2f(111.f, 26.f) * scale,
+			                          getLocalised(spellInfo.name), Color());
+			
+			if(key > 0) {
+				coop::putOnBar(size_t(key), spellInfo.spellid);
+				playReleaseSound();
+			} else if(key == 0) {
+				playErrorSound(); // key one is the swing, and stays the swing
+			}
+			
+			// Held down, it can be carried to the bar on screen instead
+			if(eeMouseDown1()) {
+				coop::beginSpellDrag(spellInfo.spellid);
+			}
+			
+		}
+		
+		coop::drawBarSpell(icon, spellInfo.spellid, true);
+		
+		// A spell already on a key says which, so the page reads as the bar does
+		int slot = coop::barSlotOf(spellInfo.spellid);
+		if(slot >= 0) {
+			UNICODE_ARXDrawTextCenter(hFontInBook, pos + Vec2f(42.f, 30.f) * scale,
+			                          std::to_string(slot + 1), Color(255, 218, 140));
+		}
+		
+		cell.x++;
+		if(cell.x >= 2) {
+			cell.x = 0;
+			cell.y++;
+		}
+		
+	}
+	
+}
+
+//! The right page: the swing, and the five keys as they stand.
+void ActionsPage::drawBar() {
+	
+	float scale = g_bookScale;
+	Vec2f bookPos = g_bookRect.topLeft();
+	size_t slots = coop::barSlots();
+	
+	// The keys as they stand, in a row, each with its number under it
+	float size = 34.f;
+	float step = 42.f;
+	float left = 375.f - (float(slots - 1) * step + size) * 0.5f;
+	for(size_t i = 0; i < slots; i++) {
+		
+		Vec2f pos = bookPos + Vec2f(left + float(i) * step, 170.f) * scale;
+		
+		if(i > 0 && MouseInBookRect(pos, Vec2f(size, size) * scale)) {
+			cursorSetInteraction();
+			// Right-click empties a key here, the same gesture as on the bar itself
+			if(eeMouseDown2()) {
+				coop::clearBarSlot(i);
+				playReleaseSound();
+			}
+		}
+		
+		coop::drawBarSocket(Rectf(pos, size * scale, size * scale), i);
+		
+		UNICODE_ARXDrawTextCenter(hFontInBook, pos + Vec2f(size * 0.5f, size + 4.f) * scale,
+		                          std::to_string(i + 1), Color());
+		
+	}
+	
 }
 
 MapPage::MapPage()

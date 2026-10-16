@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -56,6 +57,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "io/resource/ResourcePath.h"
 #include "scene/GameSound.h"
 #include "script/ScriptUtils.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+#include "game/Player.h"
 
 
 extern Vec3f LASTCAMPOS;
@@ -375,6 +379,55 @@ public:
 			return Success;
 		}
 		
+		/*
+		 * Sequence speeches - the ones with a follow-up command that resumes
+		 * the script when the line ends - drive one-shot story moments while
+		 * the player stands locked. Those are playthrough FACTS in co-op:
+		 * lived once by anyone, lived for both. A ledgered one completes
+		 * instantly, running its follow-up the same frame, so the second
+		 * player is never parked under cutscene bars waiting for a line that
+		 * cannot play. Ordinary barks have no follow-up and are untouched.
+		 */
+		bool sequence = BLOCK_PLAYER_CONTROLS || cinematicBorder.isActive()
+		                || coop::isPartnerCutscene();
+		/*
+		 * The guest NEVER performs sequence cutscenes - not because of any
+		 * ledger state, but categorically: its sequence machinery is muted
+		 * whenever the host shares the area, so a started sequence can freeze
+		 * it solid. Completing instantly advances the story identically, the
+		 * ledger records it for both, and only the host's screen is a stage.
+		 */
+		if(sequence && (coop::isCutsceneSeen(data) || (coop::isGuest() && coop::isReplica()))) {
+			LogInfo << "[coop] '" << data << "' completes instantly on this machine";
+			coop::reportCutsceneSeen(data);
+			if(size_t onspeechend = context.skipCommand(); onspeechend != size_t(-1)) {
+				/*
+				 * Whose scene this is travels with the SPOKEN line: a speech
+				 * remembers it, and hands it back when it ends and resumes the
+				 * script (see endSpeech). A line the ledger skips leaves no
+				 * speech behind to carry it - so the rest of the chain ran
+				 * ownerless, this machine took a scene belonging to the other
+				 * player back mid-way, and the camera flicked between the two
+				 * of them. Carried by hand here, exactly as a spoken line
+				 * would have carried it.
+				 */
+				coop::ScopedPlayerContext owner(coop::isPartnerScriptContext()
+				                                ? coop::avatarEntity() : nullptr);
+				ScriptEvent::resume(context.getScript(), context.getEntity(), onspeechend);
+			}
+			return Success;
+		}
+		
+		/*
+		 * Whether a line is written on screen depends on whether the bars are
+		 * down - and the bars belong to whoever the scene belongs to. Asked on
+		 * this machine about a scene we declined, the answer is always "no
+		 * subtitles", and that answer was then sent to the one person actually
+		 * watching it. So remember what the SCRIPT asked for and let their
+		 * screen decide the rest.
+		 */
+		bool quiet = (flags & ARX_SPEECH_FLAG_NOTEXT);
+
 		if(!cinematicBorder.isActive()) {
 			flags |= ARX_SPEECH_FLAG_NOTEXT;
 		}
@@ -390,6 +443,31 @@ public:
 			speech->scriptEntity = context.getEntity();
 			speech->script = context.getScript();
 			speech->scriptPos = onspeechend;
+			if(sequence) {
+				coop::reportCutsceneSeen(data);
+			}
+		}
+		
+		/*
+		 * Two different reasons to send a line across.
+		 *
+		 * A story moment goes to whoever the scene belongs to, which the
+		 * cutscene setting decides. But an ordinary line spoken BECAUSE of the
+		 * other player - the goblin answering the person who just handed him a
+		 * form, or who just spoke to him - is theirs no matter what: it is
+		 * being said to them, and they are the one machine that would otherwise
+		 * never hear it, since the script it came from runs only here.
+		 */
+		bool storyMoment = sequence || acs.type != ARX_CINE_SPEECH_NONE;
+		bool spokenToThem = coop::isPartnerScriptContext();
+
+		if((storyMoment && coop::relaysCutscene()) || spokenToThem) {
+			// The other machine gets a viewer copy - same speaker, same line,
+			// same camera - whenever the scene is theirs to watch, and the
+			// words with it unless the script itself asked for silence.
+			SpeechFlags theirs = quiet ? flags : (flags & ~ARX_SPEECH_FLAG_NOTEXT);
+			coop::reportCutscenePlay(std::string(context.getEntity()->idString()),
+			                         data, long(mood), u32(theirs), acs);
 		}
 		
 		return Success;

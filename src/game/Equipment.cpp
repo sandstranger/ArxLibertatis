@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -63,6 +64,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "game/NPC.h"
 #include "game/Player.h"
 #include "game/Spells.h"
+#include "game/magic/StudioWorld.h"
 
 #include "gui/Dragging.h"
 #include "gui/Interface.h"
@@ -79,11 +81,14 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/particle/ParticleEffects.h"
 #include "graphics/particle/Spark.h"
 
+#include "io/log/Logger.h"
+#include "io/resource/PakReader.h"
 #include "io/resource/ResourcePath.h"
 
 #include "math/Random.h"
 #include "math/Vector.h"
 
+#include "net/CoopPlayer.h"
 #include "physics/Collisions.h"
 
 #include "platform/Platform.h"
@@ -92,6 +97,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "scene/Object.h"
 #include "scene/LinkedObject.h"
 #include "scene/GameSound.h"
+#include "net/CoopNet.h"
 #include "scene/Interactive.h"
 
 #include "script/Script.h"
@@ -153,22 +159,87 @@ void ARX_EQUIPMENT_ReleaseAll(Entity * io) {
 
 extern long EXITING;
 
-//! \brief Recreates player mesh from scratch
-static void applyTweak(EquipmentSlot equip, TweakType tw, std::string_view selection) {
-	
-	Entity * item = entities.get(player.equiped[equip]);
-	if(!item) {
+/*!
+ * Wear a piece of armour on a body.
+ *
+ * Armour is not hung off a character the way a weapon is - it changes the body
+ * itself, swapping a part of the mesh and repainting a named area of skin. That
+ * is why this is separate from linking an object to a hand.
+ *
+ * Takes whichever body is being dressed rather than always the player, so the
+ * same can be done to the other player's body in co-op: they are wearing the
+ * armour on their own machine, and it has to be put on the copy of them
+ * standing here.
+ */
+void ARX_EQUIPMENT_ApplyTweak(Entity * io, Entity * item, TweakType tw,
+                              std::string_view selection, unsigned char bodyKind) {
+
+	if(!io || !io->obj || !item) {
 		return;
 	}
-	
-	Entity * io = entities.player();
-	
-	arx_assert(item->tweakerinfo != nullptr);
-	
-	const IO_TWEAKER_INFO & tweak = *item->tweakerinfo;
+
+	/*
+	 * The mod's world edits may say how a piece looks instead of its script -
+	 * the way to give the cm plate set, whose own look was never made, the
+	 * Ylside armour in its "mx" paint.
+	 */
+	IO_TWEAKER_INFO told;
+	const IO_TWEAKER_INFO * info = item->tweakerinfo;
+	if(const StudioWear * wear = studioWorldWear(item->className())) {
+		told.filename = wear->mesh;
+		told.skintochange = wear->skinFrom;
+		told.skinchangeto = wear->skinTo;
+		info = &told;
+	}
+	if(!info) {
+		return;
+	}
+
+	const IO_TWEAKER_INFO & tweak = *info;
 	
 	if(!tweak.filename.empty()) {
-		res::path mesh = "graph/obj3d/interactive/npc/human_base/tweaks" / tweak.filename;
+		
+		/*
+		 * A shape cut for THIS body first, the hero's if there is none.
+		 *
+		 * Every piece of armour names a whole body wearing it - the leather
+		 * chest names a complete hero in leather, and the tweak takes only its
+		 * chest. That folder was written here as human_base, so a body that is
+		 * not the hero got the hero's torso grafted onto it: a human chest and
+		 * human arms on a skeleton. A body can now carry shapes of its own in
+		 * a tweaks folder beside it, and anything it has no shape for still
+		 * falls back to the hero's, which is what every stock body did before.
+		 */
+		const res::path hero = "graph/obj3d/interactive/npc/human_base/tweaks";
+		res::path home = res::path(ARX_PLAYER_BodyMesh(bodyKind)).parent() / "tweaks";
+		res::path mesh = home / tweak.filename;
+		/*
+		 * A piece naming a body shape that was never made. The "cm" plate set
+		 * names human_plate_cm, and no such mesh exists in any pak, so wearing it
+		 * changed nothing on the body. The family name is what it was cut from:
+		 * drop the last "_" suffix and wear that instead. Only a missing mesh
+		 * takes this road; every shape that exists is used as named.
+		 */
+		auto exists = [](const res::path & file) {
+			return g_resources->getFile(("game" / file).set_ext("ftl")) || g_resources->getFile(file);
+		};
+		
+		if(!exists(mesh) && home != hero) {
+			mesh = hero / tweak.filename;
+		}
+		
+		if(!exists(mesh)) {
+			std::string stem(tweak.filename.basename());
+			size_t cut = stem.rfind('_');
+			if(cut != std::string::npos) {
+				res::path family = mesh.parent()
+				                   / (stem.substr(0, cut) + std::string(tweak.filename.ext()));
+				if(exists(family)) {
+					LogInfo << "body shape " << tweak.filename << " does not exist; wearing " << family.filename();
+					mesh = family;
+				}
+			}
+		}
 		EERIE_MESH_TWEAK_Do(io, tw, mesh);
 	}
 	
@@ -193,7 +264,8 @@ static void applyTweak(EquipmentSlot equip, TweakType tw, std::string_view selec
 	MaterialId oldMaterial;
 	for(MaterialId material : io->obj->materials.handles()) {
 		if(io->obj->materials[material] &&
-		   io->obj->materials[material]->m_texName.filename() == tweak.skintochange) {
+		   (io->obj->materials[material]->m_texName.filename() == tweak.skintochange
+		    || io->obj->materials[material]->m_texName.basename() == tweak.skintochange)) {
 			oldMaterial = material;
 		}
 	}
@@ -213,6 +285,16 @@ static void applyTweak(EquipmentSlot equip, TweakType tw, std::string_view selec
 	
 }
 
+//! The player's own body, dressed from whatever they have equipped.
+static void applyTweak(EquipmentSlot equip, TweakType tw, std::string_view selection,
+                       unsigned char kind) {
+	Entity * item = entities.get(player.equiped[equip]);
+	if(item) {
+		arx_assert(item->tweakerinfo != nullptr);
+		ARX_EQUIPMENT_ApplyTweak(entities.player(), item, tw, selection, kind);
+	}
+}
+
 void ARX_EQUIPMENT_RecreatePlayerMesh() {
 	
 	if(EXITING)
@@ -221,13 +303,21 @@ void ARX_EQUIPMENT_RecreatePlayerMesh() {
 	arx_assert(entities.player());
 	Entity * io = entities.player();
 	
-	delete io->obj;
+	unsigned char kind = ARX_PLAYER_LocalBodyKind();
+	if(!ARX_PLAYER_LoadBody(io, kind)) {
+		return;
+	}
 	
-	io->obj = loadObject("graph/obj3d/interactive/npc/human_base/human_base.teo", false).release();
+	if(ARX_PLAYER_BodyHasFace(kind)) {
+		// A face painted for another head shape brings that head; a helmet still goes over it
+		ARX_PLAYER_PutFaceHead(io, player.skin);
+	}
 	
-	applyTweak(EQUIP_SLOT_HELMET, TWEAK_HEAD, "head");
-	applyTweak(EQUIP_SLOT_ARMOR, TWEAK_TORSO, "chest");
-	applyTweak(EQUIP_SLOT_LEGGINGS, TWEAK_LEGS, "leggings");
+	if(ARX_PLAYER_BodyWearsArmour(kind)) {
+		applyTweak(EQUIP_SLOT_HELMET, TWEAK_HEAD, "head", kind);
+		applyTweak(EQUIP_SLOT_ARMOR, TWEAK_TORSO, "chest", kind);
+		applyTweak(EQUIP_SLOT_LEGGINGS, TWEAK_LEGS, "leggings", kind);
+	}
 	
 	for(EntityHandle equipment : player.equiped) {
 		if(Entity * toequip = entities.get(equipment); toequip && toequip->obj) {
@@ -245,6 +335,12 @@ void ARX_EQUIPMENT_RecreatePlayerMesh() {
 	}
 	
 	ARX_PLAYER_Restore_Skin();
+	ARX_PLAYER_KeepBodyTextures(io->obj);
+	{
+		const res::path * head = ARX_PLAYER_FaceHeadMesh(player.skin);
+		LogInfo << "[face] player body " << int(kind) << ", face " << int(player.skin)
+		        << ", head " << (head ? head->string() : std::string("hero")) << ", " << io->obj->vertexlist.size() << " vertices";
+	}
 	HERO_SHOW_1ST = -1;
 	ARX_INTERACTIVE_Show_Hide_1st(entities.player(), !EXTERNALVIEW);
 	ARX_INTERACTIVE_HideGore(entities.player(), false);
@@ -691,7 +787,23 @@ bool ARX_EQUIPMENT_Strike_Check(Entity * io_source, Entity * io_weapon, float ra
 							}
 						}
 
-						if(io_source == entities.player()) {
+						/*
+						 * A weapon wears against the world, never against your
+						 * companion.
+						 *
+						 * This charge is levied once per FRAME the blade is
+						 * inside a target - about three points across a single
+						 * swing. In the original game the only bodies in reach
+						 * were enemies you meant to hit, so that was fair. The
+						 * other player, though, stands beside you constantly,
+						 * and an ordinary swing at empty air clips them: three
+						 * points a swing against a bone, which has four, so it
+						 * shattered in your hands for nothing.
+						 */
+						if(io_source == entities.player() && !coop::isAvatarEntity(target)) {
+							LogWarning << "[coop-wear] IN-TARGET " << target->idString()
+							           << " charge=" << (g_framedelay * 0.006f)
+							           << " durability=" << io_weapon->durability;
 							ARX_DAMAGES_DurabilityCheck(io_weapon, g_framedelay * 0.006f);
 						}
 					}
@@ -767,6 +879,8 @@ bool ARX_EQUIPMENT_Strike_Check(Entity * io_source, Entity * io_weapon, float ra
 
 					if(HIT_SPARK) {
 						if(!io_source->isHit) {
+							LogWarning << "[coop-wear] HARD-OBJECT " << target->idString()
+							           << " charge=1.0 durability=" << io_weapon->durability;
 							ARX_DAMAGES_DurabilityCheck(io_weapon, 1.f);
 							io_source->isHit = true;
 							
@@ -789,6 +903,8 @@ bool ARX_EQUIPMENT_Strike_Check(Entity * io_source, Entity * io_weapon, float ra
 		if(ep) {
 			if(io_source == entities.player()) {
 				if(!io_source->isHit) {
+					LogWarning << "[coop-wear] LEVEL-GEOMETRY charge=1.0 durability="
+					           << io_weapon->durability;
 					ARX_DAMAGES_DurabilityCheck(io_weapon, 1.f);
 					io_source->isHit = true;
 					
@@ -873,6 +989,22 @@ void ARX_EQUIPMENT_Equip(Entity * target, Entity * toequip) {
 		return;
 	}
 	
+	/*
+	 * Taking it off the floor counts as taking it.
+	 *
+	 * Picking something up is announced from Inventory::insert - but equipping
+	 * straight from the ground never touches an inventory, so nothing was ever
+	 * said. The other machine went on believing the item was still lying there,
+	 * showed it, and let the other player take the same one: two copies of a
+	 * sword that only one of them found.
+	 *
+	 * Only when it comes from the world. Equipping something already in the
+	 * pack is nobody else's business.
+	 */
+	if(!locateInInventories(toequip)) {
+		coop::requestTake(*toequip);
+	}
+
 	toequip->setOwner(nullptr);
 	toequip->show = SHOW_FLAG_ON_PLAYER;
 	if(toequip == g_draggedEntity) {

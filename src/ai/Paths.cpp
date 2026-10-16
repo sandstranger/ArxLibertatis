@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -64,12 +65,16 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "math/Random.h"
 
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+
 #include "platform/Platform.h"
 #include "platform/profiler/Profiler.h"
 
 #include "scene/GameSound.h"
 
 #include "script/Script.h"
+#include "io/log/Logger.h"
 
 std::vector<Zone> g_zones;
 std::vector<Path> g_paths;
@@ -146,32 +151,75 @@ static Zone * ARX_PATH_CheckPlayerInZone() {
 	return ARX_PATH_CheckInZone(player.pos + Vec3f(0.f, 160.f, 0.f));
 }
 
+/*!
+ * The name a zone controller should know this entity by.
+ *
+ * Zone scripts guard everything with `IF (^$PARAM1 != PLAYER) ACCEPT`: traps,
+ * ambushes, pressure plates all fire for a player and for nobody else. The
+ * second player's body is an entity named coop_player_0001, a name no zone
+ * script has heard of, so every trigger in the game let them walk through
+ * untouched. To the zones, both of them are "player".
+ */
+static std::string zoneIdString(const Entity * io) {
+
+	if(coop::isAvatarEntity(io)) {
+		return "player";
+	}
+
+	return io->idString();
+}
+
 static void EntityEnteringCurrentZone(Entity * io, Zone * current) {
-	
+
 	io->inzone_show = io->show;
-	
+
 	SendIOScriptEvent(nullptr, io, SM_ENTERZONE, current->name);
-	
+
 	if(Entity * controller = entities.getById(current->controled)) {
 		ScriptParameters parameters;
-		parameters.push_back(io->idString());
+		parameters.push_back(zoneIdString(io));
 		parameters.push_back(current->name);
+		// While the controller script runs, "player" means whoever actually
+		// stepped in - so DODAMAGE PLAYER in a trap script burns the player
+		// standing on it, not the other one across the level.
+		coop::ScopedPlayerContext context(io);
 		SendIOScriptEvent(nullptr, controller, SM_CONTROLLEDZONE_ENTER, parameters);
 	}
-	
+
 }
 
 static void EntityLeavingLastZone(Entity * io, Zone * last) {
-	
+
+	// The first player's travel icon is cleared by the engine when they leave
+	// any zone; the second player's travel offer is withdrawn the same way.
+	if(coop::isAvatarEntity(io)) {
+		coop::sendTravelCancel();
+	}
+
 	SendIOScriptEvent(nullptr, io, SM_LEAVEZONE, last->name);
-	
+
 	if(Entity * controller = entities.getById(last->controled)) {
 		ScriptParameters parameters;
-		parameters.push_back(io->idString());
+		parameters.push_back(zoneIdString(io));
 		parameters.push_back(last->name);
+		coop::ScopedPlayerContext context(io);
 		SendIOScriptEvent(nullptr, controller, SM_CONTROLLEDZONE_LEAVE, parameters);
 	}
-	
+
+}
+
+Zone * ARX_PATH_GetPlayerZone() {
+	return ARX_PATH_CheckPlayerInZone();
+}
+
+void ARX_PATH_EntityEnterZone(Entity * io, Zone * zone) {
+	EntityEnteringCurrentZone(io, zone);
+	io->inzone = zone;
+}
+
+void ARX_PATH_EntityLeaveZone(Entity * io, Zone * zone) {
+	EntityLeavingLastZone(io, zone);
+	io->inzone = nullptr;
 }
 
 void ARX_PATH_UpdateAllZoneInOutInside() {
@@ -195,6 +243,11 @@ void ARX_PATH_UpdateAllZoneInOutInside() {
 			
 			if(   count < entities.size()
 			   && io
+			   // The other player's body is driven by their reported crossings
+			   // (MsgZoneEnter), which are frame-exact; detecting it here from
+			   // the lag-smoothed replicated position would double-fire every
+			   // zone a few hundred milliseconds late.
+			   && !coop::isAvatarEntity(io)
 			   && io->ioflags & (IO_NPC | IO_ITEM)
 			   && io->show != SHOW_FLAG_MEGAHIDE
 			) {
@@ -224,38 +277,72 @@ void ARX_PATH_UpdateAllZoneInOutInside() {
 		}
 	}
 
-	// player check*************************************************
-	{
-		Zone * current = ARX_PATH_CheckPlayerInZone();
-		Zone * last = entities.player()->inzone;
+	ARX_PATH_UpdatePlayerZone();
+	
+}
 
-		if(current != last) {
-			
-			if(last) {
-				CHANGE_LEVEL_ICON = NoChangeLevel;
-				EntityLeavingLastZone(entities.player(), last);
-			}
-			
-			if(current) {
-				if(!current->ambiance.empty()) {
-					ARX_SOUND_PlayZoneAmbiance(current->ambiance, ARX_SOUND_PLAY_LOOPED, current->amb_max_vol * 0.01f);
-				}
-				if(current->flags & PATH_FARCLIP) {
-					g_desiredFogParameters.flags |= GMOD_ZCLIP;
-					g_desiredFogParameters.zclip = current->farclip;
-				}
-				if(current->flags & PATH_RGB) {
-					g_desiredFogParameters.flags |= GMOD_DCOLOR;
-					g_desiredFogParameters.depthcolor = current->rgb;
-				}
-				EntityEnteringCurrentZone(entities.player(), current);
-			}
-			
+/*!
+ * The local player's own zone crossings, exactly as vanilla runs them.
+ *
+ * In co-op this runs on EVERY machine for its OWN player - doors, ambiances
+ * and fog belong to whoever walks through them, and routing them through the
+ * other machine was the root of every hole-travel bug: a chain that never
+ * needed to cross the wire kept getting lost crossing it.
+ */
+void ARX_PATH_UpdatePlayerZone() {
+	
+	Zone * current = ARX_PATH_CheckPlayerInZone();
+	Zone * last = entities.player()->inzone;
+
+	/*
+	 * A summoned player appeared here; they did not walk in.
+	 *
+	 * Zones fire on the edge between two frames, and some of them
+	 * answer an entrance by teleporting whoever crossed - level 15's
+	 * marker_0219 does exactly that, which took the summoned player
+	 * straight back out of the spell that brought them. Count them as
+	 * already inside this one: no edge now, every later crossing
+	 * normal.
+	 */
+	if(coop::takePlayerZoneSwallow()) {
+		if(current) {
+			LogWarning << "[coop-chain] summoned into zone '" << current->name
+			           << "' - not counting it as walking in";
+		}
+		entities.player()->inzone = current;
+		return;
+	}
+
+	if(current != last) {
+		
+		if(last) {
+			LogWarning << "[coop-chain] player left zone '" << last->name << "'";
+			CHANGE_LEVEL_ICON = NoChangeLevel;
+			EntityLeavingLastZone(entities.player(), last);
 		}
 		
-		entities.player()->inzone = current;
+		if(current) {
+			// a travel hole the partner used first re-arms for our player here
+			coop::rearmOwedZone(*current);
+			if(!current->ambiance.empty()) {
+				ARX_SOUND_PlayZoneAmbiance(current->ambiance, ARX_SOUND_PLAY_LOOPED, current->amb_max_vol * 0.01f);
+			}
+			if(current->flags & PATH_FARCLIP) {
+				g_desiredFogParameters.flags |= GMOD_ZCLIP;
+				g_desiredFogParameters.zclip = current->farclip;
+			}
+			if(current->flags & PATH_RGB) {
+				g_desiredFogParameters.flags |= GMOD_DCOLOR;
+				g_desiredFogParameters.depthcolor = current->rgb;
+			}
+			LogWarning << "[coop-chain] player entered zone '" << current->name
+			           << "' (controller '" << current->controled << "')";
+			EntityEnteringCurrentZone(entities.player(), current);
+		}
+		
 	}
 	
+	entities.player()->inzone = current;
 }
 
 Zone::Zone(std::string && _name, const Vec3f & _pos) noexcept

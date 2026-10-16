@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -382,11 +383,12 @@ public:
 		} else {
 			
 			Entity * entity = entities.getById(target, sender);
+
 			if(!entity) {
 				DebugScript(": target does not exist");
 				return Failed;
 			}
-			
+
 			sender->stat_sent++;
 			Stack_SendIOScriptEvent(sender, entity, event, parameters);
 			

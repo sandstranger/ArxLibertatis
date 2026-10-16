@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -54,6 +55,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/data/Mesh.h"
 #include "io/resource/ResourcePath.h"
 #include "scene/Interactive.h"
+#include "net/CoopPlayer.h"
+
+#include "net/CoopNet.h"
 #include "script/ScriptUtils.h"
 
 
@@ -426,6 +430,28 @@ public:
 	
 	Result execute(Context & context) override {
 		
+		/*
+		 * This used to return early when the partner's action was what ran the
+		 * script, to stop a one-shot doorway being consumed out from under this
+		 * machine's own player. It was wrong twice over.
+		 *
+		 * A zone disarms itself because something happened in the world: a trap
+		 * was sprung, a chest was opened, a story moment was lived. When the
+		 * host runs a script in the partner's name it runs ALL of it - the
+		 * cameras are destroyed, the quest is granted, the flags are set, right
+		 * here in the only world there is. Keeping the zone armed left one side
+		 * effect out of a script whose every other side effect had landed, and
+		 * the result was a story cutscene that fired a second time when this
+		 * machine's player walked in - into a chain of cameras the first run had
+		 * already destroyed, so the player was locked with nothing left alive to
+		 * unlock them.
+		 *
+		 * And the early return skipped the getWord() below, so the zone name was
+		 * left in the stream to be read as the next command - the parser then
+		 * reported 'unknown command: ortiernzone' and carried on. Whatever else
+		 * is true, an argument has to be consumed on every path out.
+		 */
+
 		std::string zone = context.getWord();
 		
 		DebugScript(' ' << zone);
@@ -435,9 +461,12 @@ public:
 			ScriptWarning << "unknown zone: " << zone;
 			return Failed;
 		}
-		
+
+		// the disarm happens either way; but done in the partner's name it is
+		// remembered, so a travel funnel can re-arm for our own player
+		coop::noteZoneDisarmed(ap->name, ap->controled);
 		ap->controled.clear();
-		
+
 		return Success;
 	}
 	

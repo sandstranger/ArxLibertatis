@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -83,6 +84,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "io/resource/PakReader.h"
 #include "io/log/Logger.h"
 
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+
 #include "platform/profiler/Profiler.h"
 
 #include "scene/Scene.h"
@@ -104,6 +108,66 @@ SCRIPT_VARIABLES svar;
 long FORBID_SCRIPT_IO_CREATION = 0;
 std::vector<SCR_TIMER> g_scriptTimers;
 static size_t g_activeScriptTimers = 0;
+
+/*!
+ * Where "the player" is, as far as a script asking about distance is concerned.
+ *
+ * Scripts have exactly one word for the player, and every creature in the game
+ * uses it to decide whether anyone is close enough to be worth waking up for:
+ * `IF (^DIST_PLAYER < 300) ...`. Measured only to the first player, that test
+ * fails whenever it is the second player standing over them, so enemies ignore
+ * a player who is close enough to touch while answering to one across the
+ * level. Taking the nearer of the two is what makes them react to both.
+ *
+ * Outside a session this is the first player and nothing else, because there is
+ * no second body to find.
+ */
+/*!
+ * The name a script should know an entity by.
+ *
+ * Identical to idString() with one exception: the second player answers to
+ * "player", the same as the first.
+ *
+ * Scripts constantly ask who did something to them - `IF (^SENDER != PLAYER)
+ * ACCEPT` appears three times in the goblin script alone - and there has only
+ * ever been one name for a player to give. The second player's body is an
+ * ordinary entity called coop_player_0001, a name no script in the game has
+ * heard of, so every one of those tests came out false and the creature
+ * shrugged off whatever they had just done to it. Giving both players the name
+ * the scripts are looking for is what makes the second one count as a player
+ * rather than as a stranger who happens to be swinging a sword.
+ */
+static std::string_view scriptIdString(const Entity * entity) {
+
+	if(entity && coop::isAvatarEntity(entity)) {
+		return "player";
+	}
+
+	return idString(entity);
+}
+
+static Vec3f nearestPlayerPosTo(const Entity * asker) {
+
+	// In a script event the other player caused, "the player" is not a matter
+	// of distance - it is them, however far away the asking entity is.
+	if(Entity * partner = coop::scriptContextPlayer()) {
+		return partner->pos + ARXCHARACTER::baseOffset();
+	}
+
+	const Vec3f from = asker ? asker->pos : player.pos;
+	Vec3f best = player.pos;
+
+	if(Entity * other = coop::avatarEntity()) {
+		// The body stands on the ground; the player position the rest of the
+		// engine talks about sits a head-height above it.
+		Vec3f otherPos = other->pos + ARXCHARACTER::baseOffset();
+		if(arx::distance2(from, otherPos) < arx::distance2(from, best)) {
+			best = otherPos;
+		}
+	}
+
+	return best;
+}
 
 bool isLocalVariable(std::string_view name) {
 	
@@ -522,7 +586,7 @@ ValueType getSystemVar(const script::Context & context, std::string_view name,
 			
 			if(name == "^&playerdist") {
 				if(context.getEntity()) {
-					*fcontent = fdist(player.pos, context.getEntity()->pos);
+					*fcontent = fdist(nearestPlayerPosTo(context.getEntity()), context.getEntity()->pos);
 					return TYPE_FLOAT;
 				}
 			}
@@ -545,7 +609,7 @@ ValueType getSystemVar(const script::Context & context, std::string_view name,
 			
 			if(name == "^#playerdist") {
 				if(context.getEntity()) {
-					*lcontent = long(fdist(player.pos, context.getEntity()->pos));
+					*lcontent = long(fdist(nearestPlayerPosTo(context.getEntity()), context.getEntity()->pos));
 					return TYPE_LONG;
 				}
 			}
@@ -783,7 +847,7 @@ ValueType getSystemVar(const script::Context & context, std::string_view name,
 				if(context.getEntity()) {
 					Entity * target = entities.getById(name.substr(6));
 					if(target == entities.player()) {
-						*fcontent = fdist(player.pos, context.getEntity()->pos);
+						*fcontent = fdist(nearestPlayerPosTo(context.getEntity()), context.getEntity()->pos);
 					} else if(target
 					          && (context.getEntity()->show == SHOW_FLAG_IN_SCENE
 					              || context.getEntity()->show == SHOW_FLAG_IN_INVENTORY)
@@ -1052,11 +1116,22 @@ ValueType getSystemVar(const script::Context & context, std::string_view name,
 			}
 			
 			if(boost::starts_with(name, "^player_life")) {
+				// In a script event the other player caused, their vitals are
+				// the ones being asked about. Only what is replicated can be
+				// answered - life and mana are; skills and gold are not.
+				if(coop::isPartnerScriptContext()) {
+					*fcontent = coop::avatar().life;
+					return TYPE_FLOAT;
+				}
 				*fcontent = player.Full_life; // TODO why not player.life like everywhere else?
 				return TYPE_FLOAT;
 			}
 
 			if(boost::starts_with(name, "^player_mana")) {
+				if(coop::isPartnerScriptContext()) {
+					*fcontent = coop::avatar().mana;
+					return TYPE_FLOAT;
+				}
 				*fcontent = player.manaPool.current;
 				return TYPE_FLOAT;
 			}
@@ -1087,16 +1162,31 @@ ValueType getSystemVar(const script::Context & context, std::string_view name,
 			}
 			
 			if(boost::starts_with(name, "^player_gold")) {
+				// A payment script running in the partner's name gates on the
+				// purse that will actually pay - theirs, sent with the click.
+				long purse;
+				if(coop::partnerPurse(purse)) {
+					*fcontent = static_cast<float>(purse);
+					return TYPE_FLOAT;
+				}
 				*fcontent = static_cast<float>(player.gold);
 				return TYPE_FLOAT;
 			}
 			
 			if(boost::starts_with(name, "^player_maxlife")) {
+				if(coop::isPartnerScriptContext()) {
+					*fcontent = coop::avatar().maxLife;
+					return TYPE_FLOAT;
+				}
 				*fcontent = player.lifePool.max;
 				return TYPE_FLOAT;
 			}
 
 			if(boost::starts_with(name, "^player_maxmana")) {
+				if(coop::isPartnerScriptContext()) {
+					*fcontent = coop::avatar().maxMana;
+					return TYPE_FLOAT;
+				}
 				*fcontent = player.manaPool.max;
 				return TYPE_FLOAT;
 			}
@@ -1225,8 +1315,10 @@ ValueType getSystemVar(const script::Context & context, std::string_view name,
 						if(context.getEntity()->requestRoomUpdate) {
 							UpdateIORoom(context.getEntity());
 						}
-						RoomHandle playerRoom = ARX_PORTALS_GetRoomNumForPosition(player.pos, RoomPositionForCamera);
-						*fcontent = SP_GetRoomDist(context.getEntity()->pos, player.pos, context.getEntity()->room, playerRoom);
+						// Through-the-rooms distance, to whichever player is nearer.
+						Vec3f playerPos = nearestPlayerPosTo(context.getEntity());
+						RoomHandle playerRoom = ARX_PORTALS_GetRoomNumForPosition(playerPos, RoomPositionForCamera);
+						*fcontent = SP_GetRoomDist(context.getEntity()->pos, playerPos, context.getEntity()->room, playerRoom);
 					} else if(target
 					          && (context.getEntity()->show == SHOW_FLAG_IN_SCENE
 					              || context.getEntity()->show == SHOW_FLAG_IN_INVENTORY)
@@ -1344,7 +1436,7 @@ ValueType getSystemVar(const script::Context & context, std::string_view name,
 		case 's': {
 			
 			if(boost::starts_with(name, "^sender")) {
-				txtcontent = idString(context.getSender());
+				txtcontent = scriptIdString(context.getSender());
 				return TYPE_TEXT;
 			}
 			
@@ -1515,11 +1607,24 @@ struct QueuedEvent {
 	Entity * entity;
 	ScriptEventName event;
 	ScriptParameters parameters;
-	
+
+	/*!
+	 * Whether this was queued while acting for the other player.
+	 *
+	 * SENDEVENT does not call, it queues, and the queue is drained later from
+	 * the top of the frame where nothing remembers who set any of it off. A
+	 * story moment is almost entirely made of these hops - the goblin sends
+	 * the camera an event, the camera takes the view - so without carrying it
+	 * the scene forgets whose it was somewhere in the middle and lands on the
+	 * wrong screen. Timers already carry it for exactly the same reason.
+	 */
+	bool partnerContext;
+
 	void clear() {
 		exists = false;
 		sender = nullptr;
 		entity = nullptr;
+		partnerContext = false;
 		event = ScriptEventName();
 		parameters.clear();
 	}
@@ -1566,6 +1671,9 @@ void ARX_SCRIPT_EventStackExecute(size_t limit) {
 		if(ValidIOAddress(event.entity)) {
 			Entity * sender = ValidIOAddress(event.sender) ? event.sender : nullptr;
 			LogDebug("running queued " << event.event << " for " << event.entity->idString());
+			// Still their errand, however many hops later this runs.
+			coop::ScopedPlayerContext context(event.partnerContext ? coop::avatarEntity()
+			                                                       : nullptr);
 			SendIOScriptEvent(sender, event.entity, event.event, event.parameters);
 		} else {
 			LogDebug("could not run queued " << event.event
@@ -1594,6 +1702,7 @@ void Stack_SendIOScriptEvent(Entity * sender, Entity * entity, const ScriptEvent
 			entry.entity = entity;
 			entry.event = event;
 			entry.parameters = parameters;
+			entry.partnerContext = coop::isPartnerScriptContext();
 			entry.exists = true;
 			return;
 		}
@@ -1675,12 +1784,17 @@ SCR_TIMER & createScriptTimer(Entity * io, std::string && name) {
 		for(SCR_TIMER & timer : g_scriptTimers) {
 			if(!timer.exist) {
 				timer = SCR_TIMER(io, std::move(name));
+				// Stamped here so every creation site inherits it: a timer
+				// armed while handling the other player's action stays theirs.
+				timer.partnerContext = coop::isPartnerScriptContext();
 				return timer;
 			}
 		}
 	}
 	
-	return g_scriptTimers.emplace_back(io, std::move(name));
+	SCR_TIMER & timer = g_scriptTimers.emplace_back(io, std::move(name));
+	timer.partnerContext = coop::isPartnerScriptContext();
+	return timer;
 }
 
 size_t ARX_SCRIPT_CountTimers() {
@@ -1818,6 +1932,8 @@ void ARX_SCRIPT_Timer_Check() {
 		const EERIE_SCRIPT * es = timer.es;
 		Entity * io = timer.io;
 		size_t pos = timer.pos;
+		// Copied before clearTimer() can wipe the slot.
+		const bool partnerContext = timer.partnerContext;
 		
 		if(!es && Manage_Specific_RAT_Timer(&timer)) {
 			continue;
@@ -1842,6 +1958,9 @@ void ARX_SCRIPT_Timer_Check() {
 		
 		if(es && ValidIOAddress(io)) {
 			LogDebug("running timer \"" << name << "\" for entity " << io->idString());
+			// Re-raise the player context the timer was armed under, so
+			// what it does lands on the player whose action started it.
+			coop::ScopedPlayerContext context(partnerContext ? coop::avatarEntity() : nullptr);
 			ScriptEvent::resume(es, io, pos);
 		} else {
 			LogDebug("could not run timer \"" << name << "\" - entity vanished");

@@ -1,5 +1,6 @@
 /*
  * Copyright 2014-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -34,6 +35,10 @@
 #include "core/Application.h"
 #include "core/Benchmark.h"
 #include "core/Config.h"
+#include "game/NPC.h"
+#include "game/Equipment.h"
+#include "game/EntityManager.h"
+#include "game/Player.h"
 #include "core/ArxGame.h"
 #include "core/Core.h"
 #include "core/Localisation.h"
@@ -71,6 +76,11 @@
 
 #include "io/log/Logger.h"
 
+#include "net/CoopNet.h"
+#include "net/CoopMmo.h"
+#include "net/CoopVoice.h"
+#include "net/CoopProtocol.h"
+
 #include "platform/Platform.h"
 
 #include "scene/GameSound.h"
@@ -93,24 +103,48 @@ public:
 		
 		reserveBottom();
 		
-		{
+		if(g_canResumeGame) {
 			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_main_editquest_confirm"));
 			txt->setEnabled(false);
 			addCenter(std::move(txt));
 		}
 		
-		{
+		if(g_canResumeGame) {
 			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_main_newquest_confirm"));
 			txt->setEnabled(false);
 			addCenter(std::move(txt));
 		}
 		
 		{
-			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_yes"));
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "NORMAL");
 			txt->clicked = [](Widget * /* widget */) {
+				g_ironman = false;
 				ARXMenu_NewQuest();
 			};
-			addCorner(std::move(txt), BottomRight);
+			addCenter(std::move(txt));
+		}
+		
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "IRON MAN");
+			txt->clicked = [](Widget * /* widget */) {
+				g_ironman = true;
+				ARXMenu_NewQuest();
+			};
+			addCenter(std::move(txt));
+		}
+		
+		// Under the choice it describes, and split in two because the panel is
+		// not wide - a sentence running out past its edge reads as a mistake.
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "IRON MAN: one life, one save.");
+			txt->setEnabled(false);
+			addCenter(std::move(txt));
+		}
+		
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "Dying deletes it. Solo only.");
+			txt->setEnabled(false);
+			addCenter(std::move(txt));
 		}
 		
 		{
@@ -175,7 +209,18 @@ public:
 			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_main_editquest_save"));
 			txt->clicked = [this](Widget * /* widget */) {
 				m_textbox->unfocus();
-				savegames.save(m_textbox->text(), m_savegame, savegame_thumbnail);
+				/*
+				 * An iron man run may be saved whenever the player likes - what
+				 * it may not do is keep two of them. Whatever slot is picked and
+				 * whatever name is typed, the save goes to the one slot the run
+				 * owns, so there is never a second copy to fall back on when it
+				 * is deleted.
+				 */
+				if(g_ironman) {
+					ARX_IronmanSave();
+				} else {
+					savegames.save(m_textbox->text(), m_savegame, savegame_thumbnail);
+				}
 			};
 			txt->setTargetPage(Page_None);
 			addCorner(std::move(txt), BottomRight);
@@ -218,6 +263,30 @@ private:
 	TextWidget * pDeleteButton;
 	
 };
+
+/*
+ * An iron man run is shown its own save and nothing else.
+ *
+ * Not for tidiness: a list of every other save is a list of ways out, and the
+ * whole of the mode is that there is no way out. The other saves are still
+ * there and still load - from an ordinary run, where they belong.
+ */
+static bool listedInSaveMenu(SavegameHandle save) {
+	if(!g_ironman) {
+		return true;
+	}
+	return savegames[save].name == ARX_IRONMAN_SLOT;
+}
+
+//! Whether this run has written its save yet.
+static bool hasIronmanSave() {
+	for(SavegameHandle save : savegames) {
+		if(savegames[save].name == ARX_IRONMAN_SLOT) {
+			return true;
+		}
+	}
+	return false;
+}
 
 class LoadMenuPage final : public MenuPage {
 	
@@ -264,7 +333,7 @@ public:
 		// Show quicksaves.
 		size_t quicksaveNum = 0;
 		for(SavegameHandle save : savegames) {
-			if(savegames[save].quicksave) {
+			if(savegames[save].quicksave && listedInSaveMenu(save)) {
 				auto txt = std::make_unique<SaveSlotWidget>(save, ++quicksaveNum, hFontControls, m_rect);
 				txt->clicked = saveClicked;
 				txt->doubleClicked = saveDoubleClicked;
@@ -274,7 +343,7 @@ public:
 		
 		// Show regular saves.
 		for(SavegameHandle save : savegames) {
-			if(!savegames[save].quicksave) {
+			if(!savegames[save].quicksave && listedInSaveMenu(save)) {
 				auto txt = std::make_unique<SaveSlotWidget>(save, 0, hFontControls, m_rect);
 				txt->clicked = saveClicked;
 				txt->doubleClicked = saveDoubleClicked;
@@ -361,8 +430,20 @@ public:
 			addCenter(std::move(cb));
 		}
 		
+		/*
+		 * In an iron man run the row saves, and that is all it does.
+		 *
+		 * The page it would otherwise open exists to ask what to call the save
+		 * and which slot to put it in, and neither is a question here: there is
+		 * one slot and it has one name. Asking anyway would be theatre.
+		 */
 		std::function<void(Widget * widget)> saveClicked = [](Widget * widget) {
 			arx_assert(widget->type() == WidgetType_SaveSlot);
+			if(g_ironman) {
+				ARX_IronmanSave();
+				g_mainMenu->bReInitAll = true;
+				return;
+			}
 			SavegameHandle savegame = static_cast<SaveSlotWidget *>(widget)->savegame();
 			MenuPage * page = g_mainMenu->m_window->getPage(Page_SaveConfirm);
 			arx_assert(page->id() == Page_SaveConfirm);
@@ -372,10 +453,12 @@ public:
 		// Show quicksaves.
 		size_t quicksaveNum = 0;
 		for(SavegameHandle save : savegames) {
-			if(savegames[save].quicksave) {
+			if(savegames[save].quicksave && listedInSaveMenu(save)) {
 				auto txt = std::make_unique<SaveSlotWidget>(save, ++quicksaveNum, hFontControls, m_rect);
 				txt->clicked = saveClicked;
-				txt->setTargetPage(Page_SaveConfirm);
+				if(!g_ironman) {
+				txt->setTargetPage(Page_SaveConfirm);   // nothing to confirm; see saveClicked
+			}
 				txt->setEnabled(false);
 				addCenter(std::move(txt));
 			}
@@ -383,18 +466,37 @@ public:
 		
 		// Show regular saves.
 		for(SavegameHandle save : savegames) {
-			if(!savegames[save].quicksave) {
+			if(!savegames[save].quicksave && listedInSaveMenu(save)) {
 				auto txt = std::make_unique<SaveSlotWidget>(save, 0, hFontControls, m_rect);
 				txt->clicked = saveClicked;
-				txt->setTargetPage(Page_SaveConfirm);
+				if(!g_ironman) {
+				txt->setTargetPage(Page_SaveConfirm);   // nothing to confirm; see saveClicked
+			}
 				addCenter(std::move(txt));
 			}
 		}
 		
-		for(size_t i = savegames.size(); i <= 15; i++) {
-			auto txt = std::make_unique<SaveSlotWidget>(SavegameHandle(), i, hFontControls, m_rect);
+		/*
+		 * The empty slots below the list are how a NEW save is made.
+		 *
+		 * An iron man run gets exactly one of them, and only until it has
+		 * saved once - after that its own row is up there and the empty slot
+		 * would be a second way to ask for a second save. Hiding them all was
+		 * wrong in the other direction: a run that had not saved yet was shown
+		 * an empty page and could not save at all.
+		 */
+		size_t offered = g_ironman ? (hasIronmanSave() ? 0 : 1) : (16 - savegames.size());
+		for(size_t n = 0; n < offered; n++) {
+			// An ordinary slot is numbered by where it sits in the whole list;
+			// an iron man run has a list of one, so its empty slot is the first
+			// one rather than the eighth of somebody else's saves.
+			size_t number = g_ironman ? 1 : savegames.size() + n;
+			auto txt = std::make_unique<SaveSlotWidget>(SavegameHandle(), number,
+			                                           hFontControls, m_rect);
 			txt->clicked = saveClicked;
-			txt->setTargetPage(Page_SaveConfirm);
+			if(!g_ironman) {
+				txt->setTargetPage(Page_SaveConfirm);   // nothing to confirm; see saveClicked
+			}
 			addCenter(std::move(txt));
 		}
 		
@@ -1232,6 +1334,67 @@ public:
 			addCenter(std::move(cb));
 		}
 		
+		/*
+		 * The camera settings live here rather than with the co-op ones.
+		 *
+		 * They went on the co-op page first because that is where the mod's
+		 * other switches are, and four more rows pushed HOST, JOIN and LEAVE
+		 * SESSION off the bottom of the panel - a page has a height and
+		 * nothing warns you when you pass it. They belong here anyway: this
+		 * is the page for what the view looks like, next to the crosshair and
+		 * the HUD scale, and none of it has anything to do with co-op.
+		 */
+		{
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+			                                               "Third person", hFontControls);
+			slider->setSnug(sliderSize().y * 0.4f);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
+				config.input.thirdPerson = (pos == 1);
+				config.save();
+			};
+			slider->addEntry("off");
+			slider->addEntry("on");
+			slider->setValue(config.input.thirdPerson ? 1 : 0);
+			addCenter(std::move(slider));
+		}
+		
+		{
+			// Ten notches over 60..420 units, and the wheel moves it in play.
+			auto sld = std::make_unique<SliderWidget>(sliderSize(), hFontMenu, "Camera distance");
+			sld->valueChanged = [](int value) {
+				config.input.camDistance = 60 + glm::clamp(value, 0, 10) * 36;
+				config.save();
+			};
+			sld->setValue(glm::clamp((config.input.camDistance - 60) / 36, 0, 10));
+			addCenter(std::move(sld));
+		}
+		
+		{
+			auto sld = std::make_unique<SliderWidget>(sliderSize(), hFontMenu, "Camera height");
+			sld->valueChanged = [](int value) {
+				config.input.camHeight = glm::clamp(value, 0, 10) * 8;
+				config.save();
+			};
+			sld->setValue(glm::clamp(config.input.camHeight / 8, 0, 10));
+			addCenter(std::move(sld));
+		}
+		
+		{
+			/*
+			 * Centre notch is dead behind the head; either way from there
+			 * pushes the camera round a shoulder so the body stops standing
+			 * in front of whatever you are looking at. Which shoulder is a
+			 * taste, so both are offered rather than one being chosen here.
+			 */
+			auto sld = std::make_unique<SliderWidget>(sliderSize(), hFontMenu, "Camera shoulder");
+			sld->valueChanged = [](int value) {
+				config.input.camSide = (glm::clamp(value, 0, 10) - 5) * 16;
+				config.save();
+			};
+			sld->setValue(glm::clamp(config.input.camSide / 16 + 5, 0, 10));
+			addCenter(std::move(sld));
+		}
+		
 		addBackButton(Page_Options);
 		
 	}
@@ -1530,7 +1693,27 @@ public:
 			cb->setValue(int(config.input.quickLevelTransition));
 			addCenter(std::move(cb));
 		}
-		
+
+		{
+			/*
+			 * The console, without having to know the rune sequence.
+			 *
+			 * It is the only way into parts of the game no door leads to - the
+			 * level the opening film was shot on, for one - so it belongs in the
+			 * options next to everything else you can turn on, rather than behind
+			 * Aam-Mega-Stregum-Comunicatum-Spacium. Off by default: a player who
+			 * never wants it never meets it, and the setting is remembered.
+			 */
+			std::string_view label = getLocalised("system_menus_options_input_allow_console",
+			                                      "Console (` key)");
+			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
+			cb->setChecked(config.input.allowConsole);
+			cb->stateChanged = [](bool checked) noexcept {
+				config.input.allowConsole = checked;
+			};
+			addCenter(std::move(cb));
+		}
+
 		addBackButton(Page_Options);
 		
 		{
@@ -1560,12 +1743,20 @@ public:
 	
 protected:
 	
-	void addControlRow(ControlAction controlAction, std::string_view text) {
+	/*
+	 *  fallback is used when the key is not in the locale files at all,
+	 * which is the case for anything this mod adds - the original game never
+	 * had a word for it in any language.
+	 */
+	void addControlRow(ControlAction controlAction, std::string_view text,
+	                   std::string_view fallback = std::string_view()) {
 		
 		auto panel = std::make_unique<PanelWidget>();
 		
 		{
-			auto txt = std::make_unique<TextWidget>(hFontControls, getLocalised(text));
+			std::string_view label = fallback.empty() ? getLocalised(text)
+			                                          : getLocalised(text, fallback);
+			auto txt = std::make_unique<TextWidget>(hFontControls, label);
 			txt->setEnabled(false);
 			panel->add(std::move(txt));
 		}
@@ -1658,6 +1849,8 @@ public:
 		addControlRow(CONTROLS_CUST_LOOKDOWN,     "system_menus_options_input_customize_controls_look_down");
 		
 		addControlRow(CONTROLS_CUST_MINIMAP,      "system_menus_options_input_customize_controls_minimap");
+		addControlRow(CONTROLS_CUST_COOP_TALK,   "system_menus_options_input_customize_controls_coop_talk",
+		              "Talk to partner");
 		
         addControlRow(CONTROLS_CUST_CONSOLE, "system_menus_options_input_customize_controls_console");
 		
@@ -1811,10 +2004,557 @@ public:
 			addCorner(std::move(txt), BottomCenter);
 		}
 		
+		{
+			auto cb = std::make_unique<ButtonWidget>(buttonSize(16, 16), "graph/interface/menus/next");
+			cb->setTargetPage(Page_OptionsInputCustomizeKeys3);
+			addCorner(std::move(cb), BottomRight);
+		}
+		
 		reinitActionKeys();
 		
 	}
 	
+};
+
+/*!
+ * The MMO controls, on a page of their own.
+ *
+ * A page rather than a few more rows on the last one because the other two
+ * are already full, and because these keys are a set: a player who is not
+ * using MMO mode has no reason to read past the arrow, and one who is finds
+ * the whole thing in one place.
+ * Every label here carries its English fallback - the original game never had
+ * a word for any of this in any language.
+ */
+class ControlOptionsMenuPage5 final : public ControlOptionsPage {
+	
+public:
+	
+	ControlOptionsMenuPage5()
+		: ControlOptionsPage(Page_OptionsInputCustomizeKeys5)
+	{ }
+	
+	void init() override {
+		
+		reserveBottom();
+		
+		addControlRow(CONTROLS_CUST_MMO_THIRDPERSON,
+		              "system_menus_options_input_customize_controls_mmo_third_person",
+		              "Third person view");
+		addControlRow(CONTROLS_CUST_MMO_TARGET,
+		              "system_menus_options_input_customize_controls_mmo_target",
+		              "Target next enemy");
+		
+		addControlRow(CONTROLS_CUST_MMO_SLOT1,
+		              "system_menus_options_input_customize_controls_mmo_slot_1", "Action bar 1");
+		addControlRow(CONTROLS_CUST_MMO_SLOT2,
+		              "system_menus_options_input_customize_controls_mmo_slot_2", "Action bar 2");
+		addControlRow(CONTROLS_CUST_MMO_SLOT3,
+		              "system_menus_options_input_customize_controls_mmo_slot_3", "Action bar 3");
+		addControlRow(CONTROLS_CUST_MMO_SLOT4,
+		              "system_menus_options_input_customize_controls_mmo_slot_4", "Action bar 4");
+		addControlRow(CONTROLS_CUST_MMO_SLOT5,
+		              "system_menus_options_input_customize_controls_mmo_slot_5", "Action bar 5");
+		
+		addBackButton(Page_OptionsInputCustomizeKeys4);
+		
+		{
+			std::string_view label = getLocalised("system_menus_options_input_customize_default");
+			auto txt = std::make_unique<TextWidget>(hFontMenu, label);
+			txt->clicked = [this](Widget * /* widget */) {
+				resetActionKeys();
+			};
+			addCorner(std::move(txt), BottomCenter);
+		}
+		
+		reinitActionKeys();
+		
+	}
+	
+};
+
+/*!
+ * Host or join a two player game.
+ *
+ * Everything here is deliberately one screen with no wizard: hosting is one
+ * click, joining is an address and one click. The line at the bottom is a live
+ * readout rather than a one-shot message, because connecting happens over
+ * several seconds and without it a player who mistyped an address would sit
+ * looking at an unchanged menu wondering whether anything was happening.
+ */
+class CoopMenuPage final : public MenuPage {
+
+	TextInputWidget * m_address = nullptr;
+	TextInputWidget * m_port = nullptr;
+	TextWidget * m_hostButton = nullptr;
+	TextWidget * m_joinButton = nullptr;
+	TextWidget * m_leaveButton = nullptr;
+	CheckboxWidget * m_portCheckbox = nullptr;
+	CheckboxWidget * m_micTest = nullptr;
+	TextWidget * m_micMeter = nullptr;
+	CycleTextWidget * m_micCycle = nullptr;
+	TextWidget * m_portLabel = nullptr;
+
+	/*
+	 * Most people never need to think about the port. Playing over a virtual
+	 * LAN - Radmin, Hamachi, ZeroTier - there is nothing to forward and nothing
+	 * to choose: type the address your friend's VPN gave them and go. The port
+	 * box only earns its place when the standard one is taken or a router was
+	 * set up by hand, so it starts switched off and out of the way.
+	 */
+	bool m_customPort = false;
+
+public:
+
+	CoopMenuPage()
+		: MenuPage(Page_Coop)
+	{ }
+
+	void init() override {
+
+		reserveTop();
+		reserveBottom();
+
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "CO-OPERATIVE PLAY");
+			txt->setEnabled(false);
+			addCenter(std::move(txt));
+		}
+
+		{
+			auto txt = std::make_unique<TextWidget>(hFontControls, "IP address");
+			txt->setEnabled(false);
+			txt->forceDisplay(TextWidget::Disabled);
+			addCenter(std::move(txt));
+		}
+
+		{
+			auto txt = std::make_unique<TextInputWidget>(hFontMenu, "127.0.0.1", m_rect);
+			txt->setMaxLength(64);
+			m_address = txt.get();
+			addCenter(std::move(txt));
+		}
+
+		{
+			// The label is its own centred line, like every other label on this
+			// page, and it says which way the switch is currently set. A
+			// checkbox given the page's full width - which is what the options
+			// menu wants - would push the words to the far left and the box to
+			// the far right, with the room between them empty.
+			auto txt = std::make_unique<TextWidget>(hFontControls, portLabelText(false));
+			txt->clicked = [this](Widget * /* widget */) {
+				if(m_portCheckbox && m_portCheckbox->isEnabled()) {
+					m_portCheckbox->setChecked(!m_portCheckbox->checked());
+					setCustomPort(m_portCheckbox->checked());
+				}
+			};
+			m_portLabel = txt.get();
+			addCenter(std::move(txt));
+		}
+
+		{
+			float box = checkboxSize().y;
+			auto cb = std::make_unique<CheckboxWidget>(Vec2f(box, box), hFontControls, "");
+			cb->setChecked(false);
+			cb->stateChanged = [this](bool checked) {
+				setCustomPort(checked);
+			};
+			m_portCheckbox = cb.get();
+			addCenter(std::move(cb));
+		}
+
+		{
+			auto txt = std::make_unique<TextInputWidget>(hFontMenu,
+			                                             std::to_string(coop::DefaultPort), m_rect);
+			txt->setMaxLength(5);
+			m_port = txt.get();
+			addCenter(std::move(txt));
+		}
+
+		{
+			/*
+			 * Voice, and how it opens. Both live here rather than in the audio
+			 * options because they only mean anything with another player in
+			 * the world, and this is the page you are on when you invite one.
+			 */
+			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontControls,
+			                                           "VOICE CHAT");
+			cb->setChecked(coop::voice::enabled());
+			cb->stateChanged = [](bool checked) {
+				coop::voice::setEnabled(checked);
+			};
+			addCenter(std::move(cb));
+		}
+
+		{
+			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontControls,
+			                                           "OPEN MIC");
+			cb->setChecked(coop::voice::openMic());
+			cb->stateChanged = [](bool checked) {
+				coop::voice::setOpenMic(checked);
+			};
+			addCenter(std::move(cb));
+		}
+
+		{
+			/*
+			 * Somewhere to find out whether the microphone works without having
+			 * to arrange a game first. It opens the microphone on its own and
+			 * shows what it hears; nothing is sent anywhere.
+			 */
+			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontControls,
+			                                           "MIC TEST");
+			cb->setChecked(coop::voice::testing());
+			cb->stateChanged = [](bool checked) {
+				coop::voice::setTesting(checked);
+			};
+			m_micTest = cb.get();
+			addCenter(std::move(cb));
+		}
+
+		{
+			/*
+			 * The talk key, changeable here rather than only in the controls
+			 * menu. This is the page someone is on when they are setting up
+			 * voice, and being sent to another menu to change the one key that
+			 * matters is exactly the sort of thing that stops people bothering.
+			 */
+			auto panel = std::make_unique<PanelWidget>();
+
+			{
+				auto txt = std::make_unique<TextWidget>(hFontControls, "TALK KEY");
+				txt->setEnabled(false);
+				panel->add(std::move(txt));
+			}
+
+			auto keybind = std::make_unique<KeybindWidget>(CONTROLS_CUST_COOP_TALK, 0,
+			                                              hFontControls);
+			keybind->keyChanged = [](KeybindWidget * bind) {
+				config.setActionKey(bind->action(), bind->index(), bind->key());
+			};
+			keybind->setPosition(RATIO_2(Vec2f(150.f, 0.f)));
+			panel->add(std::move(keybind));
+
+			addCenter(std::move(panel), false);
+		}
+
+		{
+			/*
+			 * Which microphone, with arrows, the way Cutscenes is chosen.
+			 *
+			 * Not a nicety - this machine offers three microphones and all three
+			 * are virtual devices, only one of which carries a voice. Nothing in
+			 * software can tell which, so the player picks and watches the meter.
+			 * Device names run long, so the tail is what gets kept: the part in
+			 * brackets is what tells two headsets apart.
+			 */
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+			                                               "Microphone", hFontControls);
+			slider->setSnug(sliderSize().y * 0.4f);
+			slider->valueChanged = [this](int pos, std::string_view /* string */) {
+				coop::voice::setDevice(pos - 1); // entry 0 is the system default
+				if(!coop::voice::testing()) {
+					// Choosing a microphone means wanting to hear it.
+					coop::voice::setTesting(true);
+					if(m_micTest) {
+						m_micTest->setChecked(true);
+					}
+				}
+			};
+			// The system default is always an entry, so the row is never empty:
+			// the arrows divide by the entry count, and zero entries was a crash.
+			int count = std::max(0, coop::voice::deviceCount());
+			for(int i = -1; i < count; i++) {
+				std::string name = coop::voice::deviceName(i);
+				const size_t room = 26;
+				if(name.size() > room) {
+					name = ".." + name.substr(name.size() - (room - 2));
+				}
+				slider->addEntry(name);
+				if(i == coop::voice::device()) {
+					slider->selectLast();
+				}
+			}
+			m_micCycle = slider.get();
+			addCenter(std::move(slider));
+		}
+
+		{
+			/*
+			 * How your own voice carries. VOIP is the proximity voice: out of
+			 * your body, fading with distance. NORMAL is a phone call: they hear
+			 * you at full volume anywhere, other levels included. The choice
+			 * rides with your voice, so each player sets their own.
+			 */
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+			                                               "Voice", hFontControls);
+			slider->setSnug(sliderSize().y * 0.4f);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
+				coop::voice::setEverywhere(pos == 1);
+			};
+			slider->addEntry("VOIP - from your body");
+			slider->addEntry("NORMAL - heard anywhere");
+			if(coop::voice::everywhere()) {
+				slider->selectLast();
+			}
+			addCenter(std::move(slider));
+		}
+
+		{
+			// The meter, and the key to hold. Both blank until they matter.
+			auto txt = std::make_unique<TextWidget>(hFontControls, " ");
+			txt->setEnabled(false);
+			txt->forceDisplay(TextWidget::Disabled);
+			m_micMeter = txt.get();
+			addCenter(std::move(txt));
+		}
+
+		{
+			/*
+			 * Whose screen a story moment belongs to. Click to move on.
+			 *
+			 * Only bites while you are standing in the same part of the world:
+			 * apart, each of you runs your own ground and plays your own
+			 * scenes, and walking into one has always been enough to see it.
+			 * Together, only one machine is simulating, so somebody has to say
+			 * whose scene it is - and by default it is whoever walked into it.
+			 */
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+			                                               "Cutscenes", hFontControls);
+			slider->setSnug(sliderSize().y * 0.4f);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
+				config.misc.cutscenes = (pos == 1) ? CutscenesForHost : CutscenesForTrigger;
+				config.save();
+			};
+			slider->addEntry("whoever triggers one");
+			slider->addEntry("player one only");
+			if(config.misc.cutscenes == CutscenesForHost) {
+				slider->selectLast();
+			}
+			addCenter(std::move(slider));
+		}
+
+		{
+			/*
+			 * How much life creatures get: a plain multiplier rather than easy /
+			 * normal / hard, so it says exactly what it does. The host's choice
+			 * rules in co-op - the host's world is the one being fought in - so
+			 * a guest only reads it here.
+			 */
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+			                                               "Enemy health", hFontControls);
+			slider->setSnug(sliderSize().y * 0.4f);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
+				if(coop::isGuest()) {
+					return;
+				}
+				config.input.enemyHealth = glm::clamp(pos + 1, 1, 3);
+				config.save();
+				rescaleEnemyHealth();
+			};
+			slider->addEntry("normal");
+			slider->addEntry("double health");
+			slider->addEntry("triple health");
+			slider->setValue(glm::clamp(enemyHealthSetting(), 1, 3) - 1);
+			slider->setEnabled(!coop::isGuest());
+			addCenter(std::move(slider));
+		}
+
+		{
+			// The top-left frame for the creature being fought: name, health, mana.
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+			                                               "Enemy health bar", hFontControls);
+			slider->setSnug(sliderSize().y * 0.4f);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
+				config.input.targetFrame = (pos == 0);
+				config.save();
+			};
+			slider->addEntry("on");
+			slider->addEntry("off");
+			slider->setValue(config.input.targetFrame ? 0 : 1);
+			addCenter(std::move(slider));
+		}
+
+		if(coop::MmoControlsOffered) {
+			/*
+			 * MMO controls: the camera behind the shoulder, a target that stays
+			 * picked, and the bar of twelve keys along the bottom. Not offered
+			 * at the moment - see MmoControlsOffered in CoopMmo.h. Third person
+			 * used to come with all of this and now has its own row below.
+			 */
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+			                                               "MMO controls", hFontControls);
+			slider->setSnug(sliderSize().y * 0.4f);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
+				config.input.mmoMode = (pos == 1);
+				config.save();
+			};
+			slider->addEntry("off");
+			slider->addEntry("on");
+			slider->setValue(config.input.mmoMode ? 1 : 0);
+			addCenter(std::move(slider));
+		}
+
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "HOST GAME");
+			txt->setEnabled(!g_ironman);
+			txt->clicked = [this](Widget * /* widget */) {
+				if(m_port) {
+					m_port->unfocus();
+				}
+				if(m_address) {
+					m_address->unfocus();
+				}
+				coop::startHost(chosenPort());
+			};
+			m_hostButton = txt.get();
+			addCenter(std::move(txt));
+		}
+
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "JOIN GAME");
+			txt->setEnabled(!g_ironman);
+			txt->clicked = [this](Widget * /* widget */) {
+				if(m_address) {
+					m_address->unfocus();
+					if(m_port) {
+						m_port->unfocus();
+					}
+					// An address that already names a port keeps it; otherwise
+					// the port box decides, so the two players only ever have
+					// to agree on one number.
+					std::string address = m_address->text();
+					if(address.find(':') == std::string::npos) {
+						address += ':' + std::to_string(chosenPort());
+					}
+					coop::startClient(address);
+				}
+			};
+			m_joinButton = txt.get();
+			addCenter(std::move(txt));
+		}
+
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "LEAVE SESSION");
+			txt->clicked = [](Widget * /* widget */) {
+				coop::stop();
+			};
+			m_leaveButton = txt.get();
+			addCenter(std::move(txt));
+		}
+
+		addBackButton(Page_None);
+
+		refresh();
+
+	}
+
+	//! What the line above the box reads, which says which way it is set.
+	static const char * portLabelText(bool on) {
+		return on ? "PORT IS ON" : "PORT ARE DISABLE";
+	}
+
+	//! Switch between the standard port and one the player types.
+	void setCustomPort(bool custom) {
+
+		m_customPort = custom;
+
+		if(m_portLabel) {
+			m_portLabel->setText(portLabelText(custom));
+		}
+
+		if(!custom && m_port) {
+			// Back to the standard port, so nobody is left hosting on a number
+			// they typed and then switched off.
+			m_port->unfocus();
+			m_port->setText(std::to_string(coop::DefaultPort));
+		}
+
+	}
+
+	//! The port typed in the box, or the standard one if it reads as nonsense.
+	unsigned short chosenPort() const {
+
+		if(m_port && m_customPort) {
+			if(auto parsed = util::toInt(m_port->text())) {
+				if(*parsed > 0 && *parsed < 65536) {
+					return static_cast<unsigned short>(*parsed);
+				}
+			}
+		}
+
+		return coop::DefaultPort;
+
+	}
+
+	//! Pulled every frame by the main menu so the readout is actually live.
+	void refresh() {
+
+		bool active = coop::isActive();
+
+		if(m_hostButton) {
+			m_hostButton->setEnabled(!active);
+		}
+		if(m_joinButton) {
+			m_joinButton->setEnabled(!active);
+		}
+		if(m_leaveButton) {
+			m_leaveButton->setEnabled(active);
+		}
+
+		if(m_micCycle) {
+			m_micCycle->setEnabled(coop::voice::enabled());
+		}
+
+		if(m_micMeter) {
+
+			/*
+			 * A bar drawn out of blocks, because there is no meter widget and a
+			 * number tells a player nothing. What matters is that it moves when
+			 * they speak - that is the whole question being asked.
+			 */
+			std::string line;
+
+			if(!coop::voice::enabled()) {
+				line = " ";
+			} else if(coop::voice::testing() || active) {
+
+				const char * fault = coop::voice::problem();
+				if(fault && *fault) {
+					line = fault;
+				} else {
+					int filled = int(std::min(1.f, coop::voice::level() * 4.f) * 12.f);
+					line = "[";
+					for(int i = 0; i < 12; i++) {
+						line += (i < filled) ? "|" : ".";
+					}
+					line += "]";
+					if(coop::voice::transmitting()) {
+						line += " SENDING";
+					}
+				}
+
+			} else {
+				// Idle: the key is shown by the binding widget above, so there
+				// is nothing useful to put here.
+				line = " ";
+			}
+
+			m_micMeter->setText(line);
+
+		}
+
+		if(m_portCheckbox) {
+			m_portCheckbox->setEnabled(!active);
+		}
+		if(m_port) {
+			// Live only when it is being used, so nobody joining over a
+			// virtual LAN has to wonder what a port is.
+			m_port->setEnabled(m_customPort && !active);
+		}
+
+	}
+
 };
 
 class QuitConfirmMenuPage final : public MenuPage {
@@ -1883,10 +2623,12 @@ void MainMenu::initWindowPages() {
 	m_window->add(std::make_unique<ControlOptionsMenuPage2>());
 	m_window->add(std::make_unique<ControlOptionsMenuPage3>());
 	m_window->add(std::make_unique<ControlOptionsMenuPage4>());
-	
+	m_window->add(std::make_unique<ControlOptionsMenuPage5>());
+	m_window->add(std::make_unique<CoopMenuPage>());
+
 	m_window->add(std::make_unique<QuitConfirmMenuPage>());
 	m_window->add(std::make_unique<LocalizationMenuPage>());
-	
+
 }
 
 
@@ -1928,13 +2670,17 @@ void MainMenu::init() {
 	{
 		auto txt = std::make_unique<TextWidget>(hFontMainMenu, getLocalised("system_menus_main_newquest"));
 		txt->clicked = [this](Widget * /* widget */) {
-			if(g_canResumeGame) {
-				requestPage(Page_NewQuestConfirm);
-				if(m_window) {
-					m_window->setScroll(0.f);
-				}
-			} else {
-				ARXMenu_NewQuest();
+			/*
+			 * Always the page, even with no game to erase.
+			 *
+			 * It used to go straight in when there was nothing to lose, which
+			 * was fine while the page only asked "are you sure" - but the page
+			 * is where the run's mode is chosen now, and skipping it meant the
+			 * choice only ever appeared to somebody already playing.
+			 */
+			requestPage(Page_NewQuestConfirm);
+			if(m_window) {
+				m_window->setScroll(0.f);
 			}
 		};
 		txt->setPosition(pos);
@@ -1944,6 +2690,16 @@ void MainMenu::init() {
 	{
 		auto txt = std::make_unique<TextWidget>(hFontMainMenu, getLocalised("system_menus_main_editquest"));
 		txt->setTargetPage(Page_LoadOrSave);
+		txt->setPosition(pos);
+		m_widgets.add(std::move(txt));
+	}
+	pos.y += yOffset;
+	{
+		// Not localised: the base game has no string for it, and an English
+		// label everyone can read beats a missing-key placeholder.
+		auto txt = std::make_unique<TextWidget>(hFontMainMenu, "CO-OP");
+		txt->setTargetPage(Page_Coop);
+		txt->setEnabled(!g_ironman);   // solo only, on purpose - see g_ironman
 		txt->setPosition(pos);
 		m_widgets.add(std::move(txt));
 	}
@@ -2022,7 +2778,15 @@ void MainMenu::update() {
 		}
 		m_window->setCurrentPage(m_requestedPage);
 	}
-	
+
+	// Connecting takes a few seconds and can fail. Refresh the co-op readout
+	// every frame so the player watches it happen instead of guessing.
+	if(m_window && m_window->currentPageId() == Page_Coop) {
+		if(MenuPage * page = m_window->getPage(Page_Coop)) {
+			static_cast<CoopMenuPage *>(page)->refresh();
+		}
+	}
+
 	m_widgets.update();
 	
 	if(m_selected) {

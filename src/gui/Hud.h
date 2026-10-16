@@ -1,5 +1,6 @@
 /*
  * Copyright 2014-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -420,6 +421,10 @@ public:
 	void updateInput();
 	void draw();
 	void recalcScale();
+
+	//! Where the life orb sits, so co-op can stack the partner's orb above it.
+	Rectf healthGaugeRect() { return healthGauge.rect(); }
+
 };
 
 extern HudRoot g_hudRoot;

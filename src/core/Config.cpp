@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -91,6 +92,22 @@ constexpr const int
 	quicksaveSlots = 3,
 	bufferSize = 0,
 	quickLevelTransition = JumpToChangeLevel;
+const int enemyHealth = 1;
+const bool creatureBars = false;
+const bool targetFrame = true;
+const bool mmoMode = false;
+const bool thirdPerson = false;
+const int camDistance = 200;
+const int camHeight = 20;
+const int camSide = 48;
+/*
+ * An empty bar apart from the swing, because the character has not learned
+ * any magic yet at the point this default is first written. Spells arrive on
+ * the bar by being dragged out of the spell book.
+ */
+const std::string_view actionBar = "attack,,,,";
+
+const CutsceneAudience cutscenes = CutscenesForTrigger;
 
 constexpr const bool
 	fullscreen = true,
@@ -193,6 +210,16 @@ constexpr const ActionKey actions[NUM_ACTION_KEY] = {
 	ActionKey(Keyboard::Key_Z),            // USE_ITEM (РєР»Р°РІРёС€Р° E)
 	ActionKey(Keyboard::Key_F8), // NEW_INVENTORY
     ActionKey(Keyboard::Key_N),	// OFFER_ITEM (РєР»Р°РІРёС€Р° G)
+	// COOP_TALK - was on V, which the third person toggle now wants; Z is free
+	// and still under the left hand, where push to talk needs to be
+	ActionKey(Keyboard::Key_O),
+	ActionKey(Keyboard::Key_1),      // MMO_SLOT1 - the swing
+	ActionKey(Keyboard::Key_2),      // MMO_SLOT2
+	ActionKey(Keyboard::Key_3),      // MMO_SLOT3
+	ActionKey(Keyboard::Key_4),      // MMO_SLOT4
+	ActionKey(Keyboard::Key_5),      // MMO_SLOT5
+	ActionKey(Keyboard::Key_K),      // MMO_THIRDPERSON - one key, first person to third and back
+	ActionKey(Keyboard::Key_Y),    // MMO_TARGET - where every MMO player reaches
 };
 
 } // namespace Default
@@ -286,6 +313,15 @@ constexpr const std::string_view
 	useAltRuneRecognition = "improved_rune_recognition",
 	improvedBowAim = "improved_bow_aim",
 	quickLevelTransition = "quick_level_transition",
+	enemyHealth = "enemy_health",
+	creatureBars = "creature_health_bars",
+	targetFrame = "target_frame",
+	mmoMode = "mmo_mode",
+	thirdPerson = "third_person",
+	camDistance = "cam_distance",
+	camHeight = "cam_height",
+	camSide = "cam_side",
+	actionBar = "action_bar",
 	allowConsole = "allow_console";
 
 // Input key options
@@ -348,6 +384,14 @@ constexpr const std::string_view actions[NUM_ACTION_KEY] = {
 	"use_item ",
 	"new_inventory ",
 	"offer_item ",	
+	"coop_talk",
+	"mmo_slot_1",
+	"mmo_slot_2",
+	"mmo_slot_3",
+	"mmo_slot_4",
+	"mmo_slot_5",
+	"mmo_third_person",
+	"mmo_target",
 };
 
 // Misc options
@@ -356,7 +400,8 @@ constexpr const std::string_view
 	migration = "migration",
 	quicksaveSlots = "quicksave_slots",
 	debugLevels = "debug",
-	realtimeOverride = "realtime_override";
+	realtimeOverride = "realtime_override",
+	cutscenes = "cutscenes";
 
 } // namespace Key
 
@@ -563,6 +608,15 @@ bool Config::save() {
 	writer.writeKey(Key::useAltRuneRecognition, input.useAltRuneRecognition);
 	writer.writeKey(Key::improvedBowAim, input.improvedBowAim);
 	writer.writeKey(Key::quickLevelTransition, int(input.quickLevelTransition));
+	writer.writeKey(Key::enemyHealth, input.enemyHealth);
+	writer.writeKey(Key::creatureBars, input.creatureBars);
+	writer.writeKey(Key::targetFrame, input.targetFrame);
+	writer.writeKey(Key::mmoMode, input.mmoMode);
+	writer.writeKey(Key::thirdPerson, input.thirdPerson);
+	writer.writeKey(Key::camDistance, input.camDistance);
+	writer.writeKey(Key::camHeight, input.camHeight);
+	writer.writeKey(Key::camSide, input.camSide);
+	writer.writeKey(Key::actionBar, input.actionBar);
 	if(input.allowConsole) {
 		// Only write this if true so that switching from release to debug builds enables the console
 		writer.writeKey(Key::allowConsole, input.allowConsole);
@@ -581,6 +635,7 @@ bool Config::save() {
 	writer.writeKey(Key::quicksaveSlots, misc.quicksaveSlots);
 	writer.writeKey(Key::debugLevels, misc.debug);
 	writer.writeKey(Key::realtimeOverride, misc.realtimeOverride);
+	writer.writeKey(Key::cutscenes, misc.cutscenes);
 	
 	return writer.flush();
 }
@@ -703,6 +758,18 @@ bool Config::init(const fs::path & file) {
 	input.improvedBowAim = reader.getKey(Section::Input, Key::improvedBowAim, Default::improvedBowAim);
 	int quickLevelTransition = reader.getKey(Section::Input, Key::quickLevelTransition, Default::quickLevelTransition);
 	input.quickLevelTransition = QuickLevelTransition(glm::clamp(quickLevelTransition, 0, 2));
+	input.enemyHealth = glm::clamp(reader.getKey(Section::Input, Key::enemyHealth, Default::enemyHealth), 1, 3);
+	input.creatureBars = reader.getKey(Section::Input, Key::creatureBars, Default::creatureBars);
+	input.targetFrame = reader.getKey(Section::Input, Key::targetFrame, Default::targetFrame);
+	input.mmoMode = reader.getKey(Section::Input, Key::mmoMode, Default::mmoMode);
+	input.thirdPerson = reader.getKey(Section::Input, Key::thirdPerson, Default::thirdPerson);
+	input.camDistance = glm::clamp(reader.getKey(Section::Input, Key::camDistance,
+	                                             Default::camDistance), 60, 420);
+	input.camHeight = glm::clamp(reader.getKey(Section::Input, Key::camHeight,
+	                                           Default::camHeight), 0, 80);
+	input.camSide = glm::clamp(reader.getKey(Section::Input, Key::camSide,
+	                                         Default::camSide), -80, 80);
+	input.actionBar = reader.getKey(Section::Input, Key::actionBar, Default::actionBar);
 	input.allowConsole = reader.getKey(Section::Input, Key::allowConsole, Default::allowConsole);
 	
 	// Get action key settings
@@ -716,6 +783,7 @@ bool Config::init(const fs::path & file) {
 	misc.quicksaveSlots = std::max(reader.getKey(Section::Misc, Key::quicksaveSlots, Default::quicksaveSlots), 1);
 	misc.debug = reader.getKey(Section::Misc, Key::debugLevels, Default::debugLevels);
 	misc.realtimeOverride = reader.getKey(Section::Misc, Key::realtimeOverride, Default::realtimeOverride);
+	misc.cutscenes = CutsceneAudience(reader.getKey(Section::Misc, Key::cutscenes, Default::cutscenes));
 	
 	return loaded;
 }

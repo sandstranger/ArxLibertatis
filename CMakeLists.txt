@@ -14,7 +14,7 @@ set (CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
-include_directories(SYSTEM ${ETC_PAK_INCLUDE_DIR})
+include_directories(SYSTEM ${ETC_PAK_INCLUDE_DIR} ${ENET_INCLUDE_DIR})
 
 # Define configuration options
 
@@ -361,6 +361,89 @@ else()
 endif()
 include_directories(SYSTEM ${ZLIB_INCLUDE_DIRS})
 list(APPEND ARX_LIBRARIES ${ZLIB_LIBRARIES})
+
+if (NOT ANDROID)
+    # ENet, the transport for two player co-op
+    list(APPEND ARX_LIBRARIES enet)
+endif ()
+
+if(WIN32)
+	# ENet needs Winsock and the multimedia timer on Windows
+	list(APPEND ARX_LIBRARIES ws2_32 winmm)
+endif()
+
+# libplum, so a host's router opens the co-op port by itself instead of the
+# host having to forward it by hand. Built straight into the executable rather
+# than linked as a library, so there is no extra DLL to ship.
+#
+# This copy carries thirdparty/libplum-multihomed.patch: upstream picks the
+# first default route and sends its UPnP discovery out of whatever interface
+# the routing table offers first, which on a machine running Radmin VPN or
+# Hamachi is the VPN rather than the real router.
+set(PLUM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libplum")
+file(GLOB PLUM_SOURCES "${PLUM_DIR}/src/*.c")
+add_library(plum STATIC ${PLUM_SOURCES})
+target_include_directories(plum PUBLIC "${PLUM_DIR}/include")
+target_include_directories(plum PRIVATE "${PLUM_DIR}/src")
+# Its own sources include "plum.h" unqualified, so that folder is on the path
+# too; only the parent is public, so the game says <plum/plum.h> as it should.
+target_include_directories(plum PRIVATE "${PLUM_DIR}/include/plum")
+target_compile_definitions(plum PUBLIC PLUM_STATIC)
+target_compile_definitions(plum PRIVATE PLUM_EXPORTS)
+find_package(Threads REQUIRED)
+target_link_libraries(plum PRIVATE Threads::Threads)
+if(WIN32)
+	target_compile_definitions(plum PRIVATE WIN32_LEAN_AND_MEAN)
+	# iphlpapi for the routing table, bcrypt for the random numbers UPnP needs
+	target_link_libraries(plum PRIVATE ws2_32 iphlpapi bcrypt)
+	list(APPEND ARX_LIBRARIES iphlpapi bcrypt)
+	# The rest of the game is compiled for Windows XP, but libplum needs calls
+	# that arrived with Vista - inet_pton, WSAPoll, condition variables. Raise
+	# the target for this one library only, so nothing else changes. These go
+	# through compile options rather than definitions because the undefine has
+	# to land before the redefine, and CMake puts options after definitions.
+	if(MSVC)
+		target_compile_options(plum PRIVATE /U_WIN32_WINNT /D_WIN32_WINNT=0x0600
+		                                    /UWINVER /DWINVER=0x0600)
+	else()
+		target_compile_options(plum PRIVATE -U_WIN32_WINNT -D_WIN32_WINNT=0x0600
+		                                    -UWINVER -DWINVER=0x0600)
+	endif()
+endif()
+include_directories(SYSTEM "${PLUM_DIR}/include")
+list(APPEND ARX_LIBRARIES plum)
+
+# Opus, the codec proximity voice speaks through. Built for exactly this: voice
+# at a low bitrate, in short frames, designed to survive lost packets.
+find_package(PkgConfig QUIET)
+pkg_check_modules(PC_Opus opus)
+if(PC_Opus_FOUND)
+	include_directories(SYSTEM ${PC_Opus_INCLUDE_DIRS})
+	link_directories(${PC_Opus_LIBRARY_DIRS})
+	list(APPEND ARX_LIBRARIES ${PC_Opus_LIBRARIES})
+else()
+	find_path(OPUS_INCLUDE_DIR opus/opus.h)
+	find_library(OPUS_LIBRARY NAMES opus)
+	if(OPUS_INCLUDE_DIR AND OPUS_LIBRARY)
+		include_directories(SYSTEM "${OPUS_INCLUDE_DIR}/opus")
+		list(APPEND ARX_LIBRARIES ${OPUS_LIBRARY})
+		set(ARX_HAVE_OPUS 1)
+	endif()
+endif()
+
+# Voice chat is a nicety, not a requirement. Without Opus the rest of the game
+# and all of the co-op still build - the microphone simply stays shut. Making
+# it fatal meant an optional feature could stop the whole thing compiling on a
+# machine that had every dependency that actually matters.
+if(PC_Opus_FOUND)
+	set(ARX_HAVE_OPUS 1)
+endif()
+if(ARX_HAVE_OPUS)
+	add_definitions(-DARX_HAVE_OPUS=1)
+else()
+	message(STATUS "Opus not found - building without co-op voice chat")
+	add_definitions(-DARX_HAVE_OPUS=0)
+endif()
 
 # FreeType
 use_static_libs(Freetype)
@@ -989,6 +1072,8 @@ set(GAME_SOURCES
 	src/game/magic/Spell.cpp
 	src/game/magic/SpellData.cpp
 	src/game/magic/SpellRecognition.cpp
+	src/game/magic/StudioSpells.cpp
+	src/game/magic/StudioWorld.cpp
 	src/game/magic/spells/SpellsLvl01.cpp
 	src/game/magic/spells/SpellsLvl02.cpp
 	src/game/magic/spells/SpellsLvl03.cpp
@@ -1014,6 +1099,7 @@ set(GRAPHICS_SOURCES
 	src/graphics/Renderer.cpp
 	src/graphics/RenderBatcher.cpp
 	src/graphics/data/FTL.cpp
+	src/graphics/data/AttachTurn.cpp
 	src/graphics/data/Mesh.cpp
 	src/graphics/data/MeshManipulation.cpp
 	src/graphics/data/TextureContainer.cpp
@@ -1065,6 +1151,7 @@ set(GUI_SOURCES
 	src/gui/CharacterCreation.cpp
 	src/gui/CinematicBorder.cpp
 	src/gui/Console.cpp
+	src/gui/CoopChat.cpp
 	src/gui/Credits.cpp
 	src/gui/Cursor.cpp
 	src/gui/Dragging.cpp
@@ -1154,6 +1241,16 @@ set(IO_FILESYSTEM_WINDOWS_SOURCES src/io/fs/FilesystemWindows.cpp)
 set(MATH_SOURCES
 	src/math/Angle.cpp
 	src/math/Random.cpp
+)
+
+set(NET_SOURCES
+	src/net/CoopInterp.cpp
+	src/net/CoopNet.cpp
+	src/net/CoopPortMap.cpp
+	src/net/CoopVoice.cpp
+	src/net/CoopMmo.cpp
+	src/net/CoopPlayer.cpp
+	src/net/CoopWorld.cpp
 )
 
 set(PHYSICS_SOURCES
@@ -1435,6 +1532,7 @@ set(ARX_SOURCES
 	${INPUT_SOURCES}
 	${IO_SOURCES}
 	${MATH_SOURCES}
+	${NET_SOURCES}
 	${PHYSICS_SOURCES}
 	${PLATFORM_SOURCES}
 	${PLATFORM_GUI_SOURCES}
@@ -1516,7 +1614,7 @@ endif()
 
 if (ANDROID)
 	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
-    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak)
+    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY})
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
     add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")

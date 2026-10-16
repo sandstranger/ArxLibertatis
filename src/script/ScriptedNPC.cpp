@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -48,6 +49,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "game/Camera.h"
 #include "game/EntityManager.h"
 #include "game/NPC.h"
+#include "game/Player.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
 #include "graphics/Math.h"
 #include "graphics/data/Mesh.h"
 #include "scene/Interactive.h"
@@ -435,9 +439,7 @@ public:
 		
 		DebugScript(' ' << life);
 		
-		IO_NPCDATA & npc = *context.getEntity()->_npcdata;
-		
-		npc.lifePool.max = npc.lifePool.current = life;
+		applyEnemyHealth(*context.getEntity(), life);
 		
 		return Success;
 	}
@@ -487,7 +489,58 @@ public:
 		}
 		target = context.getStringVar(target);
 		Entity * t = entities.getById(target, io);
-		
+
+		/*
+		 * "settarget player" is how every creature in the game is pointed at
+		 * somebody - the goblin script alone says it ten times - and the word
+		 * player has exactly one meaning to the engine: the first one. That is
+		 * the whole reason enemies would chase player one across a level while
+		 * ignoring player two standing next to them, and it is not something
+		 * the individual scripts can be blamed for, since there was only ever
+		 * one player to name.
+		 *
+		 * So the word is resolved here to whichever player this creature should
+		 * actually be dealing with, which is the nearer of the two.
+		 */
+		if(t == entities.player()) {
+			// Sight first, then walking distance - not crow-flies distance,
+			// which would send a creature after a player one wall away instead
+			// of the one standing in front of it.
+			t = coop::chooseTargetPlayer(io);
+		}
+
+		/*
+		 * And if something a player called up has been hurting this creature,
+		 * that is what "player" means to it now.
+		 *
+		 * Every script Arkane wrote answers one question when it is hurt - was
+		 * that the player? - so the engine says yes on a summon's behalf, and
+		 * the creature then comes after the person who did the summoning while
+		 * ignoring the thing actually burning it. The lie has to be told, or
+		 * the creature shrugs the blow off entirely; this is where it is taken
+		 * back. Asked here rather than written over the top of the script, so
+		 * that one route is worked out and the creature keeps to it.
+		 */
+		if(t && (t == entities.player() || coop::isAvatarEntity(t))
+		   && (io->ioflags & IO_NPC)
+		   && (io->_npcdata->behavior & (BEHAVIOUR_FIGHT | BEHAVIOUR_MAGIC
+		                                 | BEHAVIOUR_DISTANT))) {
+			/*
+			 * Only a target it is going to FIGHT. A creature also names the
+			 * player when it is searching for them (BEHAVIOR LOOK_FOR) and
+			 * when it is running away (BEHAVIOR FLEE), and those are its own
+			 * business: goblin_base decides it has found the player by asking
+			 * whether its target IS the player, so swapping the name in there
+			 * leaves it searching for ever. The behaviour is always set before
+			 * the target in these scripts, so by here it says which this is.
+			 */
+			if(Entity * owed = ARX_NPC_SummonGrudge(*io)) {
+				LogInfo << "summon grudge: " << io->idString()
+				        << " asked for the player, given " << owed->idString();
+				t = owed;
+			}
+		}
+
 		DebugScript(' ' << options << ' ' << target);
 		
 		if(io->ioflags & IO_CAMERA) {
@@ -513,7 +566,14 @@ public:
 			}
 			ARX_NPC_LaunchPathfind(io, i);
 		}
-		
+
+		// A cutscene camera is told what to look at AFTER it is switched on, so
+		// the aim has to be sent again once it is known - otherwise the other
+		// player is looking through a camera pointed at nothing.
+		if(io == coop::partnerCameraEntity()) {
+			coop::reportCutsceneCamera(io);
+		}
+
 		return Success;
 	}
 	

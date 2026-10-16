@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -74,6 +75,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "io/resource/ResourcePath.h"
 #include "io/log/Logger.h"
 
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+
 #include "scene/GameSound.h"
 #include "scene/Interactive.h"
 
@@ -99,17 +103,35 @@ Speech * getSpeechForEntity(const Entity & entity) {
 	return it == g_speech.end() ? nullptr : &*it;
 }
 
-static void ARX_CONVERSATION_CheckAcceleratedSpeech() {
-	
-	if(REQUEST_SPEECH_SKIP) {
-		for(Speech & speech : g_speech) {
-			if(!(speech.flags & ARX_SPEECH_FLAG_UNBREAKABLE)) {
-				speech.duration = 0;
-			}
+void ARX_SPEECH_Skip() {
+
+	for(Speech & speech : g_speech) {
+		if(!(speech.flags & ARX_SPEECH_FLAG_UNBREAKABLE)) {
+			speech.duration = 0;
 		}
+	}
+
+}
+
+static void ARX_CONVERSATION_CheckAcceleratedSpeech() {
+
+	if(REQUEST_SPEECH_SKIP) {
+
+		/*
+		 * Skipping a scene being performed on the OTHER machine has to travel.
+		 * Cutting our own copy of the line short only takes the words away:
+		 * the bars, the camera and the hold belong to the machine running the
+		 * script, and it is that script reaching the end of the line that
+		 * lifts them.
+		 */
+		if(coop::isSceneHeld()) {
+			coop::reportSceneSkip();
+		}
+
+		ARX_SPEECH_Skip();
 		REQUEST_SPEECH_SKIP = false;
 	}
-	
+
 }
 
 static void releaseSpeech(Speech & speech) {
@@ -160,14 +182,17 @@ static void endSpeech(Speech & speech) {
 	Entity * scriptEntity = speech.scriptEntity;
 	const EERIE_SCRIPT * script = speech.script;
 	size_t scriptPos = speech.scriptPos;
-	
+	bool forPartner = speech.forPartner;
+
 	releaseSpeech(speech);
-	
+
 	if(script) {
 		arx_assert(ValidIOAddress(scriptEntity));
+		// Still their errand, however long the line took to say.
+		coop::ScopedPlayerContext context(forPartner ? coop::avatarEntity() : nullptr);
 		ScriptEvent::resume(script, scriptEntity, scriptPos);
 	}
-	
+
 }
 
 void ARX_SPEECH_ClearIOSpeech(const Entity & entity) {
@@ -196,6 +221,7 @@ Speech * ARX_SPEECH_AddSpeech(Entity & speaker, std::string_view data, long mood
 	speech.flags = flags;
 	speech.sample = audio::SourcedSample();
 	speech.mood = mood;
+	speech.forPartner = coop::isPartnerScriptContext();
 
 	LogDebug("speech \"" << data << '"');
 	
@@ -252,6 +278,21 @@ Speech * ARX_SPEECH_AddSpeech(Entity & speaker, std::string_view data, long mood
 	}
 	
 	return &speech;
+}
+
+//! Is anybody saying anything at all? Used to notice a cutscene lock that has
+//! outlived whatever it was waiting for.
+bool ARX_SPEECH_IsAnySpeechActive() {
+	return !g_speech.empty();
+}
+
+bool ARX_SPEECH_IsAnyCinematicActive() {
+	for(const Speech & speech : g_speech) {
+		if(speech.cine.type != ARX_CINE_SPEECH_NONE) {
+			return true;
+		}
+	}
+	return false;
 }
 
 void ARX_SPEECH_Update() {

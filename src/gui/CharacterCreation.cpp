@@ -25,7 +25,10 @@
 #include "core/GameTime.h"
 #include "core/Localisation.h"
 #include "game/Player.h"
+#include "game/Equipment.h"
+#include "game/magic/StudioWorld.h"
 #include "gui/Cursor.h"
+#include "net/CoopPlayer.h"
 #include "gui/Interface.h"
 #include "gui/Menu.h"
 #include "gui/MenuWidgets.h"
@@ -48,7 +51,22 @@ static long SP_HEAD = 0;
 extern bool START_NEW_QUEST;
 
 static void ARX_MENU_NEW_QUEST_Clicked_QUIT() {
-	START_NEW_QUEST = true;
+
+	/*
+	 * Normally this screen is the last step of starting a new game, so finishing
+	 * it says "now begin" - and beginning means loading the first level and
+	 * putting the player at the start of the story.
+	 *
+	 * A joining player fills the same sheet in for a different reason: they are
+	 * already standing in somebody else's world and are only saying who they
+	 * are. Beginning would take them out of it, which is what it did - dropped
+	 * at the start of the game with the camera on the floor.
+	 */
+	if(!coop::isJoiningCharacterCreation()) {
+		START_NEW_QUEST = true;
+	}
+
+	coop::setJoiningCharacterCreation(false);
 	g_canResumeGame = true;
 	ARX_MENU_Clicked_QUIT();
 }
@@ -128,16 +146,23 @@ void CharacterCreation::render() {
 	Rectf doneButton(book.bottomRight() + Vec2f(-doneButtonSize.x, spacing.y),
 	                 doneButtonSize.x, doneButtonSize.y);
 	
+	// Appearance and Race sit as a pair in the middle, between Quick generate and Done
+	std::string_view str_button_race = "Race";
 	Vec2f skinButtonSize(hFontMenu->getTextSize(str_button_skin).size());
-	Rectf skinButton((quickGenerateButton.centerRight() + doneButton.centerLeft() - skinButtonSize) / 2.f,
+	Vec2f raceButtonSize(hFontMenu->getTextSize(str_button_race).size());
+	float pairWidth = skinButtonSize.x + spacing.x + raceButtonSize.x;
+	Vec2f middle = (quickGenerateButton.centerRight() + doneButton.centerLeft()) / 2.f;
+	Rectf skinButton(Vec2f(middle.x - pairWidth / 2.f, middle.y - skinButtonSize.y / 2.f),
 	                 skinButtonSize.x, skinButtonSize.y);
+	Rectf raceButton(Vec2f(skinButton.right + spacing.x, middle.y - raceButtonSize.y / 2.f),
+	                 raceButtonSize.x, raceButtonSize.y);
 	
 	if(quickGenerateButton.right > skinButton.left - spacing.x) {
 		quickGenerateButton.move(skinButton.left - spacing.x - quickGenerateButton.right, 0.f);
 	}
 	
-	if(doneButton.left < skinButton.right + spacing.x) {
-		doneButton.move(skinButton.right + spacing.x - doneButton.left, 0.f);
+	if(doneButton.left < raceButton.right + spacing.x) {
+		doneButton.move(raceButton.right + spacing.x - doneButton.left, 0.f);
 	}
 	
 	// Button QUICK GENERATION
@@ -178,11 +203,27 @@ void CharacterCreation::render() {
 		if(eeMouseUp1()) {
 			m_cheatSkinButtonClickCount++;
 			ARX_SOUND_PlayMenu(g_snd.MENU_CLICK);
+			unsigned char wasSkin = player.skin;
+			size_t extras = studioWorldFaces().size(); // the mod's file adds faces after the game's
+			if(extras > 248) {
+				extras = 248;
+			}
 			player.skin++;
-			if(player.skin >= MAX_CHEAT_PLAYER_SKIN) {
+			if(player.skin == 4) {
+				player.skin = 7; // past the three the cheat code keeps
+			}
+			if(player.skin >= 7 + extras) {
 				player.skin = 0;
 			}
-			ARX_PLAYER_Restore_Skin();
+#ifdef ANDROID           
+            ARX_EQUIPMENT_RecreatePlayerMesh(); // the head's shape changes, not only its paint
+#else
+            if(ARX_PLAYER_FaceHeadMesh(wasSkin) || ARX_PLAYER_FaceHeadMesh(player.skin)) {
+				ARX_EQUIPMENT_RecreatePlayerMesh(); // the head's shape changes, not only its paint
+			} else {
+				ARX_PLAYER_Restore_Skin(wasSkin);
+			}
+#endif            
 		}
 		
 		characterCreationAddDescription(m_desc_skin);
@@ -192,6 +233,27 @@ void CharacterCreation::render() {
 	}
 	
 	ARX_UNICODE_DrawTextInRect(hFontMenu, skinButton.topLeft(), 999999, str_button_skin, color);
+	
+	// Button RACE: the body you play in
+	
+	if(raceButton.contains(Vec2f(DANAEMouse))) {
+		cursorSetInteraction();
+		if(eeMouseUp1()) {
+			ARX_SOUND_PlayMenu(g_snd.MENU_CLICK);
+			player.bodyKind = static_cast<unsigned char>((player.bodyKind + 1) % BodyKindCount);
+			ARX_EQUIPMENT_RecreatePlayerMesh();
+		}
+		std::string desc = "Race: ";
+		desc += ARX_PLAYER_BodyName(player.bodyKind);
+		desc += ". The body you play in, seen by the other player too. The goblins move, fight and fall"
+		        " with their own animations; armour still counts on them but does not show.";
+		characterCreationAddDescription(desc);
+		color = Color::white;
+	} else {
+		color = Color::rgb(0.91f, 0.8f, 0.56f);
+	}
+	
+	ARX_UNICODE_DrawTextInRect(hFontMenu, raceButton.topLeft(), 999999, str_button_race, color);
 	
 	// Button DONE
 	
@@ -204,13 +266,13 @@ void CharacterCreation::render() {
 				m_cheatSkinButtonClickCount = -2;
 			} else if(m_cheatSkinButtonClickCount == -1) {
 				ARX_PLAYER_MakeSpHero();
-				player.skin = MAX_CHEAT_PLAYER_SKIN;
+				player.skin = 4;
 				ARX_PLAYER_Restore_Skin();
 				m_cheatSkinButtonClickCount = 0;
 				SP_HEAD = 1;
 			} else {
 				if(SP_HEAD) {
-					player.skin = MAX_CHEAT_PLAYER_SKIN;
+					player.skin = 4;
 					ARX_PLAYER_Restore_Skin();
 					SP_HEAD = 0;
 				}

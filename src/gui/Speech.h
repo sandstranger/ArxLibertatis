@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -116,10 +117,24 @@ struct Speech {
 	Entity * scriptEntity = nullptr;
 	const EERIE_SCRIPT * script = nullptr;
 	size_t scriptPos = 0;
-	
+
+	/*!
+	 * Whether this line is being said to the other player.
+	 *
+	 * A script that hands something over usually speaks first and pays after -
+	 * SPEAK [line] GOTO AFTER_SIGNED - so the half that matters runs when the
+	 * line ends, long after the call that started it has returned and taken
+	 * its "this is for them" with it. Remembering it here is what carries that
+	 * across the pause, so the reward reaches the player who earned it.
+	 */
+	bool forPartner = false;
+
 };
 
 void ARX_SPEECH_Reset();
+
+//! Cut every breakable line short, exactly as pressing skip does.
+void ARX_SPEECH_Skip();
 void ARX_SPEECH_Update();
 
 Speech * getSpeechForEntity(const Entity & entity);
@@ -129,6 +144,12 @@ Speech * getSpeechForEntity(const Entity & entity);
  * \param data is a sample name / localised string id
  */
 Speech * ARX_SPEECH_AddSpeech(Entity & speaker, std::string_view data, long mood, SpeechFlags flags = 0);
+
+//! Whether any speech with a cinematic camera is still playing.
+bool ARX_SPEECH_IsAnyCinematicActive();
+
+//! True while any speech is being said.
+bool ARX_SPEECH_IsAnySpeechActive();
 void ARX_SPEECH_ReleaseIOSpeech(const Entity & entity);
 void ARX_SPEECH_ClearIOSpeech(const Entity & entity);
 

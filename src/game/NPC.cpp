@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -102,11 +103,17 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "math/Random.h"
 #include "math/Vector.h"
 
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+#include "net/CoopWorld.h"
+
 #include "physics/CollisionShapes.h"
 #include "physics/Collisions.h"
 #include "physics/Physics.h"
 
 #include "platform/Platform.h"
+#include "io/log/Logger.h"
+#include "platform/Time.h"
 #include "platform/profiler/Profiler.h"
 
 #include "scene/Object.h"
@@ -187,6 +194,12 @@ static void CheckHit(Entity * source, float ratioaim) {
 	}
 	
 	float dist_limit = source->_npcdata->reach + source->physics.cyl.radius;
+
+	if(coop::isAvatarEntity(target)) {
+		// The other player is drawn a step behind where they really are:
+		// aim at where they are, or the wire would undo every dodge.
+		pos -= coop::avatarHitLead();
+	}
 	long count = 0;
 	float mindist = std::numeric_limits<float>::max();
 	
@@ -336,8 +349,14 @@ void resetNpcBehavior(Entity & npc) {
 	
 }
 
+//! Forget every grudge against a summoned creature; defined further down.
+static void clearSummonGrudges();
+
 //! Reset all Behaviours from all NPCs
 void resetAllNpcBehaviors() {
+	// Who was angry with which summon goes too: the creatures it named are
+	// about to be destroyed, and their places will be handed to other things.
+	clearSummonGrudges();
 	for(Entity & npc : entities(IO_NPC)) {
 		resetNpcBehavior(npc);
 	}
@@ -679,6 +698,55 @@ bool ARX_NPC_LaunchPathfind(Entity * io, EntityHandle target)
 	return ARX_NPC_LaunchPathfind_End(io, target, pos2);
 }
 
+int enemyHealthSetting() {
+	int hosts = coop::hostEnemyHealth();
+	return glm::clamp(hosts > 0 ? hosts : config.input.enemyHealth, 1, 3);
+}
+
+/*
+ * The multiplier a creature carries is kept as a script variable on it, so
+ * it is saved and loaded with the creature and survives a level change. A
+ * creature without one is at its scripted life: multiplier one.
+ */
+/*
+ * The sigil is the script language's one-byte section sign, which is also
+ * what the save format types a local long by. Written as two bytes (UTF-8)
+ * the save could not type it and threw the whole creature record away on
+ * load, pack included.
+ */
+static const char * const EnemyHealthVar = "\xa7" "coop_hp";
+
+static int carriedEnemyHealth(const Entity & npc) {
+	long carried = GETVarValueLong(npc.m_variables, EnemyHealthVar);
+	return carried > 0 ? int(carried) : 1;
+}
+
+void applyEnemyHealth(Entity & npc, float life) {
+	if(!npc._npcdata) {
+		return;
+	}
+	int setting = enemyHealthSetting();
+	npc._npcdata->lifePool.max = npc._npcdata->lifePool.current = life * float(setting);
+	SETVarValueLong(npc.m_variables, EnemyHealthVar, setting);
+}
+
+void rescaleEnemyHealth() {
+	int setting = enemyHealthSetting();
+	for(Entity & npc : entities(IO_NPC)) {
+		if(npc == *entities.player() || !npc._npcdata || coop::isAvatarEntity(&npc)) {
+			continue;
+		}
+		int carried = carriedEnemyHealth(npc);
+		if(carried == setting) {
+			continue;
+		}
+		float ratio = float(setting) / float(carried);
+		npc._npcdata->lifePool.max *= ratio;
+		npc._npcdata->lifePool.current *= ratio;
+		SETVarValueLong(npc.m_variables, EnemyHealthVar, setting);
+	}
+}
+
 bool ARX_NPC_SetStat(Entity & io, std::string_view statname, float value) {
 	
 	arx_assert(io.ioflags & IO_NPC);
@@ -706,7 +774,7 @@ bool ARX_NPC_SetStat(Entity & io, std::string_view statname, float value) {
 	} else if(statname == "aimtime") {
 		io._npcdata->aimtime = std::chrono::duration<float, std::milli>(std::max(value, 0.f));
 	} else if(statname == "life") {
-		io._npcdata->lifePool.max = io._npcdata->lifePool.current = value < 0 ? 0.0000001f : value;
+		applyEnemyHealth(io, value < 0 ? 0.0000001f : value);
 	} else if(statname == "mana") {
 		io._npcdata->manaPool.max = io._npcdata->manaPool.current = value < 0 ? 0 : value;
 	} else if(statname == "resistfire") {
@@ -856,7 +924,38 @@ void ARX_PHYSICS_Apply() {
 		if(!io) {
 			continue;
 		}
-		
+
+		/*
+		 * On the machine that is not simulating this area, the only things that
+		 * move under their own weight are the ones this player is responsible
+		 * for - what they are carrying, and what they have just thrown and which
+		 * has not landed yet. Everything else has its position sent to it.
+		 *
+		 * Without this a dropped item hangs in the air here for ever: its
+		 * physics was started and there was nothing to step it.
+		 */
+		if(coop::isReplica() && !coop::ownsLocally(io)) {
+			continue;
+		}
+
+		/*
+		 * The other player's body wears the NPC flag so that swords, spells and
+		 * blood all know what to do with it, but it is not a creature: it is
+		 * driven by the person playing it. Running the AI over it here would
+		 * have their character walk off on its own.
+		 */
+		if(coop::isAvatarEntity(io)) {
+			continue;
+		}
+
+		// Decide which of the two players this creature is actually after,
+		// before any of the logic that acts on that decision runs.
+		ARX_NPC_CoopRetarget(io);
+
+		// And a called-up creature looks for its own fight, so that nobody has
+		// to point one out to it.
+		ARX_NPC_SummonHunt(io);
+
 		if((io->ioflags & IO_NPC) && io->_npcdata->poisonned > 0.f) {
 			ARX_NPC_ManagePoison(*io);
 		}
@@ -1663,6 +1762,11 @@ float getEntityHeight(const Entity & entity) {
 		return entity.physics.cyl.height;
 	}
 	
+	// The other player's body is player-sized, not clamped to creature bounds.
+	if(coop::isAvatarEntity(&entity)) {
+		return ARXCHARACTER::baseHeight();
+	}
+	
 	return glm::clamp(entity.original_height * entity.scale, -165.f, -45.f);
 }
 
@@ -1670,6 +1774,10 @@ float getEntityRadius(const Entity & entity) {
 	
 	if(entity == *entities.player()) {
 		return player.baseRadius();
+	}
+	
+	if(coop::isAvatarEntity(&entity)) {
+		return ARXCHARACTER::baseRadius();
 	}
 	
 	return glm::clamp(entity.original_radius * entity.scale, 25.f, 60.f);
@@ -1693,7 +1801,14 @@ static float ComputeTolerance(const Entity * io, EntityHandle targ) {
 		float self_dist, targ_dist;
 		
 		// Compute min target close-dist
-		if(target->ioflags & IO_NO_COLLISIONS) {
+		if(coop::isAvatarEntity(target)) {
+			// The other player's body wears IO_NO_COLLISIONS for placement
+			// helpers, but to a creature it is a solid player-sized cylinder.
+			// Counting it as radius zero puts the arrival distance INSIDE the
+			// collision standoff and the creature pushes forever at a wall of
+			// air, never close enough to consider its target reached.
+			targ_dist = ARXCHARACTER::baseRadius();
+		} else if(target->ioflags & IO_NO_COLLISIONS) {
 			targ_dist = 0.f;
 		} else {
 			targ_dist = std::max(target->physics.cyl.radius, getEntityRadius(*target));
@@ -1720,7 +1835,9 @@ static float ComputeTolerance(const Entity * io, EntityHandle targ) {
 		}
 		
 		// If target is the player improve again tolerance
-		if(io->targetinfo == EntityHandle_Player) {
+		// - either player: fighting the second one is the same fight.
+		if(io->targetinfo == EntityHandle_Player
+		   || coop::isAvatarEntity(entities.get(io->targetinfo))) {
 			TOLERANCE += 10.f;
 		}
 		
@@ -2535,73 +2652,146 @@ void CheckNPC(Entity & io) {
  *
  * \remarks Uses Invisibility/Confuse/Torch infos.
  */
+/*!
+ * Whether one particular player body is currently visible to a creature.
+ *
+ * Factored out of CheckNPCEx() so that the same sight rules - range, rooms,
+ * near contact, field of view, darkness, geometry - are applied to each player
+ * separately instead of only to whichever one happened to be nearer.
+ *
+ * \param basePos the player's feet, i.e. Entity::pos / ARXCHARACTER::basePosition()
+ */
+static bool isPlayerBodyVisibleTo(Entity & io, const Vec3f & basePos, float life,
+                                  float invisibility) {
+
+	if(invisibility > 0.f || life <= 0.f) {
+		return false;
+	}
+
+	float ds = arx::distance2(io.pos, basePos);
+	if(ds >= square(2000.f)) {
+		return false;
+	}
+
+	Vec3f eye = basePos + ARXCHARACTER::baseOffset();
+
+	RoomHandle playerRoom = ARX_PORTALS_GetRoomNumForPosition(eye, RoomPositionForCamera);
+	float fdist = SP_GetRoomDist(io.pos, eye, io.room, playerRoom);
+
+	// Use Portal Room Distance for Extra Visibility Clipping.
+	if(playerRoom && io.room && fdist > 2000.f) {
+		return false;
+	}
+
+	// Near contact +/- 15 cm --> forced visibility.
+	if(ds < square(getEntityRadius(io) + getEntityRadius(*entities.player()) + 15.f)
+	   && glm::abs(eye.y - io.pos.y) < 200.f) {
+		return true;
+	}
+
+	// Retrieves Head group position for "eye" pos.
+	Vec3f orgn = io.pos - Vec3f(0.f, io.obj->fastaccess.head_group_origin ? 120.f : 90.f, 0.f);
+	Vec3f dest = eye + Vec3f(0.f, 90.f, 0.f);
+
+	// Field of vision angle.
+	float aa = getAngle(orgn.x, orgn.z, dest.x, dest.z);
+	aa = MAKEANGLE(glm::degrees(aa));
+	float ab = MAKEANGLE(io.angle.getYaw());
+	if(glm::abs(AngularDifference(aa, ab)) >= 110.f) {
+		return false;
+	}
+
+	// Darkness/stealth. The lighting value is the first player's - it is the
+	// only one this machine computes - so in the dark the second player is
+	// judged by their partner's light. Close range bypasses it either way.
+	if(CURRENT_PLAYER_COLOR > GetPlayerStealth() || player.torch || ds < square(200.f)) {
+		Vec3f ppos;
+		// Geometrical visibility.
+		if(IO_Visible(orgn, dest, &ppos) || closerThan(ppos, dest, 25.f)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 void CheckNPCEx(Entity & io) {
-	
+
 	ARX_PROFILE_FUNC();
 
-	// Distance Between Player and IO
-	float ds = arx::distance2(io.pos, player.basePosition());
-	
-	// Start as not visible
-	long Visible = 0;
-	
-	// Check visibility only if player is visible, not too far and not dead
-	if(entities.player()->invisibility <= 0.f && ds < square(2000.f) && player.lifePool.current > 0.f) {
-		
-		// checks for near contact +/- 15 cm --> force visibility
-		if(io.requestRoomUpdate) {
-			UpdateIORoom(&io);
-		}
-		
-		RoomHandle playerRoom = ARX_PORTALS_GetRoomNumForPosition(player.pos, RoomPositionForCamera);
-		
-		float fdist = SP_GetRoomDist(io.pos, player.pos, io.room, playerRoom);
-		
-		// Use Portal Room Distance for Extra Visibility Clipping.
-		if(playerRoom && io.room && fdist > 2000.f) {
-			// nothing to do
-		} else if(ds < square(getEntityRadius(io) + getEntityRadius(*entities.player()) + 15.f)
-		          && glm::abs(player.pos.y - io.pos.y) < 200.f) {
-			Visible = 1;
-		} else { // Make full visibility test
-			
-			// Retreives Head group position for "eye" pos.
-			Vec3f orgn = io.pos - Vec3f(0.f, io.obj->fastaccess.head_group_origin ? 120.f : 90.f, 0.f);
-			Vec3f dest = player.pos + Vec3f(0.f, 90.f, 0.f);
+	if(io.requestRoomUpdate) {
+		UpdateIORoom(&io);
+	}
 
-			// Check for Field of vision angle
-			float aa = getAngle(orgn.x, orgn.z, dest.x, dest.z);
-			aa = MAKEANGLE(glm::degrees(aa));
-			float ab = MAKEANGLE(io.angle.getYaw());
-			if(glm::abs(AngularDifference(aa, ab)) < 110.f) {
-				
-				// Check for Darkness/Stealth
-				if(CURRENT_PLAYER_COLOR > GetPlayerStealth() || player.torch
-				   || ds < square(200.f)) {
-					Vec3f ppos;
-					// Check for Geometrical Visibility
-					if(IO_Visible(orgn, dest, &ppos)
-					   || closerThan(ppos, dest, 25.f)) {
-						Visible = 1;
-					}
-				}
-			}
-		}
-		
-		if(Visible && !io._npcdata->detect) {
-			// if visible but was NOT visible, sends an Detectplayer Event
-			SendIOScriptEvent(nullptr, &io, SM_DETECTPLAYER);
-			io._npcdata->detect = 1;
-		}
-		
+	IO_NPCDATA & npc = *io._npcdata;
+
+	/*
+	 * While a script has switched this creature's detection off, it is not
+	 * merely forbidden from reacting - it is not watching. Keeping the sight
+	 * memory warm through that would mean that when the story switches it back
+	 * on, both players are already marked as seen, no edge ever fires, and the
+	 * creature attacks nobody until something else provokes it. Forget
+	 * everything instead, so re-arming produces a genuine "spotted!" for
+	 * whoever is standing in front of it at that moment.
+	 */
+	if(io.m_disabledEvents & DISABLE_DETECT) {
+		npc.m_seenPlayer = false;
+		npc.m_seenPartner = false;
+		npc.detect = 0;
+		return;
 	}
-	
-	// if not visible but was visible, sends an Undetectplayer Event
-	if(!Visible && io._npcdata->detect) {
+
+	// Only the combined flag survives a savegame; credit it to the first
+	// player once so the edges below start from a consistent state.
+	if(npc.detect && !npc.m_seenPlayer && !npc.m_seenPartner) {
+		npc.m_seenPlayer = true;
+	}
+
+	bool seesPlayer = !coop::localPlayerArrivalProtected()
+	                  && isPlayerBodyVisibleTo(io, player.basePosition(),
+	                                        player.lifePool.current,
+	                                        entities.player()->invisibility);
+
+	bool seesPartner = false;
+	if(Entity * other = coop::avatarEntity()) {
+		seesPartner = !coop::partnerArrivalProtected()
+		              && isPlayerBodyVisibleTo(io, other->pos, coop::avatar().life,
+		                                    other->invisibility);
+	}
+
+	/*
+	 * One ON DETECTPLAYER per player, on that player's own edge.
+	 *
+	 * The original had one flag for one player: once a creature had seen the
+	 * first player, the flag was up, no further edge could occur, and the
+	 * script that decides whether to attack was never told about the second
+	 * player at all. That is precisely why enemies used to ignore player two
+	 * until struck - being hit reaches the script by a different road (SM_HIT)
+	 * that never consults this flag.
+	 *
+	 * The script's handler asks ^DIST_PLAYER itself, which reports the nearer
+	 * player, so re-firing the event is all it takes for it to notice whoever
+	 * just came into view.
+	 */
+	if(seesPlayer && !npc.m_seenPlayer) {
+		LogInfo << "[coop-ai] " << io.idString() << " spotted player one";
+		SendIOScriptEvent(nullptr, &io, SM_DETECTPLAYER);
+	}
+	npc.m_seenPlayer = seesPlayer;
+
+	if(seesPartner && !npc.m_seenPartner) {
+		LogInfo << "[coop-ai] " << io.idString() << " spotted player two";
+		SendIOScriptEvent(nullptr, &io, SM_DETECTPLAYER);
+	}
+	npc.m_seenPartner = seesPartner;
+
+	// Not seeing anybody, having seen somebody, is the one UNDETECT edge.
+	if(!seesPlayer && !seesPartner && npc.detect) {
 		SendIOScriptEvent(nullptr, &io, SM_UNDETECTPLAYER);
-		io._npcdata->detect = 0;
 	}
-	
+
+	npc.detect = (seesPlayer || seesPartner) ? 1 : 0;
+
 }
 
 void ARX_NPC_NeedStepSound(Entity * io, const Vec3f & pos, const float volume, const float power) {
@@ -2640,7 +2830,9 @@ void ARX_NPC_NeedStepSound(Entity * io, const Vec3f & pos, const float volume, c
 void spawnAudibleSound(const Vec3f & pos, Entity & source, const float factor, const float presence) {
 	
 	float max_distance;
-	if(source == *entities.player()) {
+	if(source == *entities.player() || coop::isAvatarEntity(&source)) {
+		// The other player's body is as audible as our own: without this the
+		// early return below made every step of theirs silent to all AI.
 		max_distance = ARX_NPC_ON_HEAR_MAX_DISTANCE_STEP;
 	} else if(source.ioflags & IO_ITEM) {
 		max_distance = ARX_NPC_ON_HEAR_MAX_DISTANCE_ITEM;
@@ -2850,7 +3042,9 @@ void GetTargetPos(Entity * io, unsigned long smoothing) {
 	}
 	
 	if(io->targetinfo == EntityHandle_Player || io->targetinfo == EntityHandle()) {
+
 		io->target = player.pos + Vec3f(0.f, player.size.y, 0.f);
+
 	} else if(Entity * target = entities.get(io->targetinfo)) {
 		io->target = GetItemWorldPosition(target);
 	} else {
@@ -2863,4 +3057,365 @@ bool isEnemy(const Entity * entity) {
 	return (entity->ioflags & IO_NPC)
 	       && !(entity->_npcdata->behavior & BEHAVIOUR_FRIENDLY)
 	       && (entity->_npcdata->behavior & BEHAVIOUR_FIGHT);
+}
+
+/*
+ * Who has been hurting whom.
+ *
+ * Every creature script in the game answers one question when it is hurt:
+ * was that the player? A goblin struck by anything else shrugs and carries
+ * on after whoever it was already following, so a summoned fighter could
+ * kill it without ever being looked at. The engine makes that worse on a
+ * summon's behalf, answering "the player" for it (see damageNpc), which
+ * sends the goblin after the person who called the summon up.
+ *
+ * No script can be taught a different answer - they are Arkane's and there
+ * are two hundred of them - so it is given here: a creature stays on the
+ * summon that is hurting it for as long as the hurting is recent.
+ */
+namespace {
+
+struct Grudge {
+	EntityHandle summon;
+	GameInstant until;
+};
+
+//! How long a creature goes on caring, if it is not hurt again.
+constexpr GameDuration GRUDGE_TIME = 8s;
+
+std::map<long, Grudge> g_grudges;
+
+//! What each summoned creature was told to start fights with.
+std::map<long, std::vector<std::string>> g_hunts;
+
+} // anonymous namespace
+
+static void clearSummonGrudges() {
+	g_grudges.clear();
+	g_hunts.clear();
+}
+
+void ARX_NPC_SetSummonHunts(Entity & summon, const std::vector<std::string> & words) {
+	g_hunts[summon.index().handleData()] = words;
+}
+
+void ARX_NPC_NoteSummonHurt(Entity & victim, Entity & summon) {
+	
+	if(!(victim.ioflags & IO_NPC) || !(summon.ioflags & IO_NPC) || victim == summon) {
+		return;
+	}
+	
+	g_grudges[victim.index().handleData()] = { summon.index(),
+	                                           g_gameTime.now() + GRUDGE_TIME };
+	LogInfo << "summon grudge: " << victim.idString() << " hurt by " << summon.idString()
+	        << " | behaviour " << long(victim._npcdata->behavior)
+	        << " target " << ::idString(entities.get(victim.targetinfo));
+	
+}
+
+/*
+ * What this creature is owed a blow by, if anything.
+ *
+ * Asked by SETTARGET rather than applied behind the script's back. Writing the
+ * target every frame was tried and it does not work: the creature's own ON OUCH
+ * says "target player" on every hit, so the two of us traded the target twice a
+ * second, and since every change asks the pathfinder for a fresh route - and
+ * the pathfinder answers a frame or two later - it never finished working one
+ * out and simply stood still. Answering the question the script actually asks
+ * costs one route and holds.
+ */
+Entity * ARX_NPC_SummonGrudge(const Entity & io) {
+
+	auto held = g_grudges.find(io.index().handleData());
+	if(held == g_grudges.end()) {
+		return nullptr;
+	}
+
+	/*
+	 * A summon still standing, and still a summon. Places in the entity list
+	 * are handed out again, so a name kept for eight seconds can come back
+	 * pointing at something else entirely; nothing but a summoned creature
+	 * carries a summoner, which is enough to tell them apart.
+	 */
+	Entity * summon = entities.get(held->second.summon);
+	if(g_gameTime.now() > held->second.until || !summon || IsDeadNPC(*summon)
+	   || summon->_npcdata->summoner == EntityHandle()) {
+		g_grudges.erase(held);
+		return nullptr;
+	}
+
+	return summon;
+
+}
+
+/*
+ * Can this creature see that one?
+ *
+ * The same question getFirstNpcInSight asks: a hundred and ten degrees in
+ * front, and a clear line from one head to the other, with anything within
+ * two hundred units taken as seen whichever way it is looking. Without it a
+ * summon starts fights through walls and with things behind its back.
+ */
+static bool canSee(const Entity & watcher, const Entity & other) {
+	
+	if(!watcher.obj || !other.obj) {
+		return false;
+	}
+	
+	float away = arx::distance2(other.pos, watcher.pos);
+	if(away < square(200.f)) {
+		return true;
+	}
+	
+	Vec3f orgn = watcher.pos + Vec3f(0.f, -90.f, 0.f);
+	if(VertexId head = watcher.obj->fastaccess.head_group_origin) {
+		orgn = watcher.obj->vertexWorldPositions[head].v;
+	}
+	
+	Vec3f dest = other.pos + Vec3f(0.f, -90.f, 0.f);
+	if(VertexId head = other.obj->fastaccess.head_group_origin) {
+		dest = other.obj->vertexWorldPositions[head].v;
+	}
+	
+	float facing = MAKEANGLE(glm::degrees(getAngle(orgn.x, orgn.z, dest.x, dest.z)));
+	if(glm::abs(AngularDifference(facing, MAKEANGLE(watcher.angle.getYaw()))) >= 110.f) {
+		return false;
+	}
+	
+	Vec3f hit;
+	return IO_Visible(orgn, dest, &hit);
+	
+}
+
+//! Is this creature one the summon was told to start fights with?
+static bool isHunted(const Entity & summon, const Entity & other) {
+	
+	auto told = g_hunts.find(summon.index().handleData());
+	if(told == g_hunts.end()) {
+		return false;
+	}
+	
+	const std::string & name = other.className();
+	for(const std::string & word : told->second) {
+		if(name.find(word) != std::string::npos) {
+			return true;
+		}
+	}
+	
+	return false;
+	
+}
+
+//! A body somebody is playing, or the hero.
+static bool isPlayerBody(const Entity * entity) {
+	return entity && (entity == entities.player() || coop::isAvatarEntity(entity));
+}
+
+/*
+ * Is this creature worth a summon's attention?
+ *
+ * Only if it is in a fight, and only if the fight is ours: it is after the
+ * person who called the summon up, after one of their other summons, or
+ * after this one. A rat crossing the room is in nobody's fight and is left
+ * alone; a rat biting the player is in ours and is not. This is also what
+ * keeps a summon off shopkeepers, guards and everything else alive and
+ * minding its own business, all of which the nearest-creature question it
+ * used to ask would happily have named.
+ */
+static bool isWorthFighting(const Entity & summon, const Entity & other,
+                            EntityHandle summoner) {
+	
+	if(&other == &summon || !(other.ioflags & IO_NPC) || IsDeadNPC(other)) {
+		return false;
+	}
+	
+	if(isPlayerBody(&other)) {
+		return false;
+	}
+	
+	// Never another of the same summoner's creatures
+	if(other._npcdata->summoner == summoner) {
+		return false;
+	}
+	
+	if(other._npcdata->behavior & BEHAVIOUR_FRIENDLY) {
+		return false;
+	}
+	
+	/*
+	 * The first rule: it is already in a fight, and the fight is ours. This
+	 * holds for anything at all - a guard that has turned on the player, a
+	 * dog the player hit first - because a creature swinging at us is an
+	 * enemy whatever its class says.
+	 */
+	if(other._npcdata->behavior & (BEHAVIOUR_FIGHT | BEHAVIOUR_MAGIC
+	                               | BEHAVIOUR_DISTANT)) {
+		
+		if(other.targetinfo == summon.index()) {
+			return true;
+		}
+		
+		/*
+		 * After a player. Either player: a script says "target player" and
+		 * the engine has one name for that, so a creature chasing the second
+		 * one is still recorded as chasing the first, and both are our side.
+		 */
+		Entity * quarry = entities.get(other.targetinfo);
+		if(isPlayerBody(quarry)) {
+			return true;
+		}
+		
+		// Or after one of the summoner's other creatures
+		if(quarry && (quarry->ioflags & IO_NPC)
+		   && quarry->_npcdata->summoner == summoner) {
+			return true;
+		}
+		
+	}
+	
+	/*
+	 * The second rule: a fight of its own.
+	 *
+	 * The game keeps no record of who is hostile - there are no factions, and
+	 * the guards, the shopkeepers and the townsfolk share one class - so the
+	 * spell's own entry says which classes are worth starting on, and only
+	 * what the creature can actually see counts. The animals the target frame
+	 * will not name are left alone here too; if the player hits one first and
+	 * it fights back, the rule above picks it up.
+	 */
+	if(coop::isVermin(other)) {
+		return false;
+	}
+	
+	return isHunted(summon, other) && canSee(summon, other);
+	
+}
+
+void ARX_NPC_SummonHunt(Entity * io) {
+	
+	if(!io || !(io->ioflags & IO_NPC) || IsDeadNPC(*io)) {
+		return;
+	}
+	
+	EntityHandle summoner = io->_npcdata->summoner;
+	if(summoner == EntityHandle()) {
+		return; // not a called-up creature; it is somebody's own business
+	}
+	
+	/*
+	 * A quarry already worth having is kept, so that it does not change its
+	 * mind every frame between two goblins standing side by side. Anything
+	 * else - a corpse, something that has stopped fighting, the summoner
+	 * itself, nothing at all - is replaced.
+	 */
+	Entity * held = entities.get(io->targetinfo);
+	if(held && isWorthFighting(*io, *held, summoner)) {
+		return;
+	}
+	
+	const float LOOK = 2200.f;
+	Entity * pick = nullptr;
+	float nearest = square(LOOK);
+	for(Entity & other : entities.inScene(IO_NPC)) {
+		if(!isWorthFighting(*io, other, summoner)) {
+			continue;
+		}
+		float away = arx::distance2(other.pos, io->pos);
+		if(away < nearest) {
+			nearest = away;
+			pick = &other;
+		}
+	}
+	
+	// Nothing to fight: back to the one who called it up, and let its script
+	// decide what standing about looks like.
+	EntityHandle wanted = pick ? pick->index() : summoner;
+	if(wanted == io->targetinfo) {
+		return;
+	}
+	
+	io->targetinfo = wanted;
+	io->_npcdata->reachedtarget = 0;
+	io->_npcdata->pathfind.truetarget = wanted;
+	// A route to it as well; see the note in ARX_NPC_SummonRetarget.
+	GetTargetPos(io);
+	ARX_NPC_LaunchPathfind(io, wanted);
+	
+}
+
+void ARX_NPC_CoopRetarget(Entity * io) {
+
+	Entity * other = coop::avatarEntity();
+	if(!other || !io || !(io->ioflags & IO_NPC)) {
+		return;
+	}
+
+	// Diagnostic: report on creatures near the second player, once a second, so
+	// it is possible to see which of them the AI is even considering and what
+	// it thinks they are doing.
+	if(closerThan(io->pos, other->pos, 900.f)) {
+		static PlatformInstant lastReport = 0;
+		static int reported = 0;
+		PlatformInstant now = platform::getTime();
+		if(now - lastReport > 1s) {
+			lastReport = now;
+			reported = 0;
+		}
+		if(reported < 6) {
+			reported++;
+			LogInfo << "[coop-ai] " << io->idString()
+			        << " behaviour=0x" << std::hex << u32(io->_npcdata->behavior) << std::dec
+			        << " enemy=" << isEnemy(io)
+			        << " target=" << io->targetinfo.handleData()
+			        << " treatzone=" << bool(io->gameFlags & GFLAG_ISINTREATZONE)
+			        << " life=" << io->_npcdata->lifePool.current
+			        << " detect=" << io->_npcdata->detect
+			        << " script_enemy=" << GETVarValueLong(io->m_variables, "§" "enemy")
+			        << " detect_event_off=" << bool(io->m_disabledEvents & DISABLE_DETECT)
+			        << " distP1=" << fdist(io->pos, player.basePosition())
+			        << " distP2=" << fdist(io->pos, other->pos);
+		}
+	}
+
+	// Only creatures that are actually fighting. A shopkeeper who has been told
+	// to face the player should keep facing the one they were talking to.
+	if(!isEnemy(io)) {
+		return;
+	}
+
+	const EntityHandle otherHandle = other->index();
+
+	// Only take over a target that means "the player". Anything else - another
+	// NPC, a summoned creature, a script's specific choice - is left alone.
+	if(io->targetinfo != EntityHandle_Player && io->targetinfo != otherHandle) {
+		return;
+	}
+
+	/*
+	 * Scripts say "target player", and the engine has exactly one name for
+	 * that, which resolves to the first player. Left alone, every creature in
+	 * the game commits to player one and will walk past player two to reach
+	 * them - and, having arrived, measures its reach and swings its sword at
+	 * whoever it named, not at whoever is in front of it. That is why the
+	 * second player could kill enemies that never once turned around.
+	 *
+	 * Changing the target entity rather than just the position it walks to is
+	 * what makes the rest work: tolerance, pathfinding, the strike test and the
+	 * damage all read targetinfo, and they all then follow for free.
+	 */
+	// Sight first, then walking distance rather than crow-flies distance, with
+	// hysteresis for the current target. See coop::chooseTargetPlayer.
+	Entity * pick = coop::chooseTargetPlayer(io, entities.get(io->targetinfo));
+	EntityHandle wanted = pick->index();
+
+	if(wanted == io->targetinfo) {
+		return;
+	}
+
+	// A creature that has just been given a new quarry has not reached it yet,
+	// and its path led somewhere else.
+	io->targetinfo = wanted;
+	io->_npcdata->reachedtarget = 0;
+	io->_npcdata->pathfind.truetarget = wanted;
+
 }

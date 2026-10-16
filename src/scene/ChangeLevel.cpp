@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -60,6 +61,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "core/Config.h"
 #include "core/Core.h"
+#include "platform/Time.h"
 #include "core/GameTime.h"
 #include "core/Version.h"
 
@@ -68,6 +70,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "game/EntityManager.h"
 #include "game/Equipment.h"
 #include "game/NPC.h"
+#include "game/magic/StudioWorld.h"
 #include "game/Spells.h"
 #include "game/Player.h"
 #include "game/Levels.h"
@@ -77,6 +80,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "gui/Dragging.h"
 #include "gui/LoadLevelScreen.h"
+#include "gui/Menu.h"
 #include "gui/MiniMap.h"
 #include "gui/Hud.h"
 #include "gui/Interface.h"
@@ -96,9 +100,13 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "math/Random.h"
 
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+
 #include "physics/Physics.h"
 
 #include "platform/Platform.h"
+#include "platform/Process.h"
 
 #include "scene/GameSound.h"
 #include "scene/Interactive.h"
@@ -214,6 +222,23 @@ static Entity * convertToValidIO(std::string_view idString) {
 	return ARX_CHANGELEVEL_Pop_IO(idString, instance);
 }
 
+bool ARX_CHANGELEVEL_SaveEntityTo(SaveBlock & block, const Entity & entity, AreaId area) {
+	SaveBlock * previous = g_currentSavedGame;
+	g_currentSavedGame = &block;
+	bool ok = ARX_CHANGELEVEL_Push_IO(&entity, area);
+	g_currentSavedGame = previous;
+	return ok;
+}
+
+Entity * ARX_CHANGELEVEL_LoadEntityFrom(SaveBlock & block, std::string_view idString,
+                                        EntityInstance instance) {
+	SaveBlock * previous = g_currentSavedGame;
+	g_currentSavedGame = &block;
+	Entity * entity = ARX_CHANGELEVEL_Pop_IO(idString, instance);
+	g_currentSavedGame = previous;
+	return entity;
+}
+
 template <size_t N>
 static Entity * ConvertToValidIO(const char (&str)[N]) {
 	return convertToValidIO(util::toLowercase(util::loadString(str)));
@@ -249,21 +274,37 @@ static s32 GetIOAnimIdx2(const Entity * io, const ANIM_HANDLE * anim) {
 }
 
 bool ARX_Changelevel_CurGame_Clear() {
-	
+
 	if(g_currentSavedGame) {
 		delete g_currentSavedGame, g_currentSavedGame = nullptr;
 	}
-	
+
 	if(CURRENT_GAME_FILE.empty()) {
+
 		CURRENT_GAME_FILE = fs::getUserDir() / "current.sav";
+
+		/*
+		 * Two players on one machine share a user directory, and this file is
+		 * the scratch copy of the world in progress - one per running game, not
+		 * one per installation. The first copy to start takes the plain name;
+		 * anyone joining from the same machine, who would otherwise fail here
+		 * and never reach the main menu, takes a name of their own.
+		 */
+		if(!fs::remove(CURRENT_GAME_FILE)) {
+			std::ostringstream oss;
+			oss << "current-" << platform::getProcessId() << ".sav";
+			CURRENT_GAME_FILE = fs::getUserDir() / oss.str();
+			LogInfo << "Another copy of the game is running; using " << CURRENT_GAME_FILE;
+		}
+
 	}
-	
+
 	// If there's a left over current game file, clear it
 	if(!fs::remove(CURRENT_GAME_FILE)) {
 		LogError << "Failed to remove current game file " << CURRENT_GAME_FILE;
 		return false;
 	}
-	
+
 	return true;
 }
 
@@ -343,7 +384,8 @@ void ARX_CHANGELEVEL_Change(AreaId area, std::string_view target, float angle) {
 	
 	arx_assume(area);
 	
-	LogDebug("ARX_CHANGELEVEL_Change " << area << " " << target << " " << angle);
+	LogWarning << "[coop-chain] level change: to area " << area << " target '" << target
+	           << "' from area " << (g_currentArea ? long(g_currentArea.handleData()) : -1);
 	
 	// not changing level, just teleported
 	if(area == g_currentArea) {
@@ -355,13 +397,20 @@ void ARX_CHANGELEVEL_Change(AreaId area, std::string_view target, float angle) {
 		return; // nothing more to do :)
 	}
 	
+	/*
+	 * The two players are free to be in different parts of the fortress. Tell
+	 * the other machine we are leaving before the world is torn down, so that
+	 * it stops expecting us here and drops the body it was drawing for us.
+	 */
+	coop::onAreaLeaving(g_currentArea, area, target);
+
 	progressBarSetTotal(238);
 	progressBarReset();
-	
+
 	LoadLevelScreen(area);
-	
+
 	ARX_PLAYER_Reset_Fall();
-	
+
 	progressBarAdvance();
 	LoadLevelScreen();
 	
@@ -372,12 +421,26 @@ void ARX_CHANGELEVEL_Change(AreaId area, std::string_view target, float angle) {
 	ARX_CHANGELEVEL_PushLevel(g_currentArea, area);
 	
 	ARX_CHANGELEVEL_PopLevel(area, true, target, angle);
-	
+
 	entities.player()->inzone = nullptr;
-	
+
 	ARX_PLAYER_RectifyPosition();
 	GMOD_RESET = true;
-	
+
+	// Now that the new area is up, announce where we are. If the other player
+	// is here too they become the authority (or we do), and either way they can
+	// start drawing us again.
+	coop::onAreaLoaded(area);
+
+	/*
+	 * An iron man run writes itself down here and nowhere else.
+	 *
+	 * A crash or a power cut then costs the level just walked, not the whole
+	 * run - which is a mercy the mode can afford, because it is not what the
+	 * mode is about. Dying is.
+	 */
+	ARX_IronmanSave();
+
 }
 
 static bool ARX_CHANGELEVEL_PushLevel(AreaId oldArea, AreaId newArea) {
@@ -544,9 +607,27 @@ static size_t getScriptVariableSaveSize(const SCRIPT_VARIABLES & variables) {
 	return size;
 }
 
+//! How many of these the writer will actually put down
+static size_t savableVariableCount(const SCRIPT_VARIABLES & variables) {
+	size_t count = 0;
+	for(const SCRIPT_VAR & variable : variables) {
+		if(getVariableType(variable.name) != TYPE_UNKNOWN) {
+			count++;
+		}
+	}
+	return count;
+}
+
 static void storeScriptVariables(char * dat, size_t & pos, const SCRIPT_VARIABLES & variables, size_t diff) {
 	
 	for(const SCRIPT_VAR & variable : variables) {
+		
+		if(getVariableType(variable.name) == TYPE_UNKNOWN) {
+			// The format types a variable by its first byte; one it cannot type would
+			// be written as garbage and read back as a corrupted record. Left out.
+			LogWarning << "Not saving script variable \"" << variable.name << "\": its name has no known type";
+			continue;
+		}
 		
 		ARX_CHANGELEVEL_VARIABLE_SAVE * avs = reinterpret_cast<ARX_CHANGELEVEL_VARIABLE_SAVE *>(dat + pos);
 		memset(avs, 0, sizeof(ARX_CHANGELEVEL_VARIABLE_SAVE));
@@ -596,7 +677,7 @@ static bool ARX_CHANGELEVEL_Push_Globals() {
 	ARX_CHANGELEVEL_SAVE_GLOBALS acsg;
 	
 	memset(&acsg, 0, sizeof(ARX_CHANGELEVEL_SAVE_GLOBALS));
-	acsg.nb_globals = svar.size();
+	acsg.nb_globals = savableVariableCount(svar);
 	acsg.version = ARX_GAMESAVE_VERSION;
 	
 	size_t allocsize = sizeof(ARX_CHANGELEVEL_SAVE_GLOBALS) + getScriptVariableSaveSize(svar);
@@ -782,6 +863,8 @@ static bool ARX_CHANGELEVEL_Push_Player(AreaId area) {
 	asp->Skill_Close_Combat = player.m_skill.closeCombat;
 	asp->Skill_Defense = player.m_skill.defense;
 	asp->skin = s32(player.skin);
+	asp->padding[236] = s32(player.bodyKind); // the body played in; zero, the hero, in every older save
+	asp->padding[235] = g_ironman ? 1 : 0;   // zero, an ordinary run, in every older save
 	
 	asp->xp = player.xp;
 	asp->nb_PlayerQuest = g_playerQuestLogEntries.size();
@@ -1109,7 +1192,7 @@ static bool ARX_CHANGELEVEL_Push_IO(const Entity * io, AreaId area) {
 		ARX_CHANGELEVEL_SCRIPT_SAVE * ass = reinterpret_cast<ARX_CHANGELEVEL_SCRIPT_SAVE *>(dat + pos);
 		ass->allowevents = io->m_disabledEvents;
 		ass->lastcall = 0;
-		ass->nblvar = io->m_variables.size();
+		ass->nblvar = savableVariableCount(io->m_variables);
 		pos += sizeof(ARX_CHANGELEVEL_SCRIPT_SAVE);
 		storeScriptVariables(dat, pos, io->m_variables, 1);
 	}
@@ -1446,12 +1529,39 @@ static bool ARX_CHANGELEVEL_Pop_Player(std::string_view target, float angle) {
 	const ARX_CHANGELEVEL_PLAYER * asp = reinterpret_cast<const ARX_CHANGELEVEL_PLAYER *>(dat + pos);
 	pos += sizeof(ARX_CHANGELEVEL_PLAYER);
 	
-	if(target.empty()) {
+	bool placedAtSpot = g_rememberedSpot.pending;
+
+	if(g_rememberedSpot.pending) {
+		// Coming back to a spot rather than to a doorway: the level has loaded,
+		// so put the player exactly where they were standing.
+		g_rememberedSpot.pending = false;
+		player.pos = g_rememberedSpot.pos;
+		player.desiredangle.setYaw(g_rememberedSpot.yaw);
+		player.angle.setYaw(g_rememberedSpot.yaw);
+		LogWarning << "[here] returned to " << player.pos.x << ',' << player.pos.y
+		           << ',' << player.pos.z;
+		/*
+		 * And hold that against the level's own placement, which has not run
+		 * yet: the entrance marker's script fires a moment from now on a first
+		 * visit and would put us at the door.
+		 */
+		g_deliberateArrival.spot = player.basePosition();
+		g_deliberateArrival.until = platform::getTime() + 10s;
+		g_deliberateArrival.armed = true;
+	} else if(target.empty()) {
 		player.angle = asp->angle;
 		player.pos = asp->pos.toVec3();
+		LogWarning << "[coop-chain] player placed from SAVE FILE at " << player.pos.x
+		           << ',' << player.pos.y << ',' << player.pos.z << " (no target marker)";
 	} else {
 		if(Entity * targetEntity = entities.getById(target)) {
 			player.pos = GetItemWorldPosition(targetEntity) + player.baseOffset();
+			LogWarning << "[coop-chain] player placed at marker '" << target << "' -> "
+			           << player.pos.x << ',' << player.pos.y << ',' << player.pos.z;
+		} else {
+			LogWarning << "[coop-chain] TARGET MARKER '" << target
+			           << "' NOT FOUND - player keeps stale position " << player.pos.x
+			           << ',' << player.pos.y << ',' << player.pos.z;
 		}
 		player.desiredangle.setYaw(angle);
 		player.angle.setYaw(angle);
@@ -1469,9 +1579,27 @@ static bool ARX_CHANGELEVEL_Pop_Player(std::string_view target, float angle) {
 	player.doingmagic = asp->doingmagic;
 	player.playerflags = PlayerFlags::load(asp->playerflags); // TODO save/load flags
 	
-	if(asp->TELEPORT_TO_LEVEL[0]) {
+	if(placedAtSpot) {
+		/*
+		 * We have just put this player somewhere on purpose - a summoning
+		 * spell's spot, or the console's "back". The save was written while a
+		 * travel was still in flight and carries it, so restoring it here
+		 * starts that journey again the moment this one ends: the player
+		 * appears where they were sent, then the second change lands them at
+		 * the doorway. That is the entrance nobody asked for.
+		 */
+		if(asp->TELEPORT_TO_LEVEL[0]) {
+			LogWarning << "[coop-chain] dropped the save's pending travel to area "
+			           << util::loadString(asp->TELEPORT_TO_LEVEL)
+			           << ": this arrival had a destination of its own";
+		}
+		g_teleportToArea = { };
+		TELEPORT_TO_POSITION.clear();
+	} else if(asp->TELEPORT_TO_LEVEL[0]) {
 		s32 teleportToArea = util::toInt(util::loadString(asp->TELEPORT_TO_LEVEL)).value_or(-1);
 		g_teleportToArea = teleportToArea >= 0 ? AreaId(teleportToArea) : AreaId();
+		LogWarning << "[coop-chain] SAVE SMUGGLED A PENDING TRAVEL: area "
+		           << util::loadString(asp->TELEPORT_TO_LEVEL);
 	} else {
 		g_teleportToArea = { };
 	}
@@ -1558,6 +1686,8 @@ static bool ARX_CHANGELEVEL_Pop_Player(std::string_view target, float angle) {
 	player.m_skill.defense = asp->Skill_Defense;
 	
 	player.skin = util::to<unsigned char>(asp->skin);
+	player.bodyKind = static_cast<unsigned char>(std::min(std::max(asp->padding[236], s32(0)), s32(BodyKindCount - 1)));
+	g_ironman = (asp->padding[235] != 0);
 	
 	player.xp = asp->xp;
 	GLOBAL_MAGIC_MODE = (asp->Global_Magic_Mode != 0);
@@ -1665,7 +1795,24 @@ static bool loadScriptVariables(SCRIPT_VARIABLES & var, const char * dat, size_t
 		var[i].name = util::toLowercase(util::loadString(avs->name));
 		
 		VariableType type = getVariableType(var[i].name);
-		if(type == TYPE_UNKNOWN || type != VariableType(avs->type)) {
+		VariableType saved = VariableType(avs->type);
+		if(type == TYPE_UNKNOWN) {
+			/*
+			 * A variable the format cannot type: a name with an odd first byte, as
+			 * an earlier build of ours wrote for its enemy-health tag. What the
+			 * writer put after it is stepped over by the type it recorded, and the
+			 * variable is dropped, rather than the whole record and with it the
+			 * creature's pack, which then lay strewn on the floor.
+			 */
+			LogWarning << "Dropping script variable \"" << var[i].name << "\" of unknown type " << avs->type;
+			if((saved == TYPE_G_TEXT || saved == TYPE_L_TEXT) && avs->fval > 0.f) {
+				pos += size_t(avs->fval);
+			}
+			var.erase(var.begin() + long(i));
+			i--;
+			continue;
+		}
+		if(type != saved) {
 			LogError << "Unexpected variable type: \"" << var[i].name << "\" vs. " << avs->type;
 			var.resize(i);
 			return false;
@@ -2455,6 +2602,10 @@ static bool ARX_CHANGELEVEL_PopLevel(AreaId area, bool reloadflag, std::string_v
 	
 	// Restoring all Missing Objects required by other objects...
 	ARX_CHANGELEVEL_PopAllIO_FINISH(reloadflag, firstTime);
+	// A save made on another enemy health setting, or the host's setting for a guest
+	rescaleEnemyHealth();
+	// The mod's own world edits, after the level's scripts have had their say
+	applyStudioWorld();
 	
 	progressBarAdvance(15.f);
 	LoadLevelScreen();
@@ -2575,7 +2726,20 @@ void ARX_CHANGELEVEL_Load(const fs::path & savefile) {
 	
 	LogInfo << "Loading save " << savefile;
 	
+	/*
+	 * The teardown below frees every entity in list order, and the partner
+	 * body is created before the weapon that hangs off it - so the body died
+	 * first and the weapon's destructor then unlinked itself from freed
+	 * memory. Take the pair down here, in the safe order, before the sweep.
+	 */
+	coop::destroyAvatarEntity();
+	
 	LogDebug("begin ARX_CHANGELEVEL_Load " << savefile);
+
+	// Put co-op's own memory back to what it was when this save was written,
+	// before anything reads it. Hooked here rather than at the menu so every
+	// way of loading - including quickload - goes through it.
+	coop::loadSideState(savefile.parent());
 	
 	progressBarSetTotal(238);
 	progressBarReset();
@@ -2616,9 +2780,13 @@ void ARX_CHANGELEVEL_Load(const fs::path & savefile) {
 	BLOCK_PLAYER_CONTROLS = false;
 	player.Interface &= ~INTER_COMBATMODE;
 	ARX_EQUIPMENT_AttachPlayerWeaponToBack();
-	
+
 	entities.player()->animlayer[1].cur_anim = nullptr;
-	
+
+	// Loading a savegame lands us in whatever area that save was in, which is
+	// as much an area change as walking through a door.
+	coop::onAreaLoaded(AreaId(pld.level));
+
 }
 
 bool ARX_CHANGELEVEL_GetInfo(const fs::path & savefile, std::string & name, float & version,

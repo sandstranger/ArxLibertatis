@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -73,6 +74,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "script/ScriptedVariable.h"
 
 #include "util/String.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
 
 
 long ScriptEvent::totalCount = 0;
@@ -261,7 +264,20 @@ ScriptResult ScriptEvent::send(const EERIE_SCRIPT * es, Entity * sender, Entity 
 	if(entity->m_disabledEvents & event.toDisabledEventsMask()) {
 		return REFUSE;
 	}
-	
+
+	// An adopted proximity-scene ownership lives exactly as long as the
+	// top-level script run that earned it (see CoopPlayer.h).
+	static int s_runDepth = 0;
+	struct RunScope {
+		~RunScope() {
+			if(--s_runDepth == 0) {
+				coop::clearAdoptedSceneOwner();
+			}
+		}
+	};
+	s_runDepth++;
+	RunScope runScope;
+
 	// Finds script position to execute code...
 	size_t pos = position;
 	if(!event.getName().empty()) {
@@ -280,6 +296,12 @@ ScriptResult ScriptEvent::send(const EERIE_SCRIPT * es, Entity * sender, Entity 
 	
 	LogDebug("--> " << event << " params=\"" << parameters << "\"" << " entity=" << entity->idString()
 	         << (es == &entity->script ? " base" : " overriding") << " pos=" << pos);
+	
+	if(coop::debugTrace()) {
+		LogWarning << "[coop-debug] event " << event << " -> " << entity->idString()
+		           << (coop::isPartnerScriptContext() ? " [as-partner]" : "")
+		           << (sender ? std::string(" from ") + sender->idString() : std::string());
+	}
 	
 	script::Context context(es, pos, sender, entity, event.getId(), std::move(parameters));
 	
@@ -309,6 +331,23 @@ ScriptResult ScriptEvent::send(const EERIE_SCRIPT * es, Entity * sender, Entity 
 		// Remove all underscores from the command.
 		word.resize(std::remove(word.begin(), word.end(), '_') - word.begin());
 		
+		if(coop::debugTrace()) {
+			static const char * const watched[] = {
+				"setplayercontrols", "playerinterface", "worldfade", "cinemascope",
+				"speak", "teleport", "setcontrolledzone", "unset_controlled_zone",
+				"quake", "endgame"
+			};
+			bool interesting = word.compare(0, 5, "timer") == 0;
+			for(const char * w : watched) {
+				if(!interesting && word == w) {
+					interesting = true;
+				}
+			}
+			if(interesting) {
+				LogWarning << "[coop-debug] cmd '" << word << "' on " << context.getEntity()->idString()
+				           << (coop::isPartnerScriptContext() ? " [as-partner]" : "");
+			}
+		}
 		if(auto it = commands.find(word); it != commands.end()) {
 			
 			script::Command & command = *(it->second);

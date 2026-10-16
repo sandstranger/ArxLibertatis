@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -56,6 +57,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/Core.h"
 #include "game/Damage.h"
 #include "game/EntityManager.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
 #include "game/NPC.h"
 #include "game/Player.h"
 #include "graphics/Math.h"
@@ -450,7 +453,7 @@ static void sendNpcCollisionEvent(Entity & target, Entity & source) {
 	
 }
 
-static void handleNpcCollision(Entity & source, Entity & target) {
+void handleNpcCollision(Entity & source, Entity & target) {
 	
 	GameDuration elapsed = g_gameTime.now() - target.collide_door_time;
 	if(elapsed > 500ms) {
@@ -518,9 +521,26 @@ static void CheckAnythingInCylinder_Inner(const Cylinder & cylinder, Entity * so
 	if(!target
 	   || target == source
 	   || !target->obj
-	   || target->show != SHOW_FLAG_IN_SCENE
-	   || ((target->ioflags & IO_NO_COLLISIONS)  && !(flags & CFLAG_COLLIDE_NOCOL))
-	   || fartherThan(target->pos, cylinder.origin, 1000.f)) {
+	   || target->show != SHOW_FLAG_IN_SCENE) {
+		return;
+	}
+
+	bool intangible = (target->ioflags & IO_NO_COLLISIONS) && !(flags & CFLAG_COLLIDE_NOCOL);
+
+	/*
+	 * The other player's body is solid to everything that moves - creatures
+	 * stop at its edge and swing from there, and the local player body-blocks
+	 * against it the same as against any creature. A lag-born overlap between
+	 * the two players cannot wedge them: the escape valve in the NPC branch
+	 * below always allows the movement that leads OUT of an overlap. The body
+	 * keeps IO_NO_COLLISIONS only so placement helpers (rescue teleports,
+	 * spawn searches) do not treat the partner as an obstacle.
+	 */
+	if(intangible && source && (source->ioflags & IO_NPC) && coop::isAvatarEntity(target)) {
+		intangible = false;
+	}
+
+	if(intangible || fartherThan(target->pos, cylinder.origin, 1000.f)) {
 		return;
 	}
 	
@@ -536,12 +556,48 @@ static void CheckAnythingInCylinder_Inner(const Cylinder & cylinder, Entity * so
 	   && !(flags & CFLAG_NO_NPC_COLLIDE) // MUST be checked here only (not before...)
 	   && !(source && (source->ioflags & IO_NO_COLLISIONS))
 	   && target->_npcdata->lifePool.current > 0.f) {
+
+		/*
+		 * Bodies whose position is written by the network - replicated
+		 * creatures on a guest, the other player's body on either machine -
+		 * are solid exactly like local ones: a creature blocking a corridor
+		 * is a real mechanic of the game. The one situation the offline game
+		 * can never produce is a body materialising ON the player (its
+		 * position is a network-delay stale), so for those bodies only, any
+		 * movement that leads OUT of an existing overlap is allowed. Never
+		 * wedged, never intangible.
+		 */
+		bool lagDriven = source == entities.player() && coop::isActive()
+		                 && (coop::isAvatarEntity(target) || coop::isReplica());
+		if(lagDriven) {
+			Cylinder standing = Cylinder(player.basePosition(), cylinder.radius, cylinder.height);
+			if(CylinderInCylinder(standing, target->physics.cyl)) {
+				float curDist = fdist(getXZ(standing.origin), getXZ(target->physics.cyl.origin));
+				float newDist = fdist(getXZ(cylinder.origin), getXZ(target->physics.cyl.origin));
+				if(newDist >= curDist - 0.1f) {
+					return;
+				}
+			}
+		}
+
 		if(CylinderInCylinder(cylinder, target->physics.cyl)) {
 			NPC_IN_CYLINDER = 1;
 			anything = std::min(anything, target->physics.cyl.origin.y + target->physics.cyl.height);
 			if(!(flags & CFLAG_JUST_TEST) && source) {
 				arx_assert(source->ioflags & IO_NPC);
-				handleNpcCollision(*source, *target);
+				if(!lagDriven) {
+					handleNpcCollision(*source, *target);
+				} else if(!coop::isAvatarEntity(target)) {
+					// Contact is the authority's call: the host runs the real
+					// collision (script events, touch damage) against this
+					// creature and the results come back as the usual state.
+					// collide_door_time is free here - only handleNpcCollision
+					// writes it, and that never runs on this machine.
+					if(g_gameTime.now() - target->collide_door_time > 100ms) {
+						target->collide_door_time = g_gameTime.now();
+						coop::reportNpcTouch(*target);
+					}
+				}
 			}
 		}
 		return;

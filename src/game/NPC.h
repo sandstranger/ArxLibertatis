@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -46,6 +47,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #ifndef ARX_GAME_NPC_H
 #define ARX_GAME_NPC_H
+
+#include <string>
+#include <vector>
 
 #include <array>
 #include <string_view>
@@ -169,6 +173,22 @@ struct IO_NPCDATA {
 	long reachedtarget; // Is target in REACHZONE?
 	Entity * weapon; // Linked Weapon (r-hand)
 	long detect;
+
+	/*!
+	 * Which of the two co-op players this creature currently has in sight.
+	 *
+	 * `detect` above is a single flag with a single edge, and ON DETECTPLAYER
+	 * only fires when it flips from 0 to 1. With two players that is not
+	 * enough: a creature that had already seen the first would never produce an
+	 * edge when the second walked into view, so the script deciding to attack
+	 * was never run for them - the "ignores player two until hit" bug.
+	 *
+	 * These two are runtime-only and deliberately kept out of the savegame;
+	 * `detect` stays their OR so the save format is unchanged. After a load
+	 * they are re-derived on the first sight check.
+	 */
+	bool m_seenPlayer = false;
+	bool m_seenPartner = false;
 	MoveMode movemode;
 	float armor_class;
 	float absorb;
@@ -236,6 +256,22 @@ const float ARX_NPC_AUDIBLE_PRESENCE_DEFAULT = 1.f;
 
 void ARX_NPC_Revive(Entity * io, bool init);
 bool ARX_NPC_SetStat(Entity & io, std::string_view statname, float value);
+
+/*!
+ * How much life creatures get: 1 normal, 2 double, 3 triple. The player's own
+ * setting, or the host's while joined to one - the host's world is the one
+ * being fought in.
+ */
+[[nodiscard]] int enemyHealthSetting();
+
+//! A script gave this creature its life: scale it, and remember what it carries.
+void applyEnemyHealth(Entity & npc, float life);
+
+/*!
+ * Bring every creature to the current setting. After a load (a save made on
+ * another setting), and when the setting is changed with a world loaded.
+ */
+void rescaleEnemyHealth();
 bool ARX_NPC_LaunchPathfind(Entity * io, EntityHandle target);
 bool IsDeadNPC(const Entity & io);
 
@@ -270,5 +306,26 @@ float getEntityRadius(const Entity & entity);
 Cylinder getEntityCylinder(const Entity & entity);
 
 bool isEnemy(const Entity * entity);
+
+/*!
+ * Point a fighting creature at whichever of the two players it should be after.
+ *
+ * Scripts can only say "target player", which names the first player alone, so
+ * without this every enemy in the game commits to them and ignores the second
+ * even while being cut down by them.
+ */
+void ARX_NPC_CoopRetarget(Entity * io);
+
+//! Remember that a summoned creature hurt this one, so that it turns on it.
+void ARX_NPC_NoteSummonHurt(Entity & victim, Entity & summon);
+
+//! The summoned creature that has been hurting this one, if one has, or nothing.
+Entity * ARX_NPC_SummonGrudge(const Entity & io);
+
+//! Let a summoned creature find something worth fighting for its summoner.
+void ARX_NPC_SummonHunt(Entity * io);
+
+//! Tell a summoned creature which classes it may start a fight with.
+void ARX_NPC_SetSummonHunts(Entity & summon, const std::vector<std::string> & words);
 
 #endif // ARX_GAME_NPC_H

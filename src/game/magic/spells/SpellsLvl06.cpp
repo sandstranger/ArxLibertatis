@@ -1,5 +1,6 @@
 /*
  * Copyright 2014-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -35,6 +36,8 @@
 #include "physics/Collisions.h"
 #include "scene/GameSound.h"
 #include "scene/Interactive.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
 
 void RaiseDeadSpell::GetTargetAndBeta(Vec3f & target, float & beta) {
 	
@@ -366,7 +369,8 @@ void DisarmTrapSpell::Launch() {
 	m_hasDuration = true;
 	
 	Sphere sphere;
-	sphere.origin = player.pos;
+	sphere.origin = (m_caster == EntityHandle_Player || !entities.get(m_caster))
+	                ? player.pos : entities.get(m_caster)->pos;
 	sphere.radius = 400.f;
 	
 	for(Spell & spell : spells.ofType(SPELL_RUNE_OF_GUARDING)) {

@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -175,6 +176,16 @@ private:
 	void drawBackground(MapLevel level, Rect boundaries, Vec2f start, float zoom,
 	                    float fadeBorder = 0.f, bool invColor = false, float alpha = 1.f);
 	void drawPlayer(float playerSize, Vec2f playerPos, bool alphaBlending);
+
+	/*!
+	 * Draw the co-op partner's arrow, if there is one in this area.
+	 *
+	 * Unlike the local player's marker, which always sits at the centre of the
+	 * map, this one is placed by world position: they are somewhere else, and
+	 * where exactly is the whole point of showing it.
+	 */
+	void drawCoopPlayer(float playerSize, Vec2f start, float zoom, bool alphaBlending);
+
 	void drawDetectedEntities(Vec2f start, float zoom);
 	
 	std::vector<TexturedVertex> m_mapVertices;

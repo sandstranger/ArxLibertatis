@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -84,6 +85,15 @@ extern bool DIRECT_PATH;
 
 bool ARX_COLLISION_Move_Cylinder(IO_PHYSICS * ip, Entity * io, float MOVE_CYLINDER_STEP, CollisionFlags flags = 0);
 float CheckAnythingInCylinder(const Cylinder & cylinder, Entity * source, CollisionFlags flags = 0);
+
+/*!
+ * The full body-contact ritual between two touching NPC-class entities:
+ * SM_COLLIDE_NPC script events (throttled), touch damage from damager
+ * fields both ways, reached-target bookkeeping. Exposed so the co-op host
+ * can run the real contact when the other player presses against a
+ * creature on their machine.
+ */
+void handleNpcCollision(Entity & source, Entity & target);
 
 enum CheckAnythingInSphereFlag {
 	 CAS_NO_NPC_COL        = 1 << 0,

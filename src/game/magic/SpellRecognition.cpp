@@ -18,6 +18,7 @@
  */
 
 #include "game/magic/SpellRecognition.h"
+#include "game/magic/StudioSpells.h"
 
 #include <array>
 #include <map>
@@ -561,10 +562,86 @@ static void addSpell(const Rune symbols[MAX_SPELL_SYMBOLS], SpellType spell, std
 	def->spell = spell;
 }
 
+/*!
+ * What a rune sequence already casts, if anything.
+ *
+ * Runes are handed out on trust everywhere else in this file, because they are
+ * written in it - a duplicate would be a mistake in the source and the assert
+ * in addSpell() is there to catch it during development. Spells read out of a
+ * text file are different: the file is meant to be edited by whoever installed
+ * the mod, and typing the runes of a spell the game already has must not be
+ * able to take the game down.
+ */
+static SpellType spellForSymbols(const Rune symbols[MAX_SPELL_SYMBOLS]) {
+	
+	if(symbols[0] == RUNE_NONE) {
+		return SPELL_NONE;
+	}
+	
+	const SpellDefinition * def = &definedSpells;
+	for(size_t i = 0; i < MAX_SPELL_SYMBOLS; i++) {
+		if(symbols[i] == RUNE_NONE) {
+			break;
+		}
+		def = def->next[symbols[i]].get();
+		if(!def) {
+			return SPELL_NONE;
+		}
+	}
+	
+	return def->spell;
+}
+
+//! What that spell is called, for saying so out loud.
+static std::string_view spellNameOf(SpellType spell) {
+	
+	for(const auto & known : spellNames) {
+		if(known.second == spell) {
+			return known.first;
+		}
+	}
+	
+	return "another spell";
+}
+
 void spellRecognitionInit() {
 	
 	for(const auto & spell : allSpells) {
 		addSpell(spell.symbols, spell.spell, spell.name);
+	}
+	
+	/*
+	 * And the spells somebody wrote down. Their runes are not in this
+	 * file at all - they come from game/studio-spells.txt, which is what
+	 * lets a player add a spell without building the game.
+	 */
+	studioSpellsLoad();
+	for(size_t i = 0; i < g_studioSpells.size(); i++) {
+		const StudioSpellDef & made = g_studioSpells[i];
+		if(!made.defined) {
+			continue;
+		}
+		/*
+		 * A spell with no runes written for it still gets its name, because a
+		 * script can name a spell the player has no way to draw - which is
+		 * what makes a spell belong to one creature and to nobody else.
+		 */
+		if(made.symbols[0] != RUNE_NONE) {
+			if(SpellType taken = spellForSymbols(made.symbols.data()); taken != SPELL_NONE) {
+				LogWarning << "studio spells: " << made.key << " draws the runes of "
+				           << spellNameOf(taken) << " - give it a different sequence "
+				              "in game/studio-spells.txt and it will work";
+				continue;
+			}
+		}
+		if(spellNames.find(made.key) != spellNames.end()) {
+			LogWarning << "studio spells: " << made.key
+			           << " is already the name of a spell in the game - "
+			              "rename it in game/studio-spells.txt";
+			continue;
+		}
+		addSpell(made.symbols.data(),
+		         SpellType(size_t(SPELL_STUDIO_FIRST) + i), made.key);
 	}
 	
 	plist.reserve(MAX_POINTS);
@@ -612,6 +689,23 @@ SpellType GetSpellId(std::string_view spell) {
 	SpellNames::const_iterator it = spellNames.find(spell);
 	
 	return (it == spellNames.end()) ? SPELL_NONE : it->second;
+}
+
+/*
+ * The other way round, for anything that has to write a spell down and read
+ * it back later - the MMO action bar saves its twelve keys into the config
+ * this way. The same table both directions, so a name that can be saved is
+ * always a name GetSpellId will take back.
+ */
+std::string_view spellName(SpellType spell) {
+	
+	for(const RawSpellDefinition & definition : allSpells) {
+		if(definition.spell == spell) {
+			return definition.name;
+		}
+	}
+	
+	return std::string_view();
 }
 
 enum ARX_SPELLS_RuneDirection

@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -60,6 +61,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "scene/Interactive.h"
 #include "scene/GameSound.h"
 #include "script/ScriptEvent.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+
 #include "script/ScriptUtils.h"
 #include "util/Cast.h"
 
@@ -311,13 +315,44 @@ class SetPlayerControlsCommand : public Command {
 public:
 	
 	SetPlayerControlsCommand() : Command("setplayercontrols") { }
-	
+
 	Result execute(Context & context) override {
-		
+
 		bool enable = context.getBool();
-		
+
+		if(!enable) {
+			// a scene is taking the controls: from a cause-less run, the
+			// player who walked up owns it (no-op otherwise)
+			coop::adoptProximitySceneOwner(context.getEntity());
+		}
+
 		DebugScript(' ' << enable);
 		
+		/*
+		 * Somebody has to perform the scene, and it is not always us.
+		 *
+		 * In a shared area only the host simulates, so a trigger either of
+		 * them walks into fires here - and by default it belongs to the one
+		 * who walked into it. When that is the other player this screen stays
+		 * free and they are sent the scene to watch instead. Refusing on BOTH
+		 * machines was the old fault: it played on neither.
+		 */
+		// Being held for a scene the other machine is performing: our own copy
+		// of that script does not get to hand us back early.
+		if(coop::isSceneHeld()) {
+			return Success;
+		}
+
+		if(!coop::presentsCutscene()) {
+			coop::noteCutsceneForPartner(!enable);
+			// Not ours to obey, but theirs to be held by: this is the bracket
+			// around the whole scene, and it is the only thing that can tell
+			// them when to stand still and when they have themselves back.
+			coop::reportSceneHold(!enable);
+			return Success;
+		}
+
+
 		if(enable) {
 			if(BLOCK_PLAYER_CONTROLS) {
 				for(Entity & npc : entities(IO_NPC)) {
@@ -325,7 +360,42 @@ public:
 				}
 			}
 			BLOCK_PLAYER_CONTROLS = false;
+			/*
+			 * A scene ends in whatever run happens to reach its last block -
+			 * often a camera's own script, hops away from the one that owned
+			 * the scene, and owning nothing itself. Taking that as "the scene
+			 * was ours" freed this screen and left the other player standing
+			 * still, waiting for a release that was never sent. Whoever the
+			 * last run belongs to, a scene that is over is over for both.
+			 */
+			coop::releasePartnerSceneIfHeld();
 		} else {
+			/*
+			 * A guest sharing the host's area must never lock itself.
+			 *
+			 * Story moments lock the player and hand the unlocking to a chain
+			 * of script events - camera to camera to speaker and back - that
+			 * ends, many hops later, in the SET_PLAYER_CONTROLS ON that gives
+			 * control back. Those hops are queued with Stack_SendIOScriptEvent,
+			 * and the queue is only drained where the area is simulated:
+			 *
+			 *     if(!coop::isReplica()) { ARX_SCRIPT_EventStackExecute(); ... }
+			 *
+			 * So on a guest the lock is applied and the chain that lifts it is
+			 * never run. Not late - never. The player stands under the black
+			 * bars until the watchdog cuts them loose.
+			 *
+			 * The condition here is deliberately the same one that mutes the
+			 * queue, so the lock and its key can never be separated: wherever
+			 * the unlock cannot run, the lock is not applied. The guest still
+			 * watches the scene - the host performs it and sends it over as a
+			 * viewer copy, which holds them for exactly as long as it lasts and
+			 * releases them itself.
+			 */
+			if(coop::isReplica()) {
+				return Success;
+			}
+
 			if(!BLOCK_PLAYER_CONTROLS) {
 				ARX_PLAYER_PutPlayerInNormalStance();
 				
@@ -526,9 +596,19 @@ public:
 			ScriptWarning << "unknown target: " << target;
 			return Failed;
 		}
-		
+
+		// Turning "the player's" head is a scene taking hold of them: from a
+		// cause-less run, it belongs to the player standing there (no-op
+		// otherwise).
+		coop::adoptProximitySceneOwner(context.getEntity());
+
+		if(coop::isPartnerScriptContext()) {
+			// their scene turns their head, not ours
+			return Success;
+		}
+
 		ForcePlayerLookAtIO(t);
-		
+
 		return Success;
 	}
 	
@@ -642,6 +722,12 @@ public:
 		bool enable = context.getBool();
 		
 		DebugScript(' ' << options << ' ' << enable);
+		
+		// Protection meant for the player who tripped this script; armouring
+		// this machine's player instead would protect the wrong person.
+		if(targetPlayer && coop::isPartnerScriptContext()) {
+			return Success;
+		}
 		
 		Entity * io = context.getEntity();
 		if(!targetPlayer && !io) {

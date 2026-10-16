@@ -1,5 +1,6 @@
 /*
  * Copyright 2015-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -45,8 +46,11 @@ enum MENUSTATE {
 	Page_OptionsInputCustomizeKeys2,
 	Page_OptionsInputCustomizeKeys3,
 	Page_OptionsInputCustomizeKeys4,
+	//! The MMO action bar's twelve keys, its camera and its targeting.
+	Page_OptionsInputCustomizeKeys5,
 	Page_QuitConfirm,
 	Page_Localization,
+	Page_Coop,
 };
 
 enum WidgetType {

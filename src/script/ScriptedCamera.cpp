@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -55,6 +56,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/effects/Fade.h"
 #include "gui/Interface.h"
 #include "scene/Interactive.h"
+#include "net/CoopNet.h"
+#include "net/CoopPlayer.h"
+
 #include "script/ScriptUtils.h"
 
 
@@ -74,18 +78,50 @@ public:
 		
 		DebugScript(' ' << target);
 		
+		/*
+		 * The view itself, which is most of what a cutscene IS.
+		 *
+		 * Bars, dead controls and hidden hands were already handed to whoever
+		 * the scene belongs to; this was not, so a scene declined here still
+		 * took this screen's eyes and pointed them at the show. Everything
+		 * else about it said "not yours" and the camera said otherwise, which
+		 * on screen is the only vote that counts.
+		 */
+		bool ours = coop::presentsCutscene();
+
 		if(target == "none") {
-			g_cameraEntity = nullptr;
+			if(coop::relaysCutscene() || coop::partnerCameraEntity()) {
+				coop::reportCutsceneCamera(nullptr);
+			}
+			if(ours) {
+				g_cameraEntity = nullptr;
+			}
 			return Success;
 		}
-		
+
 		Entity * t = entities.getById(target, context.getEntity());
 		if(!t || !(t->ioflags & IO_CAMERA)) {
 			return Failed;
 		}
-		
-		g_cameraEntity = t;
-		
+
+		/*
+		 * Resolved first, and only then sent.
+		 *
+		 * Cameras name themselves: the script that takes the view is the
+		 * camera's own, and it says CAMERAACTIVATE SELF. "self" means whoever
+		 * is running - which on the machine receiving it is nobody at all, so
+		 * the word has to be turned into a name that means the same thing on
+		 * both sides before it leaves.
+		 */
+
+		if(coop::relaysCutscene()) {
+			coop::reportCutsceneCamera(t);
+		}
+
+		if(ours) {
+			g_cameraEntity = t;
+		}
+
 		return Success;
 	}
 	
@@ -104,7 +140,11 @@ public:
 		DebugScript(' ' << smoothing);
 		
 		context.getEntity()->_camdata->smoothing = smoothing;
-		
+
+		if(context.getEntity() == coop::partnerCameraEntity()) {
+			coop::reportCutsceneCamera(context.getEntity());
+		}
+
 		return Success;
 	}
 	
@@ -126,11 +166,40 @@ public:
 		}
 		
 		bool enable = context.getBool();
-		
+
+		if(enable) {
+			// bars going up on a scene from a cause-less run: the player who
+			// walked up owns it (no-op otherwise)
+			coop::adoptProximitySceneOwner(context.getEntity());
+		}
+
 		DebugScript(' ' << options << ' ' << enable);
-		
+
+		// The bars come down as part of the same locked story moment the guest
+		// cannot run its way out of - see the note on SET_PLAYER_CONTROLS. They
+		// are raised again at the end of a chain that never reaches a replica,
+		// so a guest that lowered them would be left looking through them. The
+		// viewer copy the host sends brings its own bars, and takes them away.
+		// Bars come down for the audience only. Raising them is never refused:
+		// giving the screen back can not be the thing that strands anyone.
+		if(!coop::presentsCutscene()) {
+			coop::noteCutsceneForPartner(enable);
+			return Success;
+		}
+
+		// While a scene of ours plays over there, the screen is not ours to
+		// redress: our own copy of the same script would raise the bars the
+		// moment the other machine brought them down.
+		if(coop::isSceneHeld()) {
+			return Success;
+		}
+
+		if(enable && coop::isReplica()) {
+			return Success;
+		}
+
 		cinematicBorder.set(enable, smooth);
-		
+
 		return Success;
 	}
 	
@@ -170,7 +239,11 @@ public:
 		DebugScript(' ' << x << ' ' << y << ' ' << z);
 		
 		context.getEntity()->_camdata->translatetarget = Vec3f(x, y, z);
-		
+
+		if(context.getEntity() == coop::partnerCameraEntity()) {
+			coop::reportCutsceneCamera(context.getEntity());
+		}
+
 		return Success;
 	}
 	
@@ -186,6 +259,28 @@ public:
 		
 		std::string inout = context.getWord();
 		const PlatformDuration duration = std::chrono::duration<float, std::milli>(context.getFloat());
+		
+		/*
+		 * The fade dresses the screen of whoever is travelling. When the
+		 * other player trips it, darkening THIS screen would black out a
+		 * player who is going nowhere; their machine runs its own curtain.
+		 */
+		if(coop::isPartnerScriptContext()) {
+			/*
+			 * ...and for a fade OUT, their machine must also stop simulating
+			 * their fall NOW, exactly as the level load is about to stop ours.
+			 * This is what keeps the other player from finishing a fall the
+			 * level designers assumed nobody could finish.
+			 */
+			if(inout == "out") {
+				coop::sendTravelHold(s32(toMsi(duration)));
+			} else if(inout == "in") {
+				// Fading back in means whatever this was, it was not a travel -
+				// let them go now instead of waiting for the safety timeout.
+				coop::sendTravelCancel();
+			}
+			return Success;
+		}
 		
 		if(inout == "out") {
 			

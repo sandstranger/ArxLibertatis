@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -27,6 +28,7 @@
 #include "io/fs/Filesystem.h"
 #include "io/fs/SystemPaths.h"
 #include "io/log/Logger.h"
+#include "net/CoopNet.h"
 #include "io/resource/PakReader.h"
 #include "scene/ChangeLevel.h"
 
@@ -236,6 +238,11 @@ bool SaveGameList::save(std::string_view name, SavegameHandle overwrite, const I
 		return false;
 	}
 	
+	// Co-op keeps memory the savegame does not: which story sequences have been
+	// watched, and what the guest is carrying. Keep a copy with this save so
+	// loading it later restores the story as well as the world.
+	coop::saveSideState(savefile.parent());
+
 	if(thumbnail.isValid() && !thumbnail.save(savefile.parent() / SAVEGAME_THUMBNAIL)) {
 		LogWarning << "Failed to save screenshot to " << (savefile.parent() / SAVEGAME_THUMBNAIL);
 	}

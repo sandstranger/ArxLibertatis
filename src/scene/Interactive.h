@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -108,6 +109,8 @@ void PrepareIOTreatZone(long flag = 0);
  * \return true if the entity will be destroyed.
  */
 bool ARX_INTERACTIVE_DestroyIOdelayed(Entity * entity);
+//! Whether this entity is already queued to be destroyed at the end of the frame.
+bool ARX_INTERACTIVE_IsDestroyPending(const Entity * entity);
 void ARX_INTERACTIVE_DestroyIOdelayedRemove(Entity * entity);
 void ARX_INTERACTIVE_DestroyIOdelayedExecute();
 

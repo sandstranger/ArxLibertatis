@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ * Copyright 2026 kingzmanh
  *
  * This file is part of Arx Libertatis.
  *
@@ -70,6 +71,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "io/log/Logger.h"
 #include "io/resource/PakReader.h"
+
+#include "net/CoopPlayer.h"
 
 #include "platform/profiler/Profiler.h"
 
@@ -239,6 +242,7 @@ void MiniMap::showPlayerMiniMap(MapLevel level) {
 	// Draw the player (red arrow)
 	if(level == getMapLevelForArea(m_currentArea)) {
 		drawPlayer(playerSize, playerPos, true);
+		drawCoopPlayer(playerSize, start, miniMapZoom, true);
 		drawDetectedEntities(start, miniMapZoom);
 	}
 	
@@ -259,6 +263,7 @@ void MiniMap::showBookMiniMap(MapLevel level, Rect rect, float scale) {
 	
 	if(level == getMapLevelForArea(m_currentArea)) {
 		drawPlayer(6.f * scale, playerPos, false);
+		drawCoopPlayer(6.f * scale, start, zoom, false);
 		drawDetectedEntities(start, zoom);
 	}
 	
@@ -281,6 +286,7 @@ void MiniMap::showBookEntireMap(MapLevel level, Rect rect, float scale) {
 	
 	if(level == getMapLevelForArea(m_currentArea)) {
 		drawPlayer(3.f * scale, playerPos, false);
+		drawCoopPlayer(3.f * scale, start, zoom, false);
 		drawDetectedEntities(start, zoom);
 	}
 	
@@ -560,40 +566,60 @@ void MiniMap::drawBackground(MapLevel level, Rect boundaries, Vec2f start, float
 	
 }
 
-void MiniMap::drawPlayer(float playerSize, Vec2f playerPos, bool alphaBlending) {
-	
+//! Draw one arrowhead. Shared by the player's own marker and the co-op partner's.
+static void drawMapArrow(float size, Vec2f at, float yaw, Color color, bool alphaBlending) {
+
 	GRenderer->SetAntialiasing(true);
-	
+
 	std::array<TexturedVertex, 4> verts;
 	for(TexturedVertex & vertex : verts) {
-		vertex.color = Color::red.toRGB();
+		vertex.color = color.toRGB();
 		vertex.w = 1;
 		vertex.p.z = 0.00001f;
 	}
-	
-	Vec2f r1(0.f, -playerSize * 1.8f);
-	Vec2f r2(-playerSize * 0.5f, playerSize);
-	Vec2f r3(playerSize * 0.5f, playerSize);
-	
-	float angle = glm::radians(m_player->angle.getYaw());
+
+	Vec2f r1(0.f, -size * 1.8f);
+	Vec2f r2(-size * 0.5f, size);
+	Vec2f r3(size * 0.5f, size);
+
+	float angle = glm::radians(yaw);
 	float ca = std::cos(angle);
 	float sa = std::sin(angle);
-	
-	verts[0].p.x = (playerPos.x + r2.x * ca + r2.y * sa);
-	verts[0].p.y = (playerPos.y + r2.y * ca - r2.x * sa);
-	verts[1].p.x = (playerPos.x + r1.x * ca + r1.y * sa);
-	verts[1].p.y = (playerPos.y + r1.y * ca - r1.x * sa);
-	verts[2].p.x = (playerPos.x + r3.x * ca + r3.y * sa);
-	verts[2].p.y = (playerPos.y + r3.y * ca - r3.x * sa);
-	
+
+	verts[0].p.x = (at.x + r2.x * ca + r2.y * sa);
+	verts[0].p.y = (at.y + r2.y * ca - r2.x * sa);
+	verts[1].p.x = (at.x + r1.x * ca + r1.y * sa);
+	verts[1].p.y = (at.y + r1.y * ca - r1.x * sa);
+	verts[2].p.x = (at.x + r3.x * ca + r3.y * sa);
+	verts[2].p.y = (at.y + r3.y * ca - r3.x * sa);
+
 	GRenderer->ResetTexture(0);
-	
+
 	UseRenderState state(alphaBlending ? render2D().blend(BlendOne, BlendInvSrcColor) : render2D());
-	
+
 	EERIEDRAWPRIM(Renderer::TriangleFan, verts.data());
-	
+
 	GRenderer->SetAntialiasing(false);
-	
+
+}
+
+void MiniMap::drawPlayer(float playerSize, Vec2f playerPos, bool alphaBlending) {
+	drawMapArrow(playerSize, playerPos, m_player->angle.getYaw(), Color::red, alphaBlending);
+}
+
+void MiniMap::drawCoopPlayer(float playerSize, Vec2f start, float zoom, bool alphaBlending) {
+
+	const coop::Avatar & other = coop::avatar();
+
+	if(!other.valid || !other.present) {
+		return; // not in this session, or not in this part of the fortress
+	}
+
+	// A different colour from the red arrow, so a glance at the map answers
+	// "where am I" and "where are they" without having to think about it.
+	drawMapArrow(playerSize, start + worldToMapPos(other.pos, zoom), other.angle.getYaw(),
+	             Color(80, 160, 255), alphaBlending);
+
 }
 
 void MiniMap::drawDetectedEntities(Vec2f start, float zoom) {
