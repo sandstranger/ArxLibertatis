@@ -1173,21 +1173,12 @@ void ArxGame::managePlayerControls() {
 	}
 	
 	// Checks INVENTORY Key Status.
-	if(GInput->actionNowPressed(CONTROLS_CUST_INVENTORY)) {
+	if(GInput->actionNowPressed(CONTROLS_CUST_INVENTORY)
+	   && !(player.Interface & INTER_INSTANT_MAGIC)) {
 
-        if (!(player.Interface & INTER_INSTANT_MAGIC)) {
-            if (player.Interface & INTER_COMBATMODE) {
-                ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
-            }
-
-            bInverseInventory = !bInverseInventory;
-            lOldTruePlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
-
-            if (!config.input.mouseLookToggle) {
-                bForceEscapeFreeLook = true;
-            }
-
-        }
+		if(player.Interface & INTER_COMBATMODE) {
+			ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
+		}
 
 		if(coop::mmoThird()) {
 			/*
@@ -1198,15 +1189,17 @@ void ArxGame::managePlayerControls() {
 			 */
 			InventoryOpenClose((player.Interface & INTER_INVENTORY) ? 2 : 1);
 		} else {
-			
+
+			// The normal first-person path toggles mouse-look once; toggling it
+			// both before and inside the branch cancels the key press entirely.
 			bInverseInventory = !bInverseInventory;
 			lOldTruePlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
-			
+
 			if(!config.input.mouseLookToggle) {
 				bForceEscapeFreeLook = true;
-			}			
+			}
 		}
-    }
+	}
 	
 	// Checks BOOK Key Status.
 	if(GInput->actionNowPressed(CONTROLS_CUST_BOOK))
