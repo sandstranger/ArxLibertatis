@@ -2239,19 +2239,27 @@ void ARX_INTERFACE_RenderInstantMagic() {
     }
 
     // РЎРѕР±РёСЂР°РµРј СЃРїРёСЃРѕРє РёР·РІРµСЃС‚РЅС‹С… Р·Р°РєР»РёРЅР°РЅРёР№
+    // Keep only real, initialized spells. Empty StudioSpell slots default to
+    // SPELL_NONE and only RUNE_NONE symbols; hasAllRunes() alone considers
+    // them available, producing a book frame with no spell icon to cast.
     std::vector<SpellType> knownSpells;
     for (int i = 0; i < SPELL_TYPES_COUNT; i++) {
-        if (!spellicons[i].bSecret && player.hasAllRunes(spellicons[i].symbols)) {
-            knownSpells.push_back(static_cast<SpellType>(i));
+        const SPELL_ICON & spell = spellicons[size_t(i)];
+        if (spell.spellid != static_cast<SpellType>(i)
+            || spell.level <= 0
+            || spell.bSecret
+            || !player.hasAllRunes(spell.symbols)) {
+            continue;
         }
+        knownSpells.push_back(spell.spellid);
     }
     if (knownSpells.empty()) {
+        player.m_selectedInstantSpell = SPELL_NONE;
         return;
     }
 
-    // РЎС‚Р°С‚РёС‡РµСЃРєРёР№ РёРЅРґРµРєСЃ РІС‹Р±СЂР°РЅРЅРѕРіРѕ Р·Р°РєР»РёРЅР°РЅРёСЏ
     static int selectedIndex = 0;
-    if (selectedIndex >= (int)knownSpells.size()) selectedIndex = 0;
+    if (selectedIndex < 0 || selectedIndex >= (int)knownSpells.size()) selectedIndex = 0;
 
     // РџСЂРѕРєСЂСѓС‚РєР° РЅР°СЃС‚СЂР°РёРІР°РµРјС‹РјРё РєРЅРѕРїРєР°РјРё (РЅР°Р·РЅР°С‡Р°СЋС‚СЃСЏ РІ РЅР°СЃС‚СЂРѕР№РєР°С… РёРіСЂС‹)
 if (GInput->actionNowPressed(CONTROLS_CUST_SPELL_PREV)) {
