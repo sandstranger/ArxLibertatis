@@ -92,7 +92,6 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/GlobalFog.h"
 #include "graphics/GraphicsTypes.h"
 #include "graphics/Math.h"
-#include "graphics/Raycast.h"
 #include "graphics/Vertex.h"
 #include "graphics/VertexBuffer.h"
 #include "graphics/data/FTL.h"
@@ -205,79 +204,6 @@ Vec3f PUSH_PLAYER_FORCE;
 
 Vec3f LASTCAMPOS;
 Anglef LASTCAMANGLE;
-
-static Vec3f clipThirdPersonCamera(const Vec3f & pivot, const Vec3f & desired) {
-
-	Vec3f toCamera = desired - pivot;
-	float maxDistance = glm::distance(pivot, desired);
-	if(maxDistance <= 0.f) {
-		return desired;
-	}
-
-	PolyType ignored = POLY_HIDE | POLY_TRANS | POLY_NODRAW | POLY_NOCOL | POLY_WATER;
-	if(RaycastResult hit = raycastScene(pivot, desired, ignored, RaycastIgnorePlayer)) {
-		float hitDistance = glm::distance(pivot, hit.pos);
-		float cameraDistance = glm::clamp(hitDistance - config.camera.thirdPersonCollisionPadding, 20.f, maxDistance);
-		return pivot + toCamera * (cameraDistance / maxDistance);
-	}
-
-	return desired;
-}
-
-static void prepareThirdPersonCamera(const Vec3f & pivot, Vec3f & targetPos, Anglef & targetAngle) {
-
-	Vec3f forward = angleToVector(player.angle);
-	Vec3f right = angleToVectorXZ(player.angle.getYaw() - 90.f);
-
-	Vec3f desired = pivot - forward * config.camera.thirdPersonDistance + right * config.camera.thirdPersonSideOffset + Vec3f(0.f, config.camera.thirdPersonHeight, 0.f);
-
-	targetPos = clipThirdPersonCamera(pivot, desired);
-	Vec3f lookAt = pivot + angleToVector(player.angle) * config.camera.thirdPersonFocusDistance;
-	targetAngle = Camera::getLookAtAngle(targetPos, lookAt);
-}
-
-static void updatePlayerCameraPivot(Entity * io) {
-
-	g_playerCamera.angle = player.angle;
-
-	if(VertexId viewVertex = io->obj->fastaccess.view_attach) {
-
-		g_playerCameraStablePos = g_playerCamera.m_pos = io->obj->vertexWorldPositions[viewVertex].v;
-
-		if(VertexGroupId viewGroup = getGroupForVertex(io->obj, viewVertex)) {
-			AnimLayer animlayer[MAX_ANIM_LAYERS];
-			for(size_t i = 0; i < MAX_ANIM_LAYERS; i++) {
-				animlayer[i] = io->animlayer[i];
-				if(animlayer[i].flags & EA_LOOP) {
-					animlayer[i].ctime = AnimationDuration(0);
-					animlayer[i].lastframe = -1;
-					animlayer[i].currentInterpolation = 0.f;
-					animlayer[i].currentFrame = 0;
-					animlayer[i].flags |= EA_PAUSED;
-				}
-			}
-			Skeleton skeleton = *io->obj->m_skeleton;
-			animateSkeleton(io, animlayer, skeleton);
-			g_playerCameraStablePos = skeleton.bones[viewGroup].anim(io->obj->vertexlocal[viewVertex]);
-		}
-
-		if(!config.video.viewBobbing) {
-			g_playerCamera.m_pos = g_playerCameraStablePos;
-		}
-
-		Vec3f vect(g_playerCamera.m_pos.x - player.pos.x, 0.f, g_playerCamera.m_pos.z - player.pos.z);
-		float len = ffsqrt(arx::length2(vect));
-		if(len > 46.f) {
-			vect *= 46.f / len;
-			g_playerCamera.m_pos.x = player.pos.x + vect.x;
-			g_playerCamera.m_pos.z = player.pos.z + vect.z;
-		}
-
-	} else {
-		g_playerCameraStablePos = g_playerCamera.m_pos = player.basePosition();
-	}
-
-}
 
 // ArxGame constructor. Sets attributes for the app.
 ArxGame::ArxGame()
@@ -1348,23 +1274,15 @@ void ArxGame::updateFirstPersonCamera() {
 	
 	Vec3f targetPos = g_playerCamera.m_pos;
 	Anglef targetAngle = g_playerCamera.angle;
-	bool thirdPersonCamera = false;
-
+	
 	if(eyeball.isActive()) {
-
+		
 		targetPos = eyeball.getPosition();
 		targetAngle = eyeball.getAngle();
 		EXTERNALVIEW = true;
-
-	} else if(config.camera.thirdPerson) {
-
-		updatePlayerCameraPivot(io);
-		prepareThirdPersonCamera(g_playerCameraStablePos, targetPos, targetAngle);
-		EXTERNALVIEW = true;
-		thirdPersonCamera = true;
-
+		
 	} else if(EXTERNALVIEW) {
-
+		
 		for(long l = 0; l < 250; l += 10) {
 			Vec3f tt = player.pos;
 			tt += angleToVectorXZ_180offset(player.angle.getYaw()) * float(l);
@@ -1378,17 +1296,51 @@ void ArxGame::updateFirstPersonCamera() {
 		
 		targetAngle = player.angle;
 		targetAngle.setPitch(targetAngle.getPitch() + 30.f);
-
+		
 	} else {
-
-		updatePlayerCameraPivot(io);
-
+		
+		g_playerCamera.angle = player.angle;
+		
+		if(VertexId viewVertex = io->obj->fastaccess.view_attach) {
+			
+			g_playerCameraStablePos = g_playerCamera.m_pos = io->obj->vertexWorldPositions[viewVertex].v;
+			
+			if(VertexGroupId viewGroup = getGroupForVertex(io->obj, viewVertex)) {
+				AnimLayer animlayer[MAX_ANIM_LAYERS];
+				for(size_t i = 0; i < MAX_ANIM_LAYERS; i++) {
+					animlayer[i] = io->animlayer[i];
+					if(animlayer[i].flags & EA_LOOP) {
+						animlayer[i].ctime = AnimationDuration(0);
+						animlayer[i].lastframe = -1;
+						animlayer[i].currentInterpolation = 0.f;
+						animlayer[i].currentFrame = 0;
+						animlayer[i].flags |= EA_PAUSED;
+					}
+				}
+				Skeleton skeleton = *io->obj->m_skeleton;
+				animateSkeleton(io, animlayer, skeleton);
+				g_playerCameraStablePos = skeleton.bones[viewGroup].anim(io->obj->vertexlocal[viewVertex]);
+			}
+			
+			if(!config.video.viewBobbing) {
+				g_playerCamera.m_pos = g_playerCameraStablePos;
+			}
+			
+			Vec3f vect(g_playerCamera.m_pos.x - player.pos.x, 0.f, g_playerCamera.m_pos.z - player.pos.z);
+			float len = ffsqrt(arx::length2(vect));
+			if(len > 46.f) {
+				vect *= 46.f / len;
+				g_playerCamera.m_pos.x = player.pos.x + vect.x;
+				g_playerCamera.m_pos.z = player.pos.z + vect.z;
+			}
+			
+		} else {
+			g_playerCameraStablePos = g_playerCamera.m_pos = player.basePosition();
+		}
+		
 	}
 	
-	if(thirdPersonCamera) {
-		g_playerCameraStablePos = g_playerCamera.m_pos = targetPos;
-		g_playerCamera.angle = targetAngle;
-	} else if(EXTERNALVIEW) {
+	if(EXTERNALVIEW) {
 		g_playerCameraStablePos = g_playerCamera.m_pos = (g_playerCamera.m_pos + targetPos) * 0.5f;
 		g_playerCamera.angle = interpolate(g_playerCamera.angle, targetAngle, 0.1f);
 	}
@@ -1737,10 +1689,6 @@ void ArxGame::updateLevel() {
 	}
 	
 	ARX_PLAYER_Manage_Movement();
-
-	if(config.camera.thirdPerson) {
-		EXTERNALVIEW = true;
-	}
 
 	ARX_PLAYER_Manage_Visual();
 

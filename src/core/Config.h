@@ -234,18 +234,6 @@ public:
 		
 	} input;
 	
-	// section 'camera'
-	struct {
-
-		bool thirdPerson;
-		float thirdPersonDistance;
-		float thirdPersonHeight;
-		float thirdPersonSideOffset;
-		float thirdPersonFocusDistance;
-		float thirdPersonCollisionPadding;
-
-	} camera;
-
 	// section 'key'
 	ActionKey actions[NUM_ACTION_KEY];
 	

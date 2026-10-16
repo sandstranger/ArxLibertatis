@@ -113,8 +113,7 @@ constexpr const bool
 	rawMouseInput = true,
 	borderTurning = true,
 	useAltRuneRecognition = true,
-	improvedBowAim = true,
-	thirdPerson = false;
+	improvedBowAim = true;
 
 #ifdef ARX_DEBUG
 const bool allowConsole = true;
@@ -133,12 +132,7 @@ constexpr const float
 	volume = 10.f,
 	sfxVolume = 10.f,
 	speechVolume = 10.f,
-	ambianceVolume = 10.f,
-	thirdPersonDistance = 100.f,
-	thirdPersonHeight = 10.f,
-	thirdPersonSideOffset = 60.f,
-	thirdPersonFocusDistance = 600.f,
-	thirdPersonCollisionPadding = 20.f;
+	ambianceVolume = 10.f;
 
 constexpr const ActionKey actions[NUM_ACTION_KEY] = {
 	ActionKey(Keyboard::Key_Spacebar), // JUMP
@@ -212,7 +206,6 @@ constexpr const std::string_view
 	Window = "window",
 	Audio = "audio",
 	Input = "input",
-	Camera = "camera",
 	Key = "key",
 	Misc = "misc";
 
@@ -294,15 +287,6 @@ constexpr const std::string_view
 	improvedBowAim = "improved_bow_aim",
 	quickLevelTransition = "quick_level_transition",
 	allowConsole = "allow_console";
-
-// Camera options
-constexpr const std::string_view
-	thirdPerson = "third_person",
-	thirdPersonDistance = "third_person_distance",
-	thirdPersonHeight = "third_person_height",
-	thirdPersonSideOffset = "third_person_side_offset",
-	thirdPersonFocusDistance = "third_person_focus_distance",
-	thirdPersonCollisionPadding = "third_person_collision_padding";
 
 // Input key options
 constexpr const std::string_view actions[NUM_ACTION_KEY] = {
@@ -584,15 +568,6 @@ bool Config::save() {
 		writer.writeKey(Key::allowConsole, input.allowConsole);
 	}
 	
-	// camera
-	writer.beginSection(Section::Camera);
-	writer.writeKey(Key::thirdPerson, camera.thirdPerson);
-	writer.writeKey(Key::thirdPersonDistance, camera.thirdPersonDistance);
-	writer.writeKey(Key::thirdPersonHeight, camera.thirdPersonHeight);
-	writer.writeKey(Key::thirdPersonSideOffset, camera.thirdPersonSideOffset);
-	writer.writeKey(Key::thirdPersonFocusDistance, camera.thirdPersonFocusDistance);
-	writer.writeKey(Key::thirdPersonCollisionPadding, camera.thirdPersonCollisionPadding);
-
 	// key
 	writer.beginSection(Section::Key);
 	for(size_t i = 0; i < NUM_ACTION_KEY; i++) {
@@ -730,18 +705,6 @@ bool Config::init(const fs::path & file) {
 	input.quickLevelTransition = QuickLevelTransition(glm::clamp(quickLevelTransition, 0, 2));
 	input.allowConsole = reader.getKey(Section::Input, Key::allowConsole, Default::allowConsole);
 	
-	// Get camera settings
-	camera.thirdPerson = reader.getKey(Section::Camera, Key::thirdPerson, Default::thirdPerson);
-	float thirdPersonDistance = reader.getKey(Section::Camera, Key::thirdPersonDistance, Default::thirdPersonDistance);
-	camera.thirdPersonDistance = glm::clamp(thirdPersonDistance, 40.f, 300.f);
-	camera.thirdPersonHeight = reader.getKey(Section::Camera, Key::thirdPersonHeight, Default::thirdPersonHeight);
-	float thirdPersonSideOffset = reader.getKey(Section::Camera, Key::thirdPersonSideOffset, Default::thirdPersonSideOffset);
-	camera.thirdPersonSideOffset = glm::clamp(thirdPersonSideOffset, -150.f, 150.f);
-	float thirdPersonFocusDistance = reader.getKey(Section::Camera, Key::thirdPersonFocusDistance, Default::thirdPersonFocusDistance);
-	camera.thirdPersonFocusDistance = glm::clamp(thirdPersonFocusDistance, 100.f, 5000.f);
-	float thirdPersonCollisionPadding = reader.getKey(Section::Camera, Key::thirdPersonCollisionPadding, Default::thirdPersonCollisionPadding);
-	camera.thirdPersonCollisionPadding = glm::clamp(thirdPersonCollisionPadding, 0.f, 120.f);
-
 	// Get action key settings
 	for(size_t i = 0; i < NUM_ACTION_KEY; i++) {
 		actions[i] = reader.getActionKey(Section::Key, ControlAction(i));
