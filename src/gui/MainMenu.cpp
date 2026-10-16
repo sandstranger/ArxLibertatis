@@ -1843,17 +1843,6 @@ public:
 		addControlRow(CONTROLS_CUST_CENTERVIEW,   "system_menus_options_input_customize_controls_center_view");
 		addControlRow(CONTROLS_CUST_FREELOOK,     "system_menus_options_input_customize_controls_freelook");
 		
-		addControlRow(CONTROLS_CUST_TURNLEFT,     "system_menus_options_input_customize_controls_turn_left");
-		addControlRow(CONTROLS_CUST_TURNRIGHT,    "system_menus_options_input_customize_controls_turn_right");
-		addControlRow(CONTROLS_CUST_LOOKUP,       "system_menus_options_input_customize_controls_look_up");
-		addControlRow(CONTROLS_CUST_LOOKDOWN,     "system_menus_options_input_customize_controls_look_down");
-		
-		addControlRow(CONTROLS_CUST_MINIMAP,      "system_menus_options_input_customize_controls_minimap");
-		addControlRow(CONTROLS_CUST_COOP_TALK,   "system_menus_options_input_customize_controls_coop_talk",
-		              "Talk to partner");
-		
-        addControlRow(CONTROLS_CUST_CONSOLE, "system_menus_options_input_customize_controls_console");
-		
 		addBackButton(Page_OptionsInput);
 		
 		{
@@ -1904,12 +1893,6 @@ public:
 		addControlRow(CONTROLS_CUST_PRECAST1,          "system_menus_options_input_customize_controls_precast1");
 		addControlRow(CONTROLS_CUST_PRECAST2,          "system_menus_options_input_customize_controls_precast2");
 		addControlRow(CONTROLS_CUST_PRECAST3,          "system_menus_options_input_customize_controls_precast3");
-		addControlRow(CONTROLS_CUST_PRECAST4,          "system_menus_options_input_customize_controls_precast4");
-		addControlRow(CONTROLS_CUST_PRECAST5,          "system_menus_options_input_customize_controls_precast5");
-		addControlRow(CONTROLS_CUST_PRECAST6,          "system_menus_options_input_customize_controls_precast6");
-		addControlRow(CONTROLS_CUST_PRECAST7,          "system_menus_options_input_customize_controls_precast7");
-		addControlRow(CONTROLS_CUST_PRECAST8,          "system_menus_options_input_customize_controls_precast8");
-		addControlRow(CONTROLS_CUST_PRECAST9,          "system_menus_options_input_customize_controls_precast9");
 		
 		addControlRow(CONTROLS_CUST_WEAPON,            "system_menus_options_input_customize_controls_weapon");
 		addControlRow(CONTROLS_CUST_UNEQUIPWEAPON,     "system_menus_options_input_customize_controls_unequipweapon");
@@ -1938,31 +1921,56 @@ public:
 };
 
 class ControlOptionsMenuPage4 final : public ControlOptionsPage {
+	
 public:
-ControlOptionsMenuPage4()
-    : ControlOptionsPage(Page_OptionsInputCustomizeKeys4)
-{ }
-void init() override {
-    reserveBottom();
-    addControlRow(CONTROLS_CUST_INSTANT_MAGIC, "system_menus_options_input_customize_controls_instant_magic");
-    addControlRow(CONTROLS_CUST_SPELL_PREV,    "system_menus_options_input_customize_controls_spell_prev");
-    addControlRow(CONTROLS_CUST_SPELL_NEXT,    "system_menus_options_input_customize_controls_spell_next");
-	addControlRow(CONTROLS_CUST_SPELL_CAST,        "system_menus_options_input_customize_controls_spell_cast");
-	addControlRow(CONTROLS_CUST_USE_ITEM, "system_menus_options_input_customize_controls_use_item");
-addControlRow(CONTROLS_CUST_NEW_INVENTORY,     "system_menus_options_input_customize_controls_new_inventory");
-addControlRow(CONTROLS_CUST_OFFER_ITEM, "system_menus_options_input_customize_controls_offer_item");
-    addBackButton(Page_OptionsInputCustomizeKeys3);
-    {
-        std::string_view label = getLocalised("system_menus_options_input_customize_default");
-        auto txt = std::make_unique<TextWidget>(hFontMenu, label);
-        txt->clicked = [this](Widget * /* widget */) {
-            resetActionKeys();
-        };
-        addCorner(std::move(txt), BottomCenter);
-    }
-    reinitActionKeys();
-}
-
+	
+	ControlOptionsMenuPage4()
+		: ControlOptionsPage(Page_OptionsInputCustomizeKeys4)
+	{ }
+	
+	void init() override {
+		
+		reserveBottom();
+		
+		addControlRow(CONTROLS_CUST_INSTANT_MAGIC, "system_menus_options_input_customize_controls_instant_magic");
+		addControlRow(CONTROLS_CUST_SPELL_PREV,   "system_menus_options_input_customize_controls_spell_prev");
+		addControlRow(CONTROLS_CUST_SPELL_NEXT,   "system_menus_options_input_customize_controls_spell_next");
+		addControlRow(CONTROLS_CUST_SPELL_CAST,   "system_menus_options_input_customize_controls_spell_cast");
+		addControlRow(CONTROLS_CUST_USE_ITEM,     "system_menus_options_input_customize_controls_use_item");
+		addControlRow(CONTROLS_CUST_NEW_INVENTORY,"system_menus_options_input_customize_controls_new_inventory");
+		addControlRow(CONTROLS_CUST_OFFER_ITEM,    "system_menus_options_input_customize_controls_offer_item");
+		
+		// PRECAST 4-9 live here rather than overfilling the inventory page.
+		addControlRow(CONTROLS_CUST_PRECAST4, "system_menus_options_input_customize_controls_precast4");
+		addControlRow(CONTROLS_CUST_PRECAST5, "system_menus_options_input_customize_controls_precast5");
+		addControlRow(CONTROLS_CUST_PRECAST6, "system_menus_options_input_customize_controls_precast6");
+		addControlRow(CONTROLS_CUST_PRECAST7, "system_menus_options_input_customize_controls_precast7");
+		addControlRow(CONTROLS_CUST_PRECAST8, "system_menus_options_input_customize_controls_precast8");
+		addControlRow(CONTROLS_CUST_PRECAST9, "system_menus_options_input_customize_controls_precast9");
+		addControlRow(CONTROLS_CUST_COOP_TALK, "system_menus_options_input_customize_controls_coop_talk",
+		              "Talk to partner");
+		
+		addBackButton(Page_OptionsInputCustomizeKeys3);
+		
+		{
+			std::string_view label = getLocalised("system_menus_options_input_customize_default");
+			auto txt = std::make_unique<TextWidget>(hFontMenu, label);
+			txt->clicked = [this](Widget * /* widget */) {
+				resetActionKeys();
+			};
+			addCorner(std::move(txt), BottomCenter);
+		}
+		
+		{
+			auto cb = std::make_unique<ButtonWidget>(buttonSize(16, 16), "graph/interface/menus/next");
+			cb->setTargetPage(Page_OptionsInputCustomizeKeys5);
+			addCorner(std::move(cb), BottomRight);
+		}
+		
+		reinitActionKeys();
+		
+	}
+	
 };
 
 class ControlOptionsMenuPage3 final : public ControlOptionsPage {
@@ -1986,6 +1994,16 @@ public:
 		addControlRow(CONTROLS_CUST_TOGGLE_FULLSCREEN, "system_menus_options_input_customize_controls_toggle_fullscreen");
 		
 		addControlRow(CONTROLS_CUST_DEBUG,             "system_menus_options_input_customize_controls_debug");
+
+		addControlRow(CONTROLS_CUST_TURNLEFT,  "system_menus_options_input_customize_controls_turn_left");
+		addControlRow(CONTROLS_CUST_TURNRIGHT, "system_menus_options_input_customize_controls_turn_right");
+		addControlRow(CONTROLS_CUST_LOOKUP,    "system_menus_options_input_customize_controls_look_up");
+		addControlRow(CONTROLS_CUST_LOOKDOWN,  "system_menus_options_input_customize_controls_look_down");
+		addControlRow(CONTROLS_CUST_MINIMAP,   "system_menus_options_input_customize_controls_minimap");
+		
+		if(config.input.allowConsole) {
+			addControlRow(CONTROLS_CUST_CONSOLE, "system_menus_options_input_customize_controls_console");
+		}
 		
 		addBackButton(Page_OptionsInputCustomizeKeys2);
 		
@@ -2002,12 +2020,6 @@ public:
 				resetActionKeys();
 			};
 			addCorner(std::move(txt), BottomCenter);
-		}
-		
-		{
-			auto cb = std::make_unique<ButtonWidget>(buttonSize(16, 16), "graph/interface/menus/next");
-			cb->setTargetPage(Page_OptionsInputCustomizeKeys3);
-			addCorner(std::move(cb), BottomRight);
 		}
 		
 		reinitActionKeys();
