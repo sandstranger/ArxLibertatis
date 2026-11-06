@@ -47,6 +47,10 @@
 #include "platform/CrashHandler.h"
 #include "window/RenderWindow.h"
 
+#ifdef ANDROID
+extern bool g_useGLES2_0;
+#endif
+
 
 OpenGLRenderer::OpenGLRenderer()
 	: maxTextureStage(0)
