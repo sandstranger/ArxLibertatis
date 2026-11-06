@@ -299,24 +299,19 @@ public:
 
         bindBuffer(m_buffer);
 
-        const size_t obytes = offset * sizeof(Vertex);
-        const size_t nbytes = count * sizeof(Vertex);
-        const size_t totalBytes = capacity() * sizeof(Vertex);
-
-        if(!m_initialized || (flags & DiscardBuffer) || m_usage != Renderer::Static) {
-            // Orphan the buffer to avoid waiting on GPU reads from the previous frame.
-            GLenum usage = GL_DYNAMIC_DRAW;
-            if(m_usage == Renderer::Static) {
-                usage = GL_STATIC_DRAW;
-            } else if(m_usage == Renderer::Stream && m_renderer->hasBufferUsageStream()) {
-                usage = GL_STREAM_DRAW;
-            }
-
-            glBufferData(GL_ARRAY_BUFFER, totalBytes, nullptr, usage);
-            m_initialized = true;
+        if(offset == 0 && count == capacity()) {
+            initialize(vertices);
+            return;
         }
 
-        if(nbytes != 0) {
+        if(!m_initialized || (flags & DiscardBuffer)) {
+            // Orphan only when the caller explicitly discards the old contents.
+            initialize();
+        }
+
+        if(count != 0) {
+            const size_t obytes = offset * sizeof(Vertex);
+            const size_t nbytes = count * sizeof(Vertex);
             glBufferSubData(GL_ARRAY_BUFFER, obytes, nbytes, vertices);
         }
     }
@@ -431,9 +426,8 @@ public:
 		bindBuffer(m_buffer);
 		
 		if(!m_initialized || (flags & DiscardBuffer)) {
-			// Match the ANGLE-tested Android path: orphan before mapping.
-			glBufferData(GL_ARRAY_BUFFER, capacity() * sizeof(Vertex), nullptr, GL_DYNAMIC_DRAW);
-			m_initialized = true;
+			// Orphan only on first use or when the caller discards the old contents.
+			initialize();
 		}
 		
 #ifdef ANDROID
