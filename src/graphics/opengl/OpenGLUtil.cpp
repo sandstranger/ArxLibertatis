@@ -219,13 +219,13 @@ void OpenGLInfo::parseOverrideConfig(std::string_view string) {
 bool OpenGLInfo::has(const char * extension, u32 version) const {
 	
 	if(m_version < version) {
-		#if ARX_HAVE_EPOXY
+		#if ANDROID
+		bool supported = ogl_extensions.find(extension) != ogl_extensions.end();
+		#elif ARX_HAVE_EPOXY
 		bool supported = epoxy_has_gl_extension(extension);
 		#elif ARX_HAVE_GLEW
 		bool supported = glewIsSupported(extension);
-        #elif ANDROID
-        bool supported = ogl_extensions.find(extension) != ogl_extensions.end();
-        #endif            
+		#endif            
 		if(!supported) {
 			return false;
 		}
