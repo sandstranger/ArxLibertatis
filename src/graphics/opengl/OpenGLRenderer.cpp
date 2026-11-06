@@ -95,7 +95,7 @@ OpenGLRenderer::~OpenGLRenderer() {
 
 void OpenGLRenderer::initialize() {
 	
-	#if ARX_HAVE_EPOXY
+	#if !defined(ANDROID) && ARX_HAVE_EPOXY
 	
 	#if ARX_PLATFORM == ARX_PLATFORM_WIN32
 	epoxy_handle_external_wglMakeCurrent();
@@ -125,7 +125,7 @@ void OpenGLRenderer::initialize() {
 	LogInfo << " ├─ Device: " << gl.renderer();
 	CrashHandler::setVariable("OpenGL device", gl.renderer());
 	
-	#if !defined(ANDROID) && defined(GL_CONTEXT_FLAG_DEBUG_BIT) || defined(GL_CONTEXT_FLAG_NO_ERROR_BIT)
+	#if !defined(ANDROID) && (defined(GL_CONTEXT_FLAG_DEBUG_BIT) || defined(GL_CONTEXT_FLAG_NO_ERROR_BIT))
 	if(gl.isES() ? gl.is(3, 2) : gl.is(3, 0)) {
 		GLint flags = 0;
 		glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
@@ -337,7 +337,6 @@ void OpenGLRenderer::initialize() {
 	// Introduced in OpenGL 1.4, no extension available for OpenGL ES
 	m_hasVertexFogCoordinate = !gl.isES();
 #else
-    extern bool g_useGLES2_0;
     m_hasVertexFogCoordinate = false;
 #endif
 	if(gl.isES()) {
