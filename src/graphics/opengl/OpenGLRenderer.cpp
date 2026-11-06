@@ -497,6 +497,14 @@ void OpenGLRenderer::shutdown() {
 	arx_assert(isInitialized());
 #ifdef ANDROID
 	shutdownGLESProgram();
+	if(m_glesImmediateVertexBuffer) {
+		glDeleteBuffers(1, &m_glesImmediateVertexBuffer);
+		m_glesImmediateVertexBuffer = 0;
+	}
+	if(m_glesImmediateIndexBuffer) {
+		glDeleteBuffers(1, &m_glesImmediateIndexBuffer);
+		m_glesImmediateIndexBuffer = 0;
+	}
 #endif
 	
 	onRendererShutdown();
@@ -901,7 +909,20 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 	setVertexArray(this, vertices, vertices);
 	
 #ifdef ANDROID
-	glDrawElements(arxToGlPrimitiveType[primitive], GLsizei(nindices), GL_UNSIGNED_SHORT, indices);
+	if(!m_glesImmediateVertexBuffer) glGenBuffers(1, &m_glesImmediateVertexBuffer);
+	if(!m_glesImmediateIndexBuffer) glGenBuffers(1, &m_glesImmediateIndexBuffer);
+
+	bindBuffer(m_glesImmediateVertexBuffer);
+	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(nvertices * sizeof(TexturedVertex)),
+	             vertices, GL_STREAM_DRAW);
+	setVertexArray(this, nullptr, this);
+
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_glesImmediateIndexBuffer);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(nindices * sizeof(unsigned short)),
+	             indices, GL_STREAM_DRAW);
+	glDrawElements(arxToGlPrimitiveType[primitive], GLsizei(nindices),
+	               GL_UNSIGNED_SHORT, nullptr);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 #else
 	if(hasDrawRangeElements()) {
 		glDrawRangeElements(arxToGlPrimitiveType[primitive], 0, nvertices - 1, nindices, GL_UNSIGNED_SHORT, indices);
