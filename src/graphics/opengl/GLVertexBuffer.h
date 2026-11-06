@@ -518,6 +518,87 @@ protected:
 
 #endif // !ANDROID
 
+#ifdef ANDROID
+// GLES 3.0 exposes core glMapBufferRange. Use it for ANGLE/native ES3 streaming
+// instead of copying every dynamic buffer through a CPU shadow buffer.
+template <class Vertex>
+class GLESMapRangeVertexBuffer final : public GLVertexBuffer<Vertex> {
+
+	using Base = GLVertexBuffer<Vertex>;
+
+public:
+
+	using Base::capacity;
+
+	GLESMapRangeVertexBuffer(const GLESMapRangeVertexBuffer &) = delete;
+	GLESMapRangeVertexBuffer & operator=(const GLESMapRangeVertexBuffer &) = delete;
+
+	GLESMapRangeVertexBuffer(OpenGLRenderer * renderer, size_t size,
+	                         Renderer::BufferUsage usage)
+		: Base(renderer, size, usage)
+	{ }
+
+	Vertex * lock(BufferFlags flags, size_t offset, size_t count) override {
+
+		arx_assert(offset < capacity());
+
+		bindBuffer(m_buffer);
+
+		if(!m_initialized) {
+			GLenum usage = m_usage == Renderer::Static ? GL_STATIC_DRAW : GL_DYNAMIC_DRAW;
+			if(m_usage == Renderer::Stream && m_renderer->hasBufferUsageStream()) {
+				usage = GL_STREAM_DRAW;
+			}
+			glBufferData(GL_ARRAY_BUFFER, capacity() * sizeof(Vertex), nullptr, usage);
+			m_initialized = true;
+		}
+
+		GLbitfield glflags = GL_MAP_WRITE_BIT;
+		if(flags & DiscardBuffer) {
+			glflags |= GL_MAP_INVALIDATE_BUFFER_BIT;
+		}
+		if(flags & DiscardRange) {
+			glflags |= GL_MAP_INVALIDATE_RANGE_BIT;
+		}
+		// GL_MAP_UNSYNCHRONIZED_BIT is not part of core GLES 3.0.
+
+		const size_t mapCount = std::min(count, capacity() - offset);
+		const size_t byteOffset = offset * sizeof(Vertex);
+		const size_t byteCount = mapCount * sizeof(Vertex);
+		void * mapped = glMapBufferRange(GL_ARRAY_BUFFER, byteOffset, byteCount, glflags);
+		if(!mapped) {
+			LogError << "Could not map GLES vertex buffer range!";
+			return nullptr;
+		}
+
+		m_mapped = true;
+		return reinterpret_cast<Vertex *>(mapped);
+	}
+
+	void unlock() override {
+		if(!m_mapped) {
+			return;
+		}
+
+		bindBuffer(m_buffer);
+		if(glUnmapBuffer(GL_ARRAY_BUFFER) == GL_FALSE) {
+			LogWarning << "GLES vertex buffer invalidated";
+		}
+		m_mapped = false;
+	}
+
+private:
+
+	using Base::m_buffer;
+	using Base::m_initialized;
+	using Base::m_renderer;
+	using Base::m_usage;
+
+	bool m_mapped = false;
+
+};
+#endif // ANDROID
+
 #if GL_ARB_buffer_storage && !defined(ANDROID)
 
 template <class Vertex>
