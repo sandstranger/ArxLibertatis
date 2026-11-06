@@ -499,12 +499,13 @@ list(APPEND ARX_LIBRARIES ${FREETYPE_LIBRARIES})
 
 # OpenGL
 if (ANDROID)
-    # Android uses the platform GLES entry points directly. Do not inherit a
-    # desktop loader selection from a cached or toolchain-provided CMake value.
+    # Keep the desktop loader selection out of Android builds. GLAD resolves
+    # GLES entry points from the active SDL/EGL context (including ANGLE).
     set(ARX_HAVE_OPENGL 1)
     set(ARX_HAVE_EPOXY 0)
     set(ARX_HAVE_GLEW 0)
     set(ARX_HAVE_GL_STATIC 0)
+    include_directories(SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/src/glad")
     add_definitions(-DAL_ALEXT_PROTOTYPES)
 endif ()
 
@@ -1621,7 +1622,7 @@ if (ANDROID)
     if(NOT ANDROID_GLESV2_LIBRARY OR NOT ANDROID_GLESV3_LIBRARY)
         message(SEND_ERROR "Android GLESv2/GLESv3 libraries are required")
     endif()
-	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}")
+	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
     target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY} ${ANDROID_GLESV2_LIBRARY} ${ANDROID_GLESV3_LIBRARY})
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
