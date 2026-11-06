@@ -962,7 +962,7 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 	bindBuffer(m_glesImmediateVertexBuffer);
 	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(nvertices * sizeof(TexturedVertex)),
 	             vertices, GL_STREAM_DRAW);
-	setVertexArray(this, nullptr, this);
+	setVertexArray<TexturedVertex>(this, nullptr, this);
 	drawIndexedElements(primitive, indices, nindices);
 #else
 	bindBuffer(GL_NONE);
