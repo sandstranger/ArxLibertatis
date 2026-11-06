@@ -59,18 +59,21 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 		return;
 	}
 	
+	#ifdef ANDROID
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(*vertices), &vertices->p);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), &vertices->color);
+	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+#else
 	glVertexPointer(4, GL_FLOAT, sizeof(*vertices), &vertices->p);
-	
 	if(renderer->hasVertexFogCoordinate()) {
-		// Use clip.w == view.z as the fog depth to match other vertex types
-		// TODO remove GL_FOG_COORDINATE_* uses once vertices are provided in view-space coordinates
 		glEnableClientState(GL_FOG_COORDINATE_ARRAY);
 		glFogCoordPointer(GL_FLOAT, sizeof(*vertices), &vertices->w);
 	}
-	
 	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	
 	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+#endif
 }
 
 template <>
@@ -80,15 +83,18 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertice
 		return;
 	}
 	
-	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
-	
-	if(renderer->hasVertexFogCoordinate()) {
-		glDisableClientState(GL_FOG_COORDINATE_ARRAY);
-	}
-	
-	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	
+	#ifdef ANDROID
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), &vertices->p.x);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), &vertices->color);
 	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+#else
+	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
+	if(renderer->hasVertexFogCoordinate()) glDisableClientState(GL_FOG_COORDINATE_ARRAY);
+	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
+	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+#endif
 }
 
 template <>
@@ -98,17 +104,22 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX3 * vertic
 		return;
 	}
 	
-	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
-	
-	if(renderer->hasVertexFogCoordinate()) {
-		glDisableClientState(GL_FOG_COORDINATE_ARRAY);
-	};
-	
-	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	
+	#ifdef ANDROID
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), &vertices->p.x);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), &vertices->color);
 	setVertexArrayTexCoord(0, &vertices->uv[0], sizeof(*vertices));
 	setVertexArrayTexCoord(1, &vertices->uv[1], sizeof(*vertices));
 	setVertexArrayTexCoord(2, &vertices->uv[2], sizeof(*vertices));
+#else
+	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
+	if(renderer->hasVertexFogCoordinate()) glDisableClientState(GL_FOG_COORDINATE_ARRAY);
+	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
+	setVertexArrayTexCoord(0, &vertices->uv[0], sizeof(*vertices));
+	setVertexArrayTexCoord(1, &vertices->uv[1], sizeof(*vertices));
+	setVertexArrayTexCoord(2, &vertices->uv[2], sizeof(*vertices));
+#endif
 }
 
 extern const GLenum arxToGlPrimitiveType[];
@@ -167,8 +178,15 @@ public:
 		
 		bindBuffer(m_buffer);
 		
+#ifdef ANDROID
+		// GLES 2.0 has no base-vertex draw call and does not guarantee 32-bit
+		// element indices. Shift the attribute base instead, then keep indices
+		// relative to this draw's vertex range.
+		const Vertex * baseVertices = reinterpret_cast<const Vertex *>(offset * sizeof(Vertex));
+		setVertexArray<Vertex>(m_renderer, baseVertices, this);
+		glDrawElements(arxToGlPrimitiveType[primitive], GLsizei(nbindices), GL_UNSIGNED_SHORT, indices);
+#else
 		setVertexArray<Vertex>(m_renderer, nullptr, this);
-		
 		GLenum mode = arxToGlPrimitiveType[primitive];
 		GLenum type = GL_UNSIGNED_SHORT;
 		const void * data = indices;
@@ -216,6 +234,8 @@ public:
 			}
 			
 		}
+		
+#endif
 		
 	}
 	
@@ -285,7 +305,9 @@ protected:
 	void initialize(const Vertex * data = nullptr) {
 		arx_assert(!m_initialized || m_usage != Renderer::Static);
 		arx_assert(data || m_usage != Renderer::Static);
-		#if GL_ARB_buffer_storage && !defined(ANDROID)
+		#endif // !ANDROID
+
+#if GL_ARB_buffer_storage && !defined(ANDROID)
 		if(m_usage == Renderer::Static && m_renderer->hasBufferStorage()) {
 			glBufferStorage(GL_ARRAY_BUFFER, capacity() * sizeof(Vertex), data, 0);
 		}
@@ -366,6 +388,7 @@ protected:
 	
 };
 
+#ifndef ANDROID
 template <class Vertex>
 class GLMapVertexBuffer : public GLVertexBuffer<Vertex> {
 	

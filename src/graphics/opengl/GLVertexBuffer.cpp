@@ -28,13 +28,15 @@ std::vector<GLushort> glShortIndexBuffer;
 std::vector<GLuint> glIntIndexBuffer;
 
 void setVertexArrayTexCoord(int index, const void * coord, size_t stride) {
-	
+#ifdef ANDROID
+	const GLuint attribute = GLuint(index + 2);
+	glEnableVertexAttribArray(attribute);
+	glVertexAttribPointer(attribute, 2, GL_FLOAT, GL_FALSE, GLsizei(stride), coord);
+#else
 	glClientActiveTexture(GL_TEXTURE0 + index);
-	if(index > 0) {
-		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-	}
+	if(index > 0) glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 	glTexCoordPointer(2, GL_FLOAT, stride, coord);
-	
+#endif
 }
 
 bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount) {
@@ -45,10 +47,16 @@ bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount) 
 
 	if(glArrayClientState != type) {
 		arx_assert(texcount >= 1);
+#ifdef ANDROID
+		for(int i = texcount; i < glArrayClientStateTexCount; ++i) {
+			glDisableVertexAttribArray(GLuint(i + 2));
+		}
+#else
 		for(int i = texcount; i < glArrayClientStateTexCount; i++) {
 			glClientActiveTexture(GL_TEXTURE0 + i);
 			glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 		}
+#endif
 		glArrayClientStateTexCount = texcount;
 	}
 
