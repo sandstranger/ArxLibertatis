@@ -1496,13 +1496,19 @@ void GLTexture::upload() {
     for(size_t i = 0; i < pixelCount; ++i) {
         const unsigned char * src = source;
         unsigned char * dst = destination;
-        switch(m_image.getFormat()) {
+        if(isIntensity()) {
+            const unsigned char intensity = src[0];
+            dst[0] = intensity;
+            dst[1] = intensity;
+            dst[2] = intensity;
+            dst[3] = intensity;
+        } else switch(m_image.getFormat()) {
             case Image::Format_L8: {
                 const unsigned char luminance = src[0];
                 dst[0] = luminance;
                 dst[1] = luminance;
                 dst[2] = luminance;
-                dst[3] = isIntensity() ? luminance : 255;
+                dst[3] = 255;
                 break;
             }
             case Image::Format_A8:
@@ -1514,7 +1520,7 @@ void GLTexture::upload() {
                 dst[0] = luminance;
                 dst[1] = luminance;
                 dst[2] = luminance;
-                dst[3] = isIntensity() ? luminance : src[1];
+                dst[3] = src[1];
                 break;
             }
             case Image::Format_R8G8B8:
