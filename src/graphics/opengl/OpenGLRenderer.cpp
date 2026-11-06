@@ -1510,15 +1510,21 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		m_glesUniformLodBias[i] = glGetUniformLocation(program, lodBiasNames[i]);
 	}
 	glUseProgram(0);
+	m_glesProgramBound = false;
+	m_glesUniformCacheValid = false;
 	return true;
 }
 
 void OpenGLRenderer::shutdownGLESProgram() {
 	if(m_glesProgram) {
-		glUseProgram(0);
+		if(m_glesProgramBound) {
+			glUseProgram(0);
+		}
 		glDeleteProgram(m_glesProgram);
 		m_glesProgram = 0;
 	}
+	m_glesProgramBound = false;
+	m_glesUniformCacheValid = false;
 	m_glesUniformProjection = -1;
 	m_glesUniformView = -1;
 	m_glesUniformTransform = -1;
@@ -1538,7 +1544,10 @@ void OpenGLRenderer::shutdownGLESProgram() {
 
 void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	if(!m_glesProgram) return;
-	glUseProgram(m_glesProgram);
+	if(!m_glesProgramBound) {
+		glUseProgram(m_glesProgram);
+		m_glesProgramBound = true;
+	}
 	glm::mat4 projection = m_projection;
 	glm::mat4 view = m_view;
 	if(!transformed) {
@@ -1550,23 +1559,83 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		projection = glm::translate(projection, glm::vec3(0.5f, 0.5f, 0.f));
 		view = glm::mat4(1.f);
 	}
-	if(m_glesUniformProjection >= 0) glUniformMatrix4fv(m_glesUniformProjection, 1, GL_FALSE, glm::value_ptr(projection));
-	if(m_glesUniformView >= 0) glUniformMatrix4fv(m_glesUniformView, 1, GL_FALSE, glm::value_ptr(view));
-	if(m_glesUniformTransform >= 0) glUniform1i(m_glesUniformTransform, transformed ? 1 : 0);
-	if(m_glesUniformFogEnabled >= 0) glUniform1i(m_glesUniformFogEnabled, m_state.getFog() ? 1 : 0);
+	const bool cacheValid = m_glesUniformCacheValid;
+	if(m_glesUniformProjection >= 0 &&
+	   (!cacheValid || std::memcmp(glm::value_ptr(m_glesCachedProjection),
+	                               glm::value_ptr(projection), sizeof(glm::mat4)) != 0)) {
+		glUniformMatrix4fv(m_glesUniformProjection, 1, GL_FALSE, glm::value_ptr(projection));
+		m_glesCachedProjection = projection;
+	}
+	if(m_glesUniformView >= 0 &&
+	   (!cacheValid || std::memcmp(glm::value_ptr(m_glesCachedView),
+	                               glm::value_ptr(view), sizeof(glm::mat4)) != 0)) {
+		glUniformMatrix4fv(m_glesUniformView, 1, GL_FALSE, glm::value_ptr(view));
+		m_glesCachedView = view;
+	}
+	const GLint transformValue = transformed ? 1 : 0;
+	if(m_glesUniformTransform >= 0 && (!cacheValid || m_glesCachedTransform != transformValue)) {
+		glUniform1i(m_glesUniformTransform, transformValue);
+		m_glesCachedTransform = transformValue;
+	}
+	const GLint fogEnabled = m_state.getFog() ? 1 : 0;
+	if(m_glesUniformFogEnabled >= 0 && (!cacheValid || m_glesCachedFogEnabled != fogEnabled)) {
+		glUniform1i(m_glesUniformFogEnabled, fogEnabled);
+		m_glesCachedFogEnabled = fogEnabled;
+	}
 	Color4f fog(m_glesFogColor);
-	if(m_glesUniformFogColor >= 0) glUniform4f(m_glesUniformFogColor, fog.r, fog.g, fog.b, fog.a);
-	if(m_glesUniformFogRange >= 0) glUniform2f(m_glesUniformFogRange, m_glesFogStart, m_glesFogEnd);
-	if(m_glesUniformAlphaCutout >= 0) glUniform1i(m_glesUniformAlphaCutout, m_glesAlphaCutout ? 1 : 0);
-	if(m_glesUniformAlphaThreshold >= 0) glUniform1f(m_glesUniformAlphaThreshold, m_glesAlphaThreshold);
-	if(m_glesUniformGamma >= 0) glUniform1f(m_glesUniformGamma, m_glesGamma);
+	if(m_glesUniformFogColor >= 0 &&
+	   (!cacheValid || m_glesCachedFogColor[0] != fog.r || m_glesCachedFogColor[1] != fog.g ||
+	    m_glesCachedFogColor[2] != fog.b || m_glesCachedFogColor[3] != fog.a)) {
+		glUniform4f(m_glesUniformFogColor, fog.r, fog.g, fog.b, fog.a);
+		m_glesCachedFogColor[0] = fog.r;
+		m_glesCachedFogColor[1] = fog.g;
+		m_glesCachedFogColor[2] = fog.b;
+		m_glesCachedFogColor[3] = fog.a;
+	}
+	if(m_glesUniformFogRange >= 0 &&
+	   (!cacheValid || m_glesCachedFogStart != m_glesFogStart || m_glesCachedFogEnd != m_glesFogEnd)) {
+		glUniform2f(m_glesUniformFogRange, m_glesFogStart, m_glesFogEnd);
+		m_glesCachedFogStart = m_glesFogStart;
+		m_glesCachedFogEnd = m_glesFogEnd;
+	}
+	const GLint alphaCutout = m_glesAlphaCutout ? 1 : 0;
+	if(m_glesUniformAlphaCutout >= 0 && (!cacheValid || m_glesCachedAlphaCutout != alphaCutout)) {
+		glUniform1i(m_glesUniformAlphaCutout, alphaCutout);
+		m_glesCachedAlphaCutout = alphaCutout;
+	}
+	if(m_glesUniformAlphaThreshold >= 0 &&
+	   (!cacheValid || m_glesCachedAlphaThreshold != m_glesAlphaThreshold)) {
+		glUniform1f(m_glesUniformAlphaThreshold, m_glesAlphaThreshold);
+		m_glesCachedAlphaThreshold = m_glesAlphaThreshold;
+	}
+	if(m_glesUniformGamma >= 0 && (!cacheValid || m_glesCachedGamma != m_glesGamma)) {
+		glUniform1f(m_glesUniformGamma, m_glesGamma);
+		m_glesCachedGamma = m_glesGamma;
+	}
 	for(size_t i = 0; i < 3; ++i) {
 		GLTextureStage * stage = i < m_TextureStages.size() ? GetTextureStage(i) : nullptr;
-		if(m_glesUniformUseTexture[i] >= 0) glUniform1i(m_glesUniformUseTexture[i], stage && i <= maxTextureStage && stage->getTexture() && stage->isEnabled() ? 1 : 0);
-		if(m_glesUniformColorOp[i] >= 0) glUniform1i(m_glesUniformColorOp[i], stage ? GLint(stage->getColorOp()) : GLint(TextureStage::OpDisable));
-		if(m_glesUniformAlphaOp[i] >= 0) glUniform1i(m_glesUniformAlphaOp[i], stage ? GLint(stage->getAlphaOp()) : GLint(TextureStage::OpDisable));
-		if(m_glesUniformLodBias[i] >= 0) glUniform1f(m_glesUniformLodBias[i], stage ? stage->getMipMapLODBias() : 0.f);
+		const GLint useTexture = stage && i <= maxTextureStage && stage->getTexture() && stage->isEnabled() ? 1 : 0;
+		const GLint colorOp = stage ? GLint(stage->getColorOp()) : GLint(TextureStage::OpDisable);
+		const GLint alphaOp = stage ? GLint(stage->getAlphaOp()) : GLint(TextureStage::OpDisable);
+		const float lodBias = stage ? stage->getMipMapLODBias() : 0.f;
+		if(m_glesUniformUseTexture[i] >= 0 && (!cacheValid || m_glesCachedUseTexture[i] != useTexture)) {
+			glUniform1i(m_glesUniformUseTexture[i], useTexture);
+			m_glesCachedUseTexture[i] = useTexture;
+		}
+		if(m_glesUniformColorOp[i] >= 0 && (!cacheValid || m_glesCachedColorOp[i] != colorOp)) {
+			glUniform1i(m_glesUniformColorOp[i], colorOp);
+			m_glesCachedColorOp[i] = colorOp;
+		}
+		if(m_glesUniformAlphaOp[i] >= 0 && (!cacheValid || m_glesCachedAlphaOp[i] != alphaOp)) {
+			glUniform1i(m_glesUniformAlphaOp[i], alphaOp);
+			m_glesCachedAlphaOp[i] = alphaOp;
+		}
+		if(m_glesUniformLodBias[i] >= 0 && (!cacheValid || m_glesCachedLodBias[i] != lodBias)) {
+			glUniform1f(m_glesUniformLodBias[i], lodBias);
+			m_glesCachedLodBias[i] = lodBias;
+		}
 	}
+	m_glesUniformCacheValid = true;
 }
 #endif
 
