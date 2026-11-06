@@ -94,7 +94,13 @@ public:
 	}
 	
 	template <class Vertex>
-	void beforeDraw() { flushState(); selectTrasform<Vertex>(); }
+	void beforeDraw() {
+		flushState();
+		selectTrasform<Vertex>();
+#ifdef ANDROID
+		prepareGLESProgram(m_currentTransform == GL_ModelViewProjectionTransform);
+#endif
+	}
 	
 	bool hasTextureNPOT() const { return m_hasTextureNPOT; }
 	bool hasSizedTextureFormats() const { return m_hasSizedTextureFormats; }
@@ -175,9 +181,33 @@ private:
 		GL_ModelViewProjectionTransform
 	};
 	
-	GLTransformMode m_currentTransform;
+ 	GLTransformMode m_currentTransform;
 	glm::mat4x4 m_projection;
 	glm::mat4x4 m_view;
+
+#ifdef ANDROID
+	void initializeGLESProgram();
+	void shutdownGLESProgram();
+	void prepareGLESProgram(bool transformed);
+
+	GLuint m_glesProgram = 0;
+	GLint m_glesUniformProjection = -1;
+	GLint m_glesUniformView = -1;
+	GLint m_glesUniformTransform = -1;
+	GLint m_glesUniformFogEnabled = -1;
+	GLint m_glesUniformFogColor = -1;
+	GLint m_glesUniformFogRange = -1;
+	GLint m_glesUniformAlphaCutout = -1;
+	GLint m_glesUniformAlphaThreshold = -1;
+	GLint m_glesUniformUseTexture[3] = {-1, -1, -1};
+	GLint m_glesUniformColorOp[3] = {-1, -1, -1};
+	GLint m_glesUniformAlphaOp[3] = {-1, -1, -1};
+	Color m_glesFogColor;
+	float m_glesFogStart = 0.f;
+	float m_glesFogEnd = 1.f;
+	bool m_glesAlphaCutout = false;
+	float m_glesAlphaThreshold = 0.5f;
+#endif
 	
 };
 

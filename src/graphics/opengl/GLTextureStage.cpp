@@ -25,15 +25,15 @@
 
 GLTextureStage::GLTextureStage(OpenGLRenderer * _renderer, unsigned stage) : TextureStage(stage), renderer(_renderer), tex(nullptr), current(nullptr) {
 	
-	// Set default state
-	
 	if(mStage == 0) {
 		ops[ColorOp] = OpModulate;
 		ops[AlphaOp] = OpSelectArg1;
+#ifndef ANDROID
 		glActiveTexture(GL_TEXTURE0);
 		setTexEnv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
-		setTexEnv(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE); // TODO change the AL default to match OpenGL
+		setTexEnv(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
 		glEnable(GL_TEXTURE_2D);
+#endif
 	} else {
 		ops[ColorOp] = OpDisable;
 		ops[AlphaOp] = OpDisable;
@@ -94,81 +94,56 @@ void GLTextureStage::setOp(OpType alpha, GLint op, GLint scale) {
 }
 
 void GLTextureStage::setOp(OpType alpha, TextureOp op) {
-	
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0 + mStage);
-	}
-		
 	bool wasEnabled = isEnabled();
-	
 	ops[alpha] = op;
-	
 	bool enabled = isEnabled();
 	if(wasEnabled != enabled) {
 		if(enabled) {
-			glEnable(GL_TEXTURE_2D);
-			setTexEnv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
 			renderer->maxTextureStage = std::max<size_t>(mStage, renderer->maxTextureStage);
-		} else {
-			glDisable(GL_TEXTURE_2D);
-			if(renderer->maxTextureStage == mStage) {
-				renderer->maxTextureStage = 0;
-				for(int stage = mStage - 1; stage >= 0; stage--) {
-					if(renderer->GetTextureStage(stage)->isEnabled()) {
-						renderer->maxTextureStage = stage;
-						break;
-					}
+		} else if(renderer->maxTextureStage == mStage) {
+			renderer->maxTextureStage = 0;
+			for(int stage = int(mStage) - 1; stage >= 0; --stage) {
+				if(renderer->GetTextureStage(size_t(stage))->isEnabled()) {
+					renderer->maxTextureStage = size_t(stage);
+					break;
 				}
 			}
 		}
 	}
-	
+#ifndef ANDROID
+	if(mStage != 0) glActiveTexture(GL_TEXTURE0 + mStage);
+	if(wasEnabled != enabled) {
+		if(enabled) {
+			glEnable(GL_TEXTURE_2D);
+			setTexEnv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+		} else {
+			glDisable(GL_TEXTURE_2D);
+		}
+	}
 	switch(op) {
-		
-		case OpDisable: {
-			setOp(alpha, GL_REPLACE, 1);
-			setArg(alpha, GL_PREVIOUS);
-			break;
-		}
-		
-		case OpSelectArg1: {
-			setOp(alpha, GL_REPLACE, 1);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
-		case OpModulate: {
-			setOp(alpha, GL_MODULATE, 1);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
-		case OpModulate2X: {
-			setOp(alpha, GL_MODULATE, 2);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
-		case OpModulate4X: {
-			setOp(alpha, GL_MODULATE, 4);
-			setArg(alpha, GL_TEXTURE);
-			break;
-		}
-		
+		case OpDisable: setOp(alpha, GL_REPLACE, 1); setArg(alpha, GL_PREVIOUS); break;
+		case OpSelectArg1: setOp(alpha, GL_REPLACE, 1); setArg(alpha, GL_TEXTURE); break;
+		case OpModulate: setOp(alpha, GL_MODULATE, 1); setArg(alpha, GL_TEXTURE); break;
+		case OpModulate2X: setOp(alpha, GL_MODULATE, 2); setArg(alpha, GL_TEXTURE); break;
+		case OpModulate4X: setOp(alpha, GL_MODULATE, 4); setArg(alpha, GL_TEXTURE); break;
 	}
-
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0);
-	}
+	if(mStage != 0) glActiveTexture(GL_TEXTURE0);
+#endif
 }
 
 void GLTextureStage::setTexEnv(GLenum target, GLenum pname, GLint param) {
 
+#ifndef ANDROID
 	IntegerStateCache::iterator it = m_stateCacheIntegers.find(pname);
 	if(it == m_stateCacheIntegers.end() || it->second != param) {
 		glTexEnvi(target, pname, param);
 		m_stateCacheIntegers[pname] = param;
 	}
+#else
+	ARX_UNUSED(target);
+	ARX_UNUSED(pname);
+	ARX_UNUSED(param);
+#endif
 }
 
 void GLTextureStage::setColorOp(TextureOp op) {
@@ -180,16 +155,13 @@ void GLTextureStage::setAlphaOp(TextureOp op) {
 }
 
 void GLTextureStage::setMipMapLODBias(float bias) {
-	
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0 + mStage);
-	}
-	
+#ifndef ANDROID
+	if(mStage != 0) glActiveTexture(GL_TEXTURE0 + mStage);
 	glTexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS, bias);
-	
-	if(mStage != 0) {
-		glActiveTexture(GL_TEXTURE0);
-	}
+	if(mStage != 0) glActiveTexture(GL_TEXTURE0);
+#else
+	ARX_UNUSED(bias);
+#endif
 }
 
 void GLTextureStage::apply() {

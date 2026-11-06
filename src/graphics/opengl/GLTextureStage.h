@@ -46,10 +46,12 @@ public:
 	void setMipMapLODBias(float bias) override;
 	
 	void apply();
+
+	TextureOp getColorOp() const { return ops[ColorOp]; }
+	TextureOp getAlphaOp() const { return ops[AlphaOp]; }
+	bool isEnabled() const { return ((ops[ColorOp] != OpDisable) || (ops[AlphaOp] != OpDisable)); }
 	
 private:
-	
-	bool isEnabled() { return ((ops[ColorOp] != OpDisable) || (ops[AlphaOp] != OpDisable)); }
 	
 	OpenGLRenderer * renderer;
 	
