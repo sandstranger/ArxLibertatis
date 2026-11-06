@@ -20,6 +20,7 @@
 #include "graphics/opengl/OpenGLUtil.h"
 
 #include <cstring>
+#include <cstdio>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/adaptor/reversed.hpp>
@@ -86,20 +87,46 @@ OpenGLInfo::OpenGLInfo()
 		m_version = 14;
 	}
     #elif ANDROID
-        m_version = 21;
+        // Do not pretend an OpenGL ES context is desktop OpenGL 2.1.
+        // Capability checks below depend on the actual API and version.
+        const char * rawVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+        m_isES = rawVersion && std::strstr(rawVersion, "OpenGL ES") != nullptr;
+        if(m_isES) {
+            unsigned major = 2;
+            unsigned minor = 0;
+            const char * version = std::strstr(rawVersion, "OpenGL ES");
+            while(version && *version && (*version < '0' || *version > '9')) {
+                ++version;
+            }
+            if(version) {
+                std::sscanf(version, "%u.%u", &major, &minor);
+            }
+            m_version = s32(major * 10 + minor);
+        } else {
+            m_version = 0;
+        }
     #endif
 
     #ifdef ANDROID
-    const char* ext = (const char*)glGetString(GL_EXTENSIONS);
-
-    if (ext)
-    {
-        std::stringstream ss(ext);
-        std::string item;
-
-        while (ss >> item)
-            ogl_extensions.insert(item);
-    }    
+    if(m_isES && m_version >= 30) {
+        GLint extensionCount = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
+        for(GLint i = 0; i < extensionCount; ++i) {
+            const char * extension = reinterpret_cast<const char *>(glGetStringi(GL_EXTENSIONS, GLuint(i)));
+            if(extension) {
+                ogl_extensions.insert(extension);
+            }
+        }
+    } else {
+        const char * ext = reinterpret_cast<const char *>(glGetString(GL_EXTENSIONS));
+        if(ext) {
+            std::stringstream ss(ext);
+            std::string item;
+            while(ss >> item) {
+                ogl_extensions.insert(item);
+            }
+        }
+    }
     #endif
         
 	m_versionString = reinterpret_cast<const char *>(glGetString(GL_VERSION));

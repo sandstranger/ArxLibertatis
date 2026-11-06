@@ -1395,9 +1395,7 @@ endif()
 
 # Graphics
 
-if (ANDROID)
-    include_directories(SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/src/glad")
-endif()    
+
 
 if (ANDROID)
     list(APPEND GRAPHICS_SOURCES ${GRAPHICS_OPENGL_SOURCES})
@@ -1613,8 +1611,9 @@ endif()
 # Add executables
 
 if (ANDROID)
-	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
-    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY})
+    find_library(ANDROID_GLESV2_LIBRARY GLESv2 REQUIRED)
+	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}")
+    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY} ${ANDROID_GLESV2_LIBRARY})
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
     add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")

@@ -62,7 +62,6 @@
 #include "window/SDL2X11Util.h"
 
 #ifdef ANDROID
-#include "glad.h"
 #include "AngleShaderCache.h"
 #include "SwappyController.h"
 
@@ -359,12 +358,6 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
             angle_blobcache_install("arx_libertatis");
         }
         
-        if (m_glcontext && !gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-            SDL_GL_DeleteContext(this->m_glcontext);
-            SDL_DestroyWindow(m_window);
-            SDL_Quit();
-            return false;
-        }
 #endif
         
 		// Verify that the MSAA setting matches what was requested
@@ -386,7 +379,12 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		glGetIntegerv_t glGetIntegerv_p = FunctionPointer(SDL_GL_GetProcAddress("glGetIntegerv"));
 		if(glGetError_p && glGetIntegerv_p) {
 			(void)glGetError_p(); // clear error flags
-			glGetIntegerv_p(GL_MAX_TEXTURE_UNITS, &texunits);
+#ifdef ANDROID
+            // GLES exposes fragment texture image units, not fixed-function texture units.
+            glGetIntegerv_p(GL_MAX_TEXTURE_IMAGE_UNITS, &texunits);
+#else
+            glGetIntegerv_p(GL_MAX_TEXTURE_UNITS, &texunits);
+#endif
 			if(glGetError_p() != GL_NO_ERROR) {
 				texunits = 0;
 			}
