@@ -329,7 +329,8 @@ void OpenGLRenderer::initialize() {
 		m_hasClearDepthf = gl.has("GL_ARB_ES2_compatibility", 4, 1) || gl.has("GL_OES_single_precision");
 	}
 #else
-    m_hasClearDepthf = gl.has("GL_ARB_ES2_compatibility" ) || gl.has("GL_OES_single_precision");
+    // glClearDepthf is core in OpenGL ES 2.0 and newer.
+    m_hasClearDepthf = gl.isES() && gl.is(2, 0);
 #endif    
 	
 #ifndef ANDROID   
