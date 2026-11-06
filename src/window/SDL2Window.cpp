@@ -360,6 +360,7 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
         if(SDL_GL_MakeCurrent(m_window, m_glcontext) != 0) {
             if(lastTry) {
                 LogError << "Could not make the OpenGL ES context current: " << SDL_GetError();
+                return 0;
             }
             continue;
         }
@@ -372,6 +373,7 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
         if(!gladLoadGLES2Loader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
             if(lastTry) {
                 LogError << "Could not load OpenGL ES entry points through SDL";
+                return 0;
             }
             continue;
         }
