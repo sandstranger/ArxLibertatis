@@ -317,6 +317,9 @@ private:
 	GLsizei m_glesMSAASamples = 0;
 	GLuint m_glesMSAAFramebuffer = 0;
 	GLuint m_glesMSAAColor = 0;
+	GLuint m_glesMSAAColorBuffer = 0;
+	bool m_glesMSAAResolveBlit = false;
+	GLenum m_glesWindowColorFormat = GL_RGBA8;
 	GLuint m_glesMSAADepth = 0;
 	Vec2i m_glesMSAASize = Vec2i(0);
 	bool m_glesMSAAFailed = false;

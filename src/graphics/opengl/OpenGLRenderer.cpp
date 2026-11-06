@@ -365,20 +365,47 @@ void OpenGLRenderer::initialize() {
 		m_hasInvalidateFramebuffer = m_glesIsES3 && glInvalidateFramebuffer;
 		m_hasDiscardFramebuffer = gl.has("GL_EXT_discard_framebuffer") && glDiscardFramebufferEXT;
 
-		// Multisampling resolved in tile memory into a single-sampled texture
+		// Multisampling with the samples resolved in tile memory:
+		//  - GL_EXT_multisampled_render_to_texture renders into a single-sampled texture
+		//    (native Mali, Adreno and PowerVR drivers),
+		//  - without it (ANGLE does not expose the extension on Mali) a multisampled
+		//    framebuffer is resolved into the window with glBlitFramebuffer(): ANGLE turns
+		//    a whole-framebuffer resolve into a resolve attachment of the open render pass.
 		m_glesMaxMSAASamples = 0;
+		m_glesMSAAResolveBlit = false;
 		if(gl.has("GL_EXT_multisampled_render_to_texture")
 		   && glFramebufferTexture2DMultisampleEXT && glRenderbufferStorageMultisampleEXT) {
 			GLint maxSamples = 0;
 			glGetIntegerv(GL_MAX_SAMPLES_EXT, &maxSamples);
 			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
+		} else if(m_glesIsES3 && glRenderbufferStorageMultisample && glBlitFramebuffer
+		          && glGetFramebufferAttachmentParameteriv) {
+			GLint maxSamples = 0;
+			glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
+			m_glesMSAAResolveBlit = true;
+			// The resolve can only become a resolve attachment if the multisampled color
+			// format matches the window surface.
+			GLint red = 0, green = 0, blue = 0, alpha = 0;
+			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red);
+			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &green);
+			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &blue);
+			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, &alpha);
+			if(red == 5 && green == 6 && blue == 5 && alpha == 0) {
+				m_glesWindowColorFormat = GL_RGB565;
+			} else if(alpha == 0) {
+				m_glesWindowColorFormat = GL_RGB8;
+			} else {
+				m_glesWindowColorFormat = GL_RGBA8;
+			}
 		}
 		LogInfo << "GLES render passes: "
 		        << (m_hasInvalidateFramebuffer ? "glInvalidateFramebuffer"
 		            : m_hasDiscardFramebuffer ? "glDiscardFramebufferEXT" : "no invalidation")
 		        << ", MSAA: "
-		        << (m_glesMaxMSAASamples > 1 ? "GL_EXT_multisampled_render_to_texture"
-		                                     : "not supported");
+		        << (m_glesMaxMSAASamples <= 1 ? "not supported"
+		            : m_glesMSAAResolveBlit ? "multisampled framebuffer + glBlitFramebuffer resolve"
+		            : "GL_EXT_multisampled_render_to_texture");
 		
 		// Program binaries for the shader cache (OpenGL ES 3.0 feature level only)
 		m_glesProgramBinaryFormats.clear();
@@ -438,7 +465,13 @@ void OpenGLRenderer::initialize() {
     m_hasVertexFogCoordinate = false;
 #endif
 	if(gl.isES()) {
+#ifdef ANDROID
+		// Per-sample shading for crisp alpha cutout antialiasing
+		m_hasSampleShading = m_glesIsES3 && gl.has("GL_OES_sample_shading") && glMinSampleShadingOES;
+		LogInfo << "GLES sample shading: " << (m_hasSampleShading ? "GL_OES_sample_shading" : "not supported");
+#else
 		m_hasSampleShading = gl.has("GL_OES_sample_shading", 3, 2);
+#endif
 	} else {
 #ifndef ANDROID       
 		#if ARX_HAVE_GLEW
@@ -510,6 +543,7 @@ void OpenGLRenderer::reinit() {
 	m_hasMSAA = false;
 	m_glesMSAAFramebuffer = 0;
 	m_glesMSAAColor = 0;
+	m_glesMSAAColorBuffer = 0;
 	m_glesMSAADepth = 0;
 	m_glesMSAASamples = 0;
 	m_glesMSAASize = Vec2i(0);
@@ -520,6 +554,11 @@ void OpenGLRenderer::reinit() {
 	m_glesImmediateVertexOffset = 0;
 	m_glalphaToCoverage = false;
 	glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+	m_glsampleShading = false;
+	if(hasSampleShading()) {
+		glDisable(GL_SAMPLE_SHADING_OES);
+		glMinSampleShadingOES(1.f);
+	}
 	m_glstate.setCull(false);
 	m_glstate.setFog(false);
 	m_glstate.setAlphaCutout(false);
@@ -960,7 +999,10 @@ void OpenGLRenderer::setMaxAnisotropy(float value) {
 
 Renderer::AlphaCutoutAntialising OpenGLRenderer::getMaxSupportedAlphaCutoutAntialiasing() const {
 #ifdef ANDROID
-	return m_glesMaxMSAASamples > 1 ? FuzzyAlphaCutoutAA : NoAlphaCutoutAA;
+	if(m_glesMaxMSAASamples <= 1) {
+		return NoAlphaCutoutAA;
+	}
+	return hasSampleShading() ? CrispAlphaCutoutAA : FuzzyAlphaCutoutAA;
 #else
 	#ifdef GL_VERSION_4_0
 	if(hasSampleShading()) {
@@ -1224,7 +1266,16 @@ bool OpenGLRenderer::getSnapshot(Image & image) {
 	// the renderer's existing RGB Image contract.
 	Image rgba;
 	rgba.create(size_t(size.x), size_t(size.y), Image::Format_R8G8B8A8);
+	// Multisampled framebuffers cannot be read: use the window, which holds the last
+	// resolved frame, like when rendering without MSAA.
+	const bool readWindow = m_glesMSAAResolveBlit && m_glesMSAAFramebuffer;
+	if(readWindow) {
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, GL_NONE);
+	}
 	glReadPixels(0, 0, size.x, size.y, GL_RGBA, GL_UNSIGNED_BYTE, rgba.getData());
+	if(readWindow) {
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_glesMSAAFramebuffer);
+	}
 	const unsigned char * src = rgba.getData();
 	unsigned char * dst = image.getData();
 	for(size_t i = 0, pixels = size_t(size.x) * size_t(size.y); i < pixels; ++i) {
@@ -1273,13 +1324,21 @@ void OpenGLRenderer::flushState() {
 #ifdef ANDROID
 	BlendingFactor srcFactor = m_state.getBlendSrc();
 	BlendingFactor dstFactor = m_state.getBlendDst();
+	// Alpha cutouts like the desktop renderer: with MSAA either per-sample shading
+	// (crisp) or alpha-to-coverage (fuzzy), otherwise texels at or below alpha 0.5 are
+	// discarded. Blended cutouts only discard fully transparent texels.
+	const int cutoutAA = config.video.alphaCutoutAntialiasing;
+	const bool useSampleShading = m_hasMSAA && hasSampleShading() && cutoutAA == int(CrispAlphaCutoutAA);
+	const bool useAlphaToCoverage = m_hasMSAA && cutoutAA == int(FuzzyAlphaCutoutAA);
+	bool sampleShading = false;
+	bool alphaToCoverage = false;
 	m_glesAlphaThreshold = 0.5f;
-	bool useAlphaToCoverage = false;
 	if(m_state.getAlphaCutout()) {
 		if(srcFactor == BlendOne && dstFactor == BlendZero) {
-			useAlphaToCoverage = m_hasMSAA
-			        && config.video.alphaCutoutAntialiasing != int(NoAlphaCutoutAA);
-			if(useAlphaToCoverage) {
+			if(useSampleShading) {
+				sampleShading = true;
+			} else if(useAlphaToCoverage) {
+				alphaToCoverage = true;
 				m_glesAlphaThreshold = 0.f;
 			}
 		} else if(srcFactor == BlendOne && dstFactor == BlendOne) {
@@ -1287,12 +1346,19 @@ void OpenGLRenderer::flushState() {
 			m_glesAlphaThreshold = 0.f;
 		} else if(srcFactor == BlendSrcAlpha || dstFactor == BlendInvSrcAlpha) {
 			m_glesAlphaThreshold = 0.f;
+		} else {
+			sampleShading = useSampleShading;
 		}
 	}
-	if(useAlphaToCoverage != m_glalphaToCoverage) {
-		if(useAlphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+	if(alphaToCoverage != m_glalphaToCoverage) {
+		if(alphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
 		else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-		m_glalphaToCoverage = useAlphaToCoverage;
+		m_glalphaToCoverage = alphaToCoverage;
+	}
+	if(sampleShading != m_glsampleShading) {
+		if(sampleShading) glEnable(GL_SAMPLE_SHADING_OES);
+		else glDisable(GL_SAMPLE_SHADING_OES);
+		m_glsampleShading = sampleShading;
 	}
 
 	if(m_glstate != m_state) {
@@ -2285,8 +2351,9 @@ void OpenGLRenderer::invalidateAttachments(bool defaultFramebuffer, bool color, 
 bool OpenGLRenderer::updateMultisampleFramebuffer() {
 
 	const Vec2i size = mainApp->getWindow()->getSize();
-	const bool wanted = config.video.antialiasing && m_glesMaxMSAASamples > 1 && m_glesCopyProgram
-	                    && m_glesCopyVertices && !m_glesMSAAFailed && size.x > 0 && size.y > 0;
+	const bool canResolve = m_glesMSAAResolveBlit || (m_glesCopyProgram && m_glesCopyVertices);
+	const bool wanted = config.video.antialiasing && m_glesMaxMSAASamples > 1 && canResolve
+	                    && !m_glesMSAAFailed && size.x > 0 && size.y > 0;
 	if(!wanted) {
 		destroyMultisampleFramebuffer();
 		return false;
@@ -2300,6 +2367,44 @@ bool OpenGLRenderer::updateMultisampleFramebuffer() {
 	destroyMultisampleFramebuffer();
 
 	const GLsizei samples = std::min(GLsizei(m_glesMaxMSAASamples), glesMSAASamples);
+
+	if(m_glesMSAAResolveBlit) {
+
+		// Multisampled color and depth, resolved into the window by resolveMultisampleFramebuffer().
+		// Drivers round the sample count up to one they support (Mali has no 2x MSAA).
+		glGenRenderbuffers(1, &m_glesMSAAColorBuffer);
+		glBindRenderbuffer(GL_RENDERBUFFER, m_glesMSAAColorBuffer);
+		glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, m_glesWindowColorFormat, size.x, size.y);
+		GLint actualSamples = 0;
+		glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &actualSamples);
+		glGenRenderbuffers(1, &m_glesMSAADepth);
+		glBindRenderbuffer(GL_RENDERBUFFER, m_glesMSAADepth);
+		glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, m_glesDepthFormat, size.x, size.y);
+		glBindRenderbuffer(GL_RENDERBUFFER, GL_NONE);
+
+		glGenFramebuffers(1, &m_glesMSAAFramebuffer);
+		glBindFramebuffer(GL_FRAMEBUFFER, m_glesMSAAFramebuffer);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_glesMSAAColorBuffer);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_glesMSAADepth);
+
+		const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+		if(status != GL_FRAMEBUFFER_COMPLETE) {
+			LogError << "MSAA framebuffer is incomplete (status " << status
+			         << "), rendering without antialiasing";
+			m_glesMSAAFailed = true;
+			destroyMultisampleFramebuffer();
+			return false;
+		}
+
+		m_glesMSAASamples = GLsizei(std::max(GLint(samples), actualSamples));
+		m_glesMSAASize = size;
+		m_MSAALevel = int(m_glesMSAASamples);
+
+		LogInfo << "Using " << m_glesMSAASamples << "x MSAA (multisampled framebuffer, "
+		        << "glBlitFramebuffer resolve) at " << size.x << "x" << size.y;
+
+		return true;
+	}
 
 	// Single-sampled color texture: the samples are resolved into it in tile memory
 	glGenTextures(1, &m_glesMSAAColor);
@@ -2318,6 +2423,9 @@ bool OpenGLRenderer::updateMultisampleFramebuffer() {
 	glGenRenderbuffers(1, &m_glesMSAADepth);
 	glBindRenderbuffer(GL_RENDERBUFFER, m_glesMSAADepth);
 	glRenderbufferStorageMultisampleEXT(GL_RENDERBUFFER, samples, m_glesDepthFormat, size.x, size.y);
+	// Drivers round the sample count up to one they support (Mali has no 2x MSAA).
+	GLint actualSamples = 0;
+	glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &actualSamples);
 	glBindRenderbuffer(GL_RENDERBUFFER, GL_NONE);
 
 	glGenFramebuffers(1, &m_glesMSAAFramebuffer);
@@ -2335,11 +2443,11 @@ bool OpenGLRenderer::updateMultisampleFramebuffer() {
 		return false;
 	}
 
-	m_glesMSAASamples = samples;
+	m_glesMSAASamples = GLsizei(std::max(GLint(samples), actualSamples));
 	m_glesMSAASize = size;
-	m_MSAALevel = int(samples);
+	m_MSAALevel = int(m_glesMSAASamples);
 
-	LogInfo << "Using " << samples << "x MSAA (GL_EXT_multisampled_render_to_texture) at "
+	LogInfo << "Using " << m_glesMSAASamples << "x MSAA (GL_EXT_multisampled_render_to_texture) at "
 	        << size.x << "x" << size.y;
 
 	return true;
@@ -2351,6 +2459,10 @@ void OpenGLRenderer::destroyMultisampleFramebuffer() {
 		glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
 		glDeleteFramebuffers(1, &m_glesMSAAFramebuffer);
 		m_glesMSAAFramebuffer = 0;
+	}
+	if(m_glesMSAAColorBuffer) {
+		glDeleteRenderbuffers(1, &m_glesMSAAColorBuffer);
+		m_glesMSAAColorBuffer = 0;
 	}
 	if(m_glesMSAADepth) {
 		glDeleteRenderbuffers(1, &m_glesMSAADepth);
@@ -2369,6 +2481,42 @@ void OpenGLRenderer::destroyMultisampleFramebuffer() {
 }
 
 void OpenGLRenderer::resolveMultisampleFramebuffer() {
+
+	if(m_glesMSAAResolveBlit) {
+
+		if(!m_glesPassStarted && m_glesPassCleared == 0) {
+			// Nothing was drawn or cleared this frame, and the samples of the previous
+			// frame were invalidated: there is nothing to resolve.
+			return;
+		}
+
+		// Depth is not needed after the frame: keep it in tile memory.
+		invalidateAttachments(false, false, true);
+
+		// Resolve the whole framebuffer into the window while the render pass is still open:
+		// ANGLE then adds the window as a resolve attachment of that render pass, so the
+		// samples are resolved during the tile write-back and never stored. The scissor
+		// test would limit the blit, the formats match (see initialize()).
+		const Vec2i size = m_glesMSAASize;
+		if(m_scissor.isValid()) {
+			glDisable(GL_SCISSOR_TEST);
+		}
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GL_NONE);
+		glBlitFramebuffer(0, 0, size.x, size.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+		// The samples are not needed anymore either.
+		const GLenum color = GL_COLOR_ATTACHMENT0;
+		glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, &color);
+		glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+		if(m_scissor.isValid()) {
+			glEnable(GL_SCISSOR_TEST);
+		}
+
+		// Only the color is presented
+		invalidateAttachments(true, false, true);
+
+		return;
+	}
 
 	// Depth is not needed after the frame: keep it in tile memory. The color samples are
 	// resolved into m_glesMSAAColor when the render pass ends with the binding change.
