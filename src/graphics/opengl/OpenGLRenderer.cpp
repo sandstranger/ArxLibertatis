@@ -805,7 +805,11 @@ void OpenGLRenderer::setMaxAnisotropy(float value) {
 }
 
 Renderer::AlphaCutoutAntialising OpenGLRenderer::getMaxSupportedAlphaCutoutAntialiasing() const {
-	
+#ifdef ANDROID
+	// The GLES path currently uses shader discard without a multisampled
+	// alpha-to-coverage target, so it must not advertise cutout AA support.
+	return NoAlphaCutoutAA;
+#else
 	#ifdef GL_VERSION_4_0
 	if(hasSampleShading()) {
 		return CrispAlphaCutoutAA;
@@ -813,6 +817,7 @@ Renderer::AlphaCutoutAntialising OpenGLRenderer::getMaxSupportedAlphaCutoutAntia
 	#endif
 	
 	return FuzzyAlphaCutoutAA;
+#endif
 }
 
 template <typename Vertex>
