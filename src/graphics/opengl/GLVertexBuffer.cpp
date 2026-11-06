@@ -42,7 +42,11 @@ void setVertexArrayTexCoord(int index, const void * coord, size_t stride) {
 bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount) {
 
 	if(glArrayClientState == type && glArrayClientStateRef == ref) {
+#ifdef ANDROID
+		return true; // Reapply attribute pointers when ring-buffer offsets change.
+#else
 		return false;
+#endif
 	}
 
 	if(glArrayClientState != type) {
