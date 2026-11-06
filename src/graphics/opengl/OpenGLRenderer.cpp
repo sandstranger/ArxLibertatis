@@ -921,12 +921,8 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	}
 	return createVertexBufferImpl<Vertex>(renderer, capacity, usage, std::string_view());
 #else
-    if(renderer->hasMapBufferRange()) {
-        return std::make_unique<GLESMapRangeVertexBuffer<Vertex>>(renderer, capacity, usage);
-    }
-    // GLES 2.0 does not guarantee buffer mapping. Keep the portable fallback
-    // there, but do not force GLES 3.0 / ANGLE through an extra CPU shadow copy.
-    return std::make_unique<GLShadowVertexBuffer<Vertex>>(renderer, capacity, usage);
+    // Match the working Android path from master: map the buffer directly.
+    return std::make_unique<GLMapVertexBuffer<Vertex>>(renderer, capacity, usage);
 #endif
 }
 
