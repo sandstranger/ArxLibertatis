@@ -243,7 +243,7 @@ void OpenGLRenderer::initialize() {
 	}
 	
 	if(gl.isES()) {
-		m_hasTextureNPOT = gl.is(3, 0) || gl.has("GL_OES_texture_npot", 2, 0);
+		m_hasTextureNPOT = gl.is(3, 0) || gl.has("GL_OES_texture_npot");
 		if(!m_hasTextureNPOT) {
 			LogWarning << "Missing OpenGL extension GL_OES_texture_npot";
 		}
