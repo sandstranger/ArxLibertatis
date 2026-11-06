@@ -22,6 +22,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sstream>
+#include <string>
 #include <string_view>
 
 #include <glm/gtc/type_ptr.hpp>
@@ -747,6 +748,14 @@ void OpenGLRenderer::SetFogParams(float fogStart, float fogEnd) {
 #endif
 }
 
+void OpenGLRenderer::setGamma(float gamma) {
+#ifdef ANDROID
+	m_glesGamma = std::max(0.f, gamma);
+#else
+	ARX_UNUSED(gamma);
+#endif
+}
+
 void OpenGLRenderer::SetAntialiasing(bool enable) {
 #ifdef ANDROID
 	if(m_MSAALevel <= 0 || (enable && !config.video.antialiasing) || enable == m_hasMSAA) {
@@ -1297,6 +1306,7 @@ uniform vec4 uFogColor;
 uniform vec2 uFogRange;
 uniform int uAlphaCutout;
 uniform float uAlphaThreshold;
+uniform float uGamma;
 varying mediump vec4 vColor;
 varying mediump vec2 vTexCoord0;
 varying mediump vec2 vTexCoord1;
@@ -1324,6 +1334,7 @@ void main() {
         float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
         color.rgb = mix(uFogColor.rgb, color.rgb, fog);
     }
+    color.rgb = clamp(color.rgb * uGamma, 0.0, 1.0);
     gl_FragColor = color;
 }
 )";
@@ -1387,6 +1398,7 @@ uniform vec4 uFogColor;
 uniform vec2 uFogRange;
 uniform int uAlphaCutout;
 uniform float uAlphaThreshold;
+uniform float uGamma;
 in mediump vec4 vColor;
 in mediump vec2 vTexCoord0;
 in mediump vec2 vTexCoord1;
@@ -1415,6 +1427,7 @@ void main() {
         float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
         color.rgb = mix(uFogColor.rgb, color.rgb, fog);
     }
+    color.rgb = clamp(color.rgb * uGamma, 0.0, 1.0);
     fragColor = color;
 }
 )";
@@ -1467,6 +1480,7 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	m_glesUniformFogRange = glGetUniformLocation(program, "uFogRange");
 	m_glesUniformAlphaCutout = glGetUniformLocation(program, "uAlphaCutout");
 	m_glesUniformAlphaThreshold = glGetUniformLocation(program, "uAlphaThreshold");
+	m_glesUniformGamma = glGetUniformLocation(program, "uGamma");
 	glUseProgram(program);
 	const char * samplerNames[3] = {"uTexture0", "uTexture1", "uTexture2"};
 	const char * useNames[3] = {"uUseTexture0", "uUseTexture1", "uUseTexture2"};
@@ -1499,6 +1513,7 @@ void OpenGLRenderer::shutdownGLESProgram() {
 	m_glesUniformFogRange = -1;
 	m_glesUniformAlphaCutout = -1;
 	m_glesUniformAlphaThreshold = -1;
+	m_glesUniformGamma = -1;
 	for(size_t i = 0; i < 3; ++i) {
 		m_glesUniformUseTexture[i] = -1;
 		m_glesUniformColorOp[i] = -1;
@@ -1530,6 +1545,7 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	if(m_glesUniformFogRange >= 0) glUniform2f(m_glesUniformFogRange, m_glesFogStart, m_glesFogEnd);
 	if(m_glesUniformAlphaCutout >= 0) glUniform1i(m_glesUniformAlphaCutout, m_glesAlphaCutout ? 1 : 0);
 	if(m_glesUniformAlphaThreshold >= 0) glUniform1f(m_glesUniformAlphaThreshold, m_glesAlphaThreshold);
+	if(m_glesUniformGamma >= 0) glUniform1f(m_glesUniformGamma, m_glesGamma);
 	for(size_t i = 0; i < 3; ++i) {
 		GLTextureStage * stage = i < m_TextureStages.size() ? GetTextureStage(i) : nullptr;
 		if(m_glesUniformUseTexture[i] >= 0) glUniform1i(m_glesUniformUseTexture[i], stage && i <= maxTextureStage && stage->getTexture() && stage->isEnabled() ? 1 : 0);
