@@ -202,6 +202,7 @@ private:
 	GLint m_glesUniformFogRange = -1;
 	GLint m_glesUniformAlphaCutout = -1;
 	GLint m_glesUniformAlphaThreshold = -1;
+	GLint m_glesUniformLodBias[3] = {-1, -1, -1};
 	GLint m_glesUniformUseTexture[3] = {-1, -1, -1};
 	GLint m_glesUniformColorOp[3] = {-1, -1, -1};
 	GLint m_glesUniformAlphaOp[3] = {-1, -1, -1};
