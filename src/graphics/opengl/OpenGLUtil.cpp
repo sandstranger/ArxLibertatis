@@ -58,7 +58,21 @@ OpenGLInfo::OpenGLInfo()
 	, m_version(0)
 	, m_versionOverride(std::numeric_limits<s32>::max())
 {
-	#if ARX_HAVE_EPOXY
+	#if ANDROID
+		// Query the actual EGL context instead of using a desktop GL loader.
+		const char * rawVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+		m_isES = rawVersion && std::strstr(rawVersion, "OpenGL ES") != nullptr;
+		if(m_isES) {
+			unsigned major = 2;
+			unsigned minor = 0;
+			const char * version = std::strstr(rawVersion, "OpenGL ES");
+			while(version && *version && (*version < '0' || *version > '9')) ++version;
+			if(version) std::sscanf(version, "%u.%u", &major, &minor);
+			m_version = s32(major * 10 + minor);
+		} else {
+			m_version = 0;
+		}
+	#elif ARX_HAVE_EPOXY
 	m_isES = !epoxy_is_desktop_gl();
 	m_version = epoxy_gl_version();
 	#elif ARX_HAVE_GLEW
@@ -87,25 +101,6 @@ OpenGLInfo::OpenGLInfo()
 	} else if(glewIsSupported("GL_VERSION_1_4")) {
 		m_version = 14;
 	}
-    #elif ANDROID
-        // Do not pretend an OpenGL ES context is desktop OpenGL 2.1.
-        // Capability checks below depend on the actual API and version.
-        const char * rawVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
-        m_isES = rawVersion && std::strstr(rawVersion, "OpenGL ES") != nullptr;
-        if(m_isES) {
-            unsigned major = 2;
-            unsigned minor = 0;
-            const char * version = std::strstr(rawVersion, "OpenGL ES");
-            while(version && *version && (*version < '0' || *version > '9')) {
-                ++version;
-            }
-            if(version) {
-                std::sscanf(version, "%u.%u", &major, &minor);
-            }
-            m_version = s32(major * 10 + minor);
-        } else {
-            m_version = 0;
-        }
     #endif
 
     #ifdef ANDROID
