@@ -372,6 +372,15 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		
 		// Verify that we actually got an accelerated context
 		GLint texunits = 0;
+#ifdef ANDROID
+		// GLES entry points are linked from the NDK GLES libraries. Avoid
+		// resolving them through SDL_GL_GetProcAddress on Android.
+		(void)glGetError(); // clear error flags
+		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &texunits);
+		if(glGetError() != GL_NO_ERROR) {
+			texunits = 0;
+		}
+#else
 		// TODO libepoxy does not support unloading the GL so do things manually here
 		typedef GLenum (GLAPIENTRY * glGetError_t)();
 		glGetError_t glGetError_p = FunctionPointer(SDL_GL_GetProcAddress("glGetError"));
@@ -379,16 +388,12 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		glGetIntegerv_t glGetIntegerv_p = FunctionPointer(SDL_GL_GetProcAddress("glGetIntegerv"));
 		if(glGetError_p && glGetIntegerv_p) {
 			(void)glGetError_p(); // clear error flags
-#ifdef ANDROID
-            // GLES exposes fragment texture image units, not fixed-function texture units.
-            glGetIntegerv_p(GL_MAX_TEXTURE_IMAGE_UNITS, &texunits);
-#else
-            glGetIntegerv_p(GL_MAX_TEXTURE_UNITS, &texunits);
-#endif
+			glGetIntegerv_p(GL_MAX_TEXTURE_UNITS, &texunits);
 			if(glGetError_p() != GL_NO_ERROR) {
 				texunits = 0;
 			}
 		}
+#endif
 		if(texunits < m_minTextureUnits) {
 			if(lastTry) {
 				typedef const GLubyte * (GLAPIENTRY * glGetString_t)(GLenum name);
