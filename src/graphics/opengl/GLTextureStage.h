@@ -46,10 +46,13 @@ public:
 	void setMipMapLODBias(float bias) override;
 	
 	void apply();
+
+	TextureOp getColorOp() const { return ops[ColorOp]; }
+	TextureOp getAlphaOp() const { return ops[AlphaOp]; }
+	bool isEnabled() const { return ((ops[ColorOp] != OpDisable) || (ops[AlphaOp] != OpDisable)); }
+	float getMipMapLODBias() const { return lodBias; }
 	
 private:
-	
-	bool isEnabled() { return ((ops[ColorOp] != OpDisable) || (ops[AlphaOp] != OpDisable)); }
 	
 	OpenGLRenderer * renderer;
 	
@@ -69,6 +72,7 @@ private:
 
 	GLTexture * tex;
 	GLTexture * current;
+	float lodBias;
 
 	typedef std::map<GLenum, GLint> IntegerStateCache;
 	IntegerStateCache m_stateCacheIntegers;

@@ -499,7 +499,13 @@ list(APPEND ARX_LIBRARIES ${FREETYPE_LIBRARIES})
 
 # OpenGL
 if (ANDROID)
+    # Keep the desktop loader selection out of Android builds. GLAD resolves
+    # GLES entry points from the active SDL/EGL context (including ANGLE).
     set(ARX_HAVE_OPENGL 1)
+    set(ARX_HAVE_EPOXY 0)
+    set(ARX_HAVE_GLEW 0)
+    set(ARX_HAVE_GL_STATIC 0)
+    include_directories(SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/src/glad")
     add_definitions(-DAL_ALEXT_PROTOTYPES)
 endif ()
 
@@ -680,7 +686,7 @@ if(BUILD_DOCS)
 endif()
 
 # Check for consistent configuration between SDL and libepoxy/GLEW
-if(ARX_HAVE_SDL AND ARX_HAVE_OPENGL AND NOT WIN32 AND NOT APPLE AND NOT HAIKU)
+if(ARX_HAVE_SDL AND ARX_HAVE_OPENGL AND NOT ANDROID AND NOT WIN32 AND NOT APPLE AND NOT HAIKU)
 	set(old_CMAKE_REQUIRED_INCLUDES)
 	if(ARX_HAVE_SDL2)
 		set(CMAKE_REQUIRED_INCLUDES ${SDL2_INCLUDE_DIRS})
@@ -1395,9 +1401,7 @@ endif()
 
 # Graphics
 
-if (ANDROID)
-    include_directories(SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/src/glad")
-endif()    
+
 
 if (ANDROID)
     list(APPEND GRAPHICS_SOURCES ${GRAPHICS_OPENGL_SOURCES})
@@ -1614,6 +1618,7 @@ endif()
 
 if (ANDROID)
 	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
+    # GLES calls are resolved from the active SDL/EGL context through GLAD.
     target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY})
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
@@ -2165,7 +2170,7 @@ if(WIN32 AND NOT ARX_HAVE_CXX17_FSTREAM_WCHAR)
 endif()
 
 # Check for consistent configuration between SDL and libepoxy/GLEW
-if(ARX_HAVE_SDL AND ARX_HAVE_OPENGL AND NOT WIN32 AND NOT APPLE AND NOT HAIKU)
+if(ARX_HAVE_SDL AND ARX_HAVE_OPENGL AND NOT ANDROID AND NOT WIN32 AND NOT APPLE AND NOT HAIKU)
 	if(USE_X11 AND NOT SDL_HAVE_VIDEO_X11)
 		message(${severity} "SDL is not configured with X11 support")
 	endif()

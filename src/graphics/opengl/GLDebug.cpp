@@ -34,7 +34,7 @@
 
 namespace gldebug {
 
-#ifdef GL_KHR_debug
+#if defined(GL_KHR_debug) && !defined(ANDROID)
 
 static const char * sourceToString(GLenum source) {
 	
@@ -219,8 +219,10 @@ static const char * getGLErrorString(GLenum error) {
 		case GL_INVALID_ENUM:      return "GL_INVALID_ENUM";
 		case GL_INVALID_VALUE:     return "GL_INVALID_VALUE";
 		case GL_INVALID_OPERATION: return "GL_INVALID_OPERATION";
+#ifndef ANDROID
 		case GL_STACK_OVERFLOW:    return "GL_STACK_OVERFLOW";
 		case GL_STACK_UNDERFLOW:   return "GL_STACK_UNDERFLOW";
+#endif
 		case GL_OUT_OF_MEMORY:     return "GL_OUT_OF_MEMORY";
 		default:                   return "(unknown error)";
 	}

@@ -38,16 +38,21 @@
 #if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
 
 #include "arm_neon.h"
+#include "io/log/Logger.h"
 
 #endif
 
+#ifdef ANDROID
 extern bool g_useGLES2_0;
+#else
+static constexpr bool g_useGLES2_0 = false;
+#endif
 
 static std::vector<uint8_t> s_decodeBuffer;
 static std::vector<uint8_t> s_etc2Buffer;
 static std::vector<uint8_t> s_etc2CacheBuffer;
 static std::mutex s_textureBuffersMutex;
-static bool s_textureBuffersInited = false;
+static std::once_flag s_textureBuffersInitFlag;
 static bool s_enableETC2TextureSupport = true;
 
 static std::vector<uint8_t> s_mipRgbaBuffer;
@@ -73,33 +78,25 @@ void setTextureData(
 
 static inline void EnsureTextureBuffersInited() {
 
-    if (!s_textureBuffersInited) {
+    std::call_once(s_textureBuffersInitFlag, [] {
 
-        std::lock_guard<std::mutex> lock(
-                s_textureBuffersMutex
+        s_decodeBuffer.reserve(
+                32 * 1024 * 1024
         );
 
-        if (!s_textureBuffersInited) {
+        s_etc2Buffer.reserve(
+                16 * 1024 * 1024
+        );
 
-            s_decodeBuffer.reserve(
-                    32 * 1024 * 1024
-            );
+        s_etc2CacheBuffer.reserve(
+                16 * 1024 * 1024
+        );
 
-            s_etc2Buffer.reserve(
-                    16 * 1024 * 1024
-            );
+        s_mipRgbaBuffer.reserve(
+                16 * 1024 * 1024
+        );
 
-            s_etc2CacheBuffer.reserve(
-                    16 * 1024 * 1024
-            );
-
-            s_mipRgbaBuffer.reserve(
-                    16 * 1024 * 1024
-            );
-
-            s_textureBuffersInited = true;
-        }
-    }
+    });
 }
 
 static inline void SwapRB_NEON(
@@ -795,6 +792,14 @@ static bool UploadAsEtc2(
                     &cachedSize
             );
 
+    // The image hash intentionally does not include the mipmap flag. A
+    // previous request for the same image may therefore have cached only
+    // the base level. Do not read beyond that RAM-cache entry when this
+    // upload needs a longer mip chain.
+    if (cacheHit && cachedSize < totalCompressedSize) {
+        cacheHit = false;
+    }
+
     if (!cacheHit) {
 
         cacheHit =
@@ -1296,15 +1301,11 @@ void GLTexture::upload() {
 
         Image converted;
 
+        // Convert only the decoded image dimensions here. The upload paths
+        // extend it to the stored size later when NPOT padding is required.
         converted.create(
-                size_t(
-                        getStoredSize().x
-                ),
-
-                size_t(
-                        getStoredSize().y
-                ),
-
+                m_image.getWidth(),
+                m_image.getHeight(),
                 Image::Format_L8A8
         );
 
@@ -1313,8 +1314,8 @@ void GLTexture::upload() {
 
         unsigned char *end =
                 input +
-                getStoredSize().x *
-                getStoredSize().y;
+                m_image.getWidth() *
+                m_image.getHeight();
 
         unsigned char *output =
                 converted.getData();
@@ -1390,9 +1391,14 @@ void GLTexture::upload() {
                     Image::Format_L8A8
             );
 
+    // ETC2 only for textures loaded from files. Textures built at runtime (font glyph
+    // atlases, procedural images) change while the game runs: compressing them on the
+    // CPU again for every update costs time, fills the disk cache with one entry per
+    // version, and EAC artifacts degrade small text.
     if (!g_useGLES2_0 &&
         s_enableETC2TextureSupport &&
         isSupportedForEtc2 &&
+        !getFileName().empty() &&
         m_image.isValid()) {
 
         const int storedW =
@@ -1405,37 +1411,20 @@ void GLTexture::upload() {
                         getStoredSize().y
                 );
 
-        int finalW =
-                Align4(storedW);
-
-        int finalH =
-                Align4(storedH);
-
-        if (finalW < 4) {
-            finalW = 4;
-        }
-
-        if (finalH < 4) {
-            finalH = 4;
-        }
-
         const unsigned char *srcData =
-                nullptr;
+                m_image.getData();
 
         Image extended;
 
-        if (finalW != storedW ||
-            finalH != storedH) {
+        // Pad to the renderer's actual stored size only. UploadAsEtc2 pads
+        // each compressed block internally; passing block-aligned dimensions
+        // here would incorrectly change the texture's logical size on NPOT
+        // GLES 3 textures.
+        if (getStoredSize() != getSize()) {
 
             extended.create(
-                    static_cast<size_t>(
-                            finalW
-                    ),
-
-                    static_cast<size_t>(
-                            finalH
-                    ),
-
+                    static_cast<size_t>(storedW),
+                    static_cast<size_t>(storedH),
                     m_image.getFormat()
             );
 
@@ -1445,11 +1434,6 @@ void GLTexture::upload() {
 
             srcData =
                     extended.getData();
-
-        } else {
-
-            srcData =
-                    m_image.getData();
         }
 
         const bool wantsMip =
@@ -1458,8 +1442,8 @@ void GLTexture::upload() {
         if (UploadAsEtc2(
                 renderer,
                 tex,
-                finalW,
-                finalH,
+                storedW,
+                storedH,
                 srcData,
                 m_format,
                 nullptr,
@@ -1483,145 +1467,144 @@ void GLTexture::upload() {
         }
     }
 
+#ifdef ANDROID
+    // GLES 3 removed the legacy LUMINANCE/ALPHA/INTENSITY and BGR formats.
+    // Normalize every decoded source image to RGBA so both ES 2 and ES 3 use
+    // the same well-defined upload path.
+    Image glesImage;
+    glesImage.create(m_image.getWidth(), m_image.getHeight(), Image::Format_R8G8B8A8);
+    const unsigned char * source = m_image.getData();
+    unsigned char * destination = glesImage.getData();
+    const size_t pixelCount = m_image.getWidth() * m_image.getHeight();
+
+    for(size_t i = 0; i < pixelCount; ++i) {
+        const unsigned char * src = source;
+        unsigned char * dst = destination;
+        if(isIntensity()) {
+            const unsigned char intensity = src[0];
+            dst[0] = intensity;
+            dst[1] = intensity;
+            dst[2] = intensity;
+            dst[3] = intensity;
+        } else switch(m_image.getFormat()) {
+            case Image::Format_L8: {
+                const unsigned char luminance = src[0];
+                dst[0] = luminance;
+                dst[1] = luminance;
+                dst[2] = luminance;
+                dst[3] = 255;
+                break;
+            }
+            case Image::Format_A8:
+                dst[0] = dst[1] = dst[2] = 255;
+                dst[3] = src[0];
+                break;
+            case Image::Format_L8A8: {
+                const unsigned char luminance = src[0];
+                dst[0] = luminance;
+                dst[1] = luminance;
+                dst[2] = luminance;
+                dst[3] = src[1];
+                break;
+            }
+            case Image::Format_R8G8B8:
+                dst[0] = src[0];
+                dst[1] = src[1];
+                dst[2] = src[2];
+                dst[3] = 255;
+                break;
+            case Image::Format_B8G8R8:
+                dst[0] = src[2];
+                dst[1] = src[1];
+                dst[2] = src[0];
+                dst[3] = 255;
+                break;
+            case Image::Format_R8G8B8A8:
+                dst[0] = src[0];
+                dst[1] = src[1];
+                dst[2] = src[2];
+                dst[3] = src[3];
+                break;
+            case Image::Format_B8G8R8A8:
+                dst[0] = src[2];
+                dst[1] = src[1];
+                dst[2] = src[0];
+                dst[3] = src[3];
+                break;
+            default:
+                LogError << "Unsupported source texture format for OpenGL ES";
+                return;
+        }
+        source += m_image.getNumChannels();
+        destination += 4;
+    }
+
+    const Image &textureImage = glesImage;
+    GLint internal = g_useGLES2_0 ? GL_RGBA : GL_RGBA8;
+    GLenum format = GL_RGBA;
+#else
     GLint internalUnsized;
     GLint internalSized;
     GLenum format;
 
     if (isIntensity()) {
-
-        internalUnsized =
-                GL_INTENSITY;
-
-        internalSized =
-                GL_INTENSITY8;
-
-        format =
-                GL_RED;
-
-    } else if (getFormat() ==
-               Image::Format_L8) {
-
-        internalUnsized =
-                GL_LUMINANCE;
-
-        internalSized =
-                GL_LUMINANCE8;
-
-        format =
-                GL_LUMINANCE;
-
-    } else if (getFormat() ==
-               Image::Format_A8) {
-
-        internalUnsized =
-                GL_ALPHA;
-
-        internalSized =
-                GL_ALPHA8;
-
-        format =
-                GL_ALPHA;
-
-    } else if (getFormat() ==
-               Image::Format_L8A8) {
-
-        internalUnsized =
-                GL_LUMINANCE_ALPHA;
-
-        internalSized =
-                GL_LUMINANCE8_ALPHA8;
-
-        format =
-                GL_LUMINANCE_ALPHA;
-
-    } else if (getFormat() ==
-               Image::Format_R8G8B8) {
-
-        internalUnsized =
-                GL_RGB;
-
-        internalSized =
-                GL_RGB8;
-
-        format =
-                GL_RGB;
-
-    } else if (getFormat() ==
-               Image::Format_B8G8R8) {
-
-        internalUnsized =
-                GL_RGB;
-
-        internalSized =
-                GL_RGB8;
-
-        format =
-                GL_BGR;
-
-    } else if (getFormat() ==
-               Image::Format_R8G8B8A8) {
-
-        internalUnsized =
-                GL_RGBA;
-
-        internalSized =
-                GL_RGBA8;
-
-        format =
-                GL_RGBA;
-
-    } else if (getFormat() ==
-               Image::Format_B8G8R8A8) {
-
-        internalUnsized =
-                GL_RGBA;
-
-        internalSized =
-                GL_RGBA8;
-
-        format =
-                GL_BGRA;
-
+        internalUnsized = GL_INTENSITY;
+        internalSized = GL_INTENSITY8;
+        format = GL_RED;
+    } else if (getFormat() == Image::Format_L8) {
+        internalUnsized = GL_LUMINANCE;
+        internalSized = GL_LUMINANCE8;
+        format = GL_LUMINANCE;
+    } else if (getFormat() == Image::Format_A8) {
+        internalUnsized = GL_ALPHA;
+        internalSized = GL_ALPHA8;
+        format = GL_ALPHA;
+    } else if (getFormat() == Image::Format_L8A8) {
+        internalUnsized = GL_LUMINANCE_ALPHA;
+        internalSized = GL_LUMINANCE8_ALPHA8;
+        format = GL_LUMINANCE_ALPHA;
+    } else if (getFormat() == Image::Format_R8G8B8) {
+        internalUnsized = GL_RGB;
+        internalSized = GL_RGB8;
+        format = GL_RGB;
+    } else if (getFormat() == Image::Format_B8G8R8) {
+        internalUnsized = GL_RGB;
+        internalSized = GL_RGB8;
+        format = GL_BGR;
+    } else if (getFormat() == Image::Format_R8G8B8A8) {
+        internalUnsized = GL_RGBA;
+        internalSized = GL_RGBA8;
+        format = GL_RGBA;
+    } else if (getFormat() == Image::Format_B8G8R8A8) {
+        internalUnsized = GL_RGBA;
+        internalSized = GL_RGBA8;
+        format = GL_BGRA;
     } else {
-
-        arx_assert_msg(
-                false,
-                "Unsupported image format: %ld",
-                long(getFormat())
-        );
-
+        arx_assert_msg(false, "Unsupported image format: %ld", long(getFormat()));
         return;
     }
 
-    GLint internal =
-            renderer->hasSizedTextureFormats()
-            ? internalSized
-            : internalUnsized;
+    GLint internal = renderer->hasSizedTextureFormats() ? internalSized : internalUnsized;
+    const Image &textureImage = m_image;
+#endif
 
-    if (hasMipmaps()) {
-
-        glTexParameteri(
-                GL_TEXTURE_2D,
-                GL_GENERATE_MIPMAP,
-                GL_TRUE
-        );
-
-        if (renderer->getMaxAnisotropy() > 1.f) {
-
-            glTexParameterf(
-                    GL_TEXTURE_2D,
-                    GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                    renderer->getMaxAnisotropy()
-            );
+    const bool generateMipmaps = hasMipmaps();
+    if(generateMipmaps) {
+#ifndef ANDROID
+        glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
+#endif
+        if(renderer->getMaxAnisotropy() > 1.f) {
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                            renderer->getMaxAnisotropy());
         }
-
     } else {
-
-        glTexParameteri(
-                GL_TEXTURE_2D,
-                GL_TEXTURE_MAX_LEVEL,
-                0
-        );
+#ifndef ANDROID
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+#else
+        if(!g_useGLES2_0) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        }
+#endif
     }
 
     if (getStoredSize() != getSize()) {
@@ -1629,20 +1612,12 @@ void GLTexture::upload() {
         Image extended;
 
         extended.create(
-                size_t(
-                        getStoredSize().x
-                ),
-
-                size_t(
-                        getStoredSize().y
-                ),
-
-                m_image.getFormat()
+                size_t(getStoredSize().x),
+                size_t(getStoredSize().y),
+                textureImage.getFormat()
         );
 
-        extended.extendClampToEdgeBorder(
-                m_image
-        );
+        extended.extendClampToEdgeBorder(textureImage);
 
         glTexImage2D(
                 GL_TEXTURE_2D,
@@ -1667,9 +1642,15 @@ void GLTexture::upload() {
                 0,
                 format,
                 GL_UNSIGNED_BYTE,
-                m_image.getData()
+                textureImage.getData()
         );
     }
+
+#ifdef ANDROID
+    if(generateMipmaps) {
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+#endif
 }
 
 void GLTexture::destroy() {
@@ -1733,8 +1714,17 @@ void GLTexture::apply(
             stage->tex == this
     );
 
+#ifdef ANDROID
+    // GLES 3.0 and GLES 2.0 with OES_texture_npot support repeat and mirror
+    // wrapping for NPOT textures. Keep the clamp fallback only when the
+    // renderer had to pad the texture to a power-of-two size.
+    const bool canWrapNPOT = renderer->hasTextureNPOT();
+#else
+    const bool canWrapNPOT = false;
+#endif
+
     TextureStage::WrapMode newWrapMode =
-            (!isNPOT)
+            (!isNPOT || canWrapNPOT)
             ? stage->getWrapMode()
             : TextureStage::WrapClamp;
 

@@ -460,7 +460,13 @@ bool ArxGame::initWindow(RenderWindow * window) {
 #else
     m_MainWindow->setMinTextureUnits(3);
 #endif    
+#ifdef ANDROID
+	// Never multisample the window surface: the OpenGL ES renderer does 2x MSAA in its own
+	// framebuffer with GL_EXT_multisampled_render_to_texture, resolved in tile memory.
+	m_MainWindow->setMaxMSAALevel(1);
+#else
 	m_MainWindow->setMaxMSAALevel(config.video.antialiasing ? 8 : 1);
+#endif
 	m_MainWindow->setVSync(benchmark::isEnabled() ? 0 : config.video.vsync);
 	
 	setWindowSize(config.video.fullscreen);

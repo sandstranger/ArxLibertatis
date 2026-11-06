@@ -63,6 +63,9 @@
 
 #ifdef ANDROID
 #include "glad.h"
+#endif
+
+#ifdef ANDROID
 #include "AngleShaderCache.h"
 #include "SwappyController.h"
 
@@ -167,7 +170,7 @@ bool SDL2Window::initializeFramework() {
 	
 	SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 	
-	#if ARX_PLATFORM != ARX_PLATFORM_WIN32 && ARX_PLATFORM != ARX_PLATFORM_MACOS
+	#if ARX_PLATFORM != ARX_PLATFORM_WIN32 && ARX_PLATFORM != ARX_PLATFORM_MACOS && !defined(ANDROID)
 	#if ARX_HAVE_GL_STATIC || !ARX_HAVE_DLSYM || !defined(RTLD_DEFAULT)
 	const bool haveGLX = ARX_HAVE_GLX;
 	const bool haveEGL = ARX_HAVE_EGL;
@@ -354,16 +357,25 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		}
 
 #ifdef ANDROID
-        if (m_glcontext) {
-            SDL_GL_MakeCurrent(m_window, m_glcontext);
-            angle_blobcache_install("arx_libertatis");
+        if(SDL_GL_MakeCurrent(m_window, m_glcontext) != 0) {
+            if(lastTry) {
+                LogError << "Could not make the OpenGL ES context current: " << SDL_GetError();
+                return 0;
+            }
+            continue;
         }
-        
-        if (m_glcontext && !gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-            SDL_GL_DeleteContext(this->m_glcontext);
-            SDL_DestroyWindow(m_window);
-            SDL_Quit();
-            return false;
+
+        angle_blobcache_install("arx_libertatis");
+
+        // Resolve GLES entry points from the active EGL implementation. This is
+        // required when Android routes the context through ANGLE instead of the
+        // platform driver's directly linked GLES symbols.
+        if(!gladLoadGLES2Loader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
+            if(lastTry) {
+                LogError << "Could not load OpenGL ES entry points through SDL";
+                return 0;
+            }
+            continue;
         }
 #endif
         
@@ -379,6 +391,15 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		
 		// Verify that we actually got an accelerated context
 		GLint texunits = 0;
+#ifdef ANDROID
+		// Resolve GLES entry points through the active SDL/EGL context so
+		// ANGLE and the native GLES driver use their own dispatch table.
+		(void)glGetError(); // clear error flags
+		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &texunits);
+		if(glGetError() != GL_NO_ERROR) {
+			texunits = 0;
+		}
+#else
 		// TODO libepoxy does not support unloading the GL so do things manually here
 		typedef GLenum (GLAPIENTRY * glGetError_t)();
 		glGetError_t glGetError_p = FunctionPointer(SDL_GL_GetProcAddress("glGetError"));
@@ -391,18 +412,25 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 				texunits = 0;
 			}
 		}
+#endif
 		if(texunits < m_minTextureUnits) {
 			if(lastTry) {
-				typedef const GLubyte * (GLAPIENTRY * glGetString_t)(GLenum name);
-				glGetString_t glGetString_p = FunctionPointer(SDL_GL_GetProcAddress("glGetString"));
 				const char * glVendor = nullptr;
 				const char * glRenderer = nullptr;
 				const char * glVersion = nullptr;
+#ifdef ANDROID
+				glVendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
+				glRenderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+				glVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+#else
+				typedef const GLubyte * (GLAPIENTRY * glGetString_t)(GLenum name);
+				glGetString_t glGetString_p = FunctionPointer(SDL_GL_GetProcAddress("glGetString"));
 				if(glGetString_p) {
 					glVendor = reinterpret_cast<const char *>(glGetString_p(GL_VENDOR));
 					glRenderer = reinterpret_cast<const char *>(glGetString_p(GL_RENDERER));
 					glVersion = reinterpret_cast<const char *>(glGetString_p(GL_VERSION));
 				}
+#endif
 				if(!glVendor) {
 					glVendor = "(unknown)";
 				}
@@ -510,14 +538,42 @@ bool SDL2Window::initialize() {
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, g_useGLES2_0 ? 2 : 3);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+                // Prefer no-error contexts on ANGLE. The renderer does not rely on
+                // GL error polling in the draw loop, and avoiding per-call validation
+                // is important for translation-layer CPU overhead.
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 1);
                 samples = createWindowAndGLContext("OpenGL ES");
 
+                // Some native GLES drivers and older ANGLE builds do not expose
+                // EGL_KHR_create_context_no_error. Retry the same GLES profile
+                // with normal validation before falling back to GLES 2.0.
+                if(samples == 0) {
+                    SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
+                    samples = createWindowAndGLContext("OpenGL ES (validated context)");
+                }
+            }
+
+            // Prefer GLES 3.0, but keep the GLES 2.0 backend available on older
+            // devices. Recreate the SDL window/context with an ES 2 profile only
+            // after all ES 3 debug/non-debug attempts have failed.
+            if(samples == 0 && !g_useGLES2_0) {
+                g_useGLES2_0 = true;
+                SDL_Log("OpenGL ES 3.0 context unavailable; falling back to OpenGL ES 2.0");
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 1);
+                samples = createWindowAndGLContext("OpenGL ES 2.0 fallback");
+                if(samples == 0) {
+                    SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
+                    samples = createWindowAndGLContext("OpenGL ES 2.0 validated fallback");
+                }
             }
         }
 #endif
 
-		#if ARX_HAVE_EPOXY
+		#if ARX_HAVE_EPOXY && !defined(ANDROID)
 		if(samples == 0 && first == (autoRenderer || config.video.renderer == "OpenGL ES")) {
 			matched = true;
 			
@@ -678,6 +734,10 @@ bool SDL2Window::initialize() {
 	onCreate();
 	onToggleFullscreen(m_fullscreen);
 	updateSize(true);
+	if(!m_renderer->isInitialized()) {
+		LogError << "Could not initialize the OpenGL ES renderer";
+		return false;
+	}
 	
 	onShow(true);
 	onFocus(true);
@@ -723,8 +783,7 @@ bool SDL2Window::setGamma(float gamma) {
 	m_gamma = gamma;
 	return true;
 #else
-    const GLfloat gammaArray[] = {gamma};
-    glLightModelfv(0x4242, gammaArray);
+    m_renderer->setGamma(gamma);
     m_gamma = gamma;
     return true;
 #endif    
@@ -819,6 +878,10 @@ void SDL2Window::updateSize(bool force) {
 	
 	if(force || m_mode.resolution != oldMode.resolution) {
 		m_renderer->afterResize();
+		if(!m_renderer->isInitialized()) {
+			LogError << "Renderer did not recover after the window resize";
+			return;
+		}
 		m_renderer->SetViewport(Rect(m_mode.resolution.x, m_mode.resolution.y));
 	}
 	
@@ -992,11 +1055,21 @@ int SDLCALL SDL2Window::EventFilter(void* userdata, SDL_Event* event){
 void SDL2Window::showFrame() {
 	ARX_PROFILE_FUNC();
 #ifdef ANDROID
-    if (SwappySwapBuffers()){
-        return;
-    }
-#endif    
+	// The renderer finishes its render passes (MSAA resolve copy, attachment
+	// invalidation) before the swap and starts the next frame after it.
+	const bool rendering = m_renderer && m_renderer->isInitialized();
+	if(rendering) {
+		m_renderer->endFrame();
+	}
+	if(!SwappySwapBuffers()) {
+		SDL_GL_SwapWindow(m_window);
+	}
+	if(rendering) {
+		m_renderer->beginFrame();
+	}
+#else
 	SDL_GL_SwapWindow(m_window);
+#endif
 }
 
 void SDL2Window::hide() {
