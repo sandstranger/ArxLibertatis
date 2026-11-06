@@ -1237,6 +1237,9 @@ precision mediump float;
 uniform sampler2D uTexture0;
 uniform sampler2D uTexture1;
 uniform sampler2D uTexture2;
+uniform float uLodBias0;
+uniform float uLodBias1;
+uniform float uLodBias2;
 uniform int uUseTexture0;
 uniform int uUseTexture1;
 uniform int uUseTexture2;
@@ -1270,9 +1273,9 @@ vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
 }
 void main() {
     vec4 color = vColor;
-    if(uUseTexture0 != 0) color = applyStage(color, texture2D(uTexture0, vTexCoord0), uColorOp0, uAlphaOp0);
-    if(uUseTexture1 != 0) color = applyStage(color, texture2D(uTexture1, vTexCoord1), uColorOp1, uAlphaOp1);
-    if(uUseTexture2 != 0) color = applyStage(color, texture2D(uTexture2, vTexCoord2), uColorOp2, uAlphaOp2);
+    if(uUseTexture0 != 0) color = applyStage(color, texture2D(uTexture0, vTexCoord0, uLodBias0), uColorOp0, uAlphaOp0);
+    if(uUseTexture1 != 0) color = applyStage(color, texture2D(uTexture1, vTexCoord1, uLodBias1), uColorOp1, uAlphaOp1);
+    if(uUseTexture2 != 0) color = applyStage(color, texture2D(uTexture2, vTexCoord2, uLodBias2), uColorOp2, uAlphaOp2);
     if(uAlphaCutout != 0 && color.a <= uAlphaThreshold) discard;
     if(uFogEnabled != 0) {
         float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
@@ -1324,6 +1327,9 @@ precision mediump float;
 uniform sampler2D uTexture0;
 uniform sampler2D uTexture1;
 uniform sampler2D uTexture2;
+uniform float uLodBias0;
+uniform float uLodBias1;
+uniform float uLodBias2;
 uniform int uUseTexture0;
 uniform int uUseTexture1;
 uniform int uUseTexture2;
@@ -1358,9 +1364,9 @@ vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
 }
 void main() {
     vec4 color = vColor;
-    if(uUseTexture0 != 0) color = applyStage(color, texture(uTexture0, vTexCoord0), uColorOp0, uAlphaOp0);
-    if(uUseTexture1 != 0) color = applyStage(color, texture(uTexture1, vTexCoord1), uColorOp1, uAlphaOp1);
-    if(uUseTexture2 != 0) color = applyStage(color, texture(uTexture2, vTexCoord2), uColorOp2, uAlphaOp2);
+    if(uUseTexture0 != 0) color = applyStage(color, texture(uTexture0, vTexCoord0, uLodBias0), uColorOp0, uAlphaOp0);
+    if(uUseTexture1 != 0) color = applyStage(color, texture(uTexture1, vTexCoord1, uLodBias1), uColorOp1, uAlphaOp1);
+    if(uUseTexture2 != 0) color = applyStage(color, texture(uTexture2, vTexCoord2, uLodBias2), uColorOp2, uAlphaOp2);
     if(uAlphaCutout != 0 && color.a <= uAlphaThreshold) discard;
     if(uFogEnabled != 0) {
         float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
@@ -1417,12 +1423,14 @@ void OpenGLRenderer::initializeGLESProgram() {
 	const char * useNames[3] = {"uUseTexture0", "uUseTexture1", "uUseTexture2"};
 	const char * colorNames[3] = {"uColorOp0", "uColorOp1", "uColorOp2"};
 	const char * alphaNames[3] = {"uAlphaOp0", "uAlphaOp1", "uAlphaOp2"};
+	const char * lodBiasNames[3] = {"uLodBias0", "uLodBias1", "uLodBias2"};
 	for(GLint i = 0; i < 3; ++i) {
 		GLint sampler = glGetUniformLocation(program, samplerNames[i]);
 		if(sampler >= 0) glUniform1i(sampler, i);
 		m_glesUniformUseTexture[i] = glGetUniformLocation(program, useNames[i]);
 		m_glesUniformColorOp[i] = glGetUniformLocation(program, colorNames[i]);
 		m_glesUniformAlphaOp[i] = glGetUniformLocation(program, alphaNames[i]);
+		m_glesUniformLodBias[i] = glGetUniformLocation(program, lodBiasNames[i]);
 	}
 	glUseProgram(0);
 }
@@ -1462,6 +1470,7 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		if(m_glesUniformUseTexture[i] >= 0) glUniform1i(m_glesUniformUseTexture[i], stage && stage->getTexture() && stage->isEnabled() ? 1 : 0);
 		if(m_glesUniformColorOp[i] >= 0) glUniform1i(m_glesUniformColorOp[i], stage ? GLint(stage->getColorOp()) : GLint(TextureStage::OpDisable));
 		if(m_glesUniformAlphaOp[i] >= 0) glUniform1i(m_glesUniformAlphaOp[i], stage ? GLint(stage->getAlphaOp()) : GLint(TextureStage::OpDisable));
+		if(m_glesUniformLodBias[i] >= 0) glUniform1f(m_glesUniformLodBias[i], stage ? stage->getMipMapLODBias() : 0.f);
 	}
 }
 #endif
