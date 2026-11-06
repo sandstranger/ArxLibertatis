@@ -80,6 +80,7 @@ public:
 	void setMaxAnisotropy(float value) override;
 	
 	AlphaCutoutAntialising getMaxSupportedAlphaCutoutAntialiasing() const override;
+	bool isMSAASupported() const override;
 	
 	std::unique_ptr<VertexBuffer<TexturedVertex>> createVertexBufferTL(size_t capacity, BufferUsage usage) override;
 	std::unique_ptr<VertexBuffer<SMY_VERTEX>> createVertexBuffer(size_t capacity, BufferUsage usage) override;
