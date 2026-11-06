@@ -562,6 +562,8 @@ void OpenGLRenderer::shutdown() {
 		glDeleteBuffers(1, &m_glesImmediateIndexBuffer);
 		m_glesImmediateIndexBuffer = 0;
 	}
+	m_glesImmediateIndexBufferCapacity = 0;
+	m_glesImmediateIndexBufferOffset = 0;
 #endif
 	
 	onRendererShutdown();
@@ -1003,51 +1005,80 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 void OpenGLRenderer::drawIndexedElements(Primitive primitive, const unsigned short * indices,
                                               size_t nindices, size_t baseVertex, size_t vertexCount) {
 #ifdef ANDROID
-	// Keep the streaming EBO bound after its first creation. Rebinding it and
-	// unbinding it around every draw adds two avoidable state changes in ANGLE.
+	if(nindices == 0) {
+		return;
+	}
+	if(nindices > size_t(std::numeric_limits<GLsizeiptr>::max()) / sizeof(unsigned short)) {
+		LogError << "Indexed GLES draw exceeds GLsizeiptr range";
+		return;
+	}
+
+	const size_t indexBytes = nindices * sizeof(unsigned short);
+
+	// Keep one streaming EBO and append indices into unused storage. Orphan
+	// only when the ring wraps or grows instead of allocating fresh storage
+	// for every indexed draw.
 	if(!m_glesImmediateIndexBuffer) {
 		glGenBuffers(1, &m_glesImmediateIndexBuffer);
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_glesImmediateIndexBuffer);
 	}
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(nindices * sizeof(unsigned short)),
-	             indices, GL_STREAM_DRAW);
+	if(indexBytes > m_glesImmediateIndexBufferCapacity) {
+		size_t newCapacity = std::max<size_t>(1024 * 1024, m_glesImmediateIndexBufferCapacity);
+		while(newCapacity < indexBytes) {
+			if(newCapacity > size_t(std::numeric_limits<GLsizeiptr>::max()) / 2) {
+				newCapacity = indexBytes;
+				break;
+			}
+			newCapacity *= 2;
+		}
+		m_glesImmediateIndexBufferCapacity = newCapacity;
+		m_glesImmediateIndexBufferOffset = 0;
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(newCapacity), nullptr, GL_STREAM_DRAW);
+	} else if(m_glesImmediateIndexBufferOffset >
+	          m_glesImmediateIndexBufferCapacity - indexBytes) {
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(m_glesImmediateIndexBufferCapacity),
+		             nullptr, GL_STREAM_DRAW);
+		m_glesImmediateIndexBufferOffset = 0;
+	}
+
+	const size_t indexOffset = m_glesImmediateIndexBufferOffset;
+	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(indexOffset), GLsizeiptr(indexBytes), indices);
+	m_glesImmediateIndexBufferOffset += indexBytes;
+	const void * indexPointer = reinterpret_cast<const void *>(indexOffset);
 
 	const GLenum mode = arxToGlPrimitiveType[primitive];
 	if(hasDrawElementsBaseVertex()) {
 		arx_assert(baseVertex <= size_t(std::numeric_limits<GLint>::max()));
 		const GLint glBaseVertex = GLint(baseVertex);
 
-		// GLES 3.0 has glDrawRangeElements, but the base-vertex variants are
-		// extension entry points. Prefer the range variant when GLAD resolved
-		// it, otherwise use the non-range OES/EXT function.
 		if(hasDrawRangeElements() && vertexCount > 0) {
 			const GLuint endVertex = GLuint(std::min(vertexCount - 1,
 			                                         size_t(std::numeric_limits<GLuint>::max())));
 			if(glDrawRangeElementsBaseVertexOES) {
 				glDrawRangeElementsBaseVertexOES(mode, 0, endVertex, GLsizei(nindices),
-				                                 GL_UNSIGNED_SHORT, nullptr, glBaseVertex);
+				                                 GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
 				return;
 			}
 			if(glDrawRangeElementsBaseVertexEXT) {
 				glDrawRangeElementsBaseVertexEXT(mode, 0, endVertex, GLsizei(nindices),
-				                                 GL_UNSIGNED_SHORT, nullptr, glBaseVertex);
+				                                 GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
 				return;
 			}
 		}
 
 		if(glDrawElementsBaseVertexOES) {
-			glDrawElementsBaseVertexOES(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, nullptr, glBaseVertex);
+			glDrawElementsBaseVertexOES(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
 			return;
 		}
 		if(glDrawElementsBaseVertexEXT) {
-			glDrawElementsBaseVertexEXT(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, nullptr, glBaseVertex);
+			glDrawElementsBaseVertexEXT(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
 			return;
 		}
 	}
 
 	// Devices without a working base-vertex extension use the offset vertex
 	// attribute pointers configured by BaseGLVertexBuffer::drawIndexed().
-	glDrawElements(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, nullptr);
+	glDrawElements(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, indexPointer);
 #else
 	ARX_UNUSED(primitive);
 	ARX_UNUSED(indices);
