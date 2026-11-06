@@ -508,9 +508,24 @@ bool SDL2Window::initialize() {
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, g_useGLES2_0 ? 2 : 3);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 1);
+                // No-error EGL contexts are optional and not needed by this renderer.
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
                 samples = createWindowAndGLContext("OpenGL ES");
 
+            }
+
+            // Prefer GLES 3.0, but keep the GLES 2.0 backend available on older
+            // devices. Recreate the SDL window/context with an ES 2 profile only
+            // after all ES 3 debug/non-debug attempts have failed.
+            if(samples == 0 && !g_useGLES2_0) {
+                g_useGLES2_0 = true;
+                SDL_Log("OpenGL ES 3.0 context unavailable; falling back to OpenGL ES 2.0");
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
+                samples = createWindowAndGLContext("OpenGL ES 2.0 fallback");
             }
         }
 #endif
