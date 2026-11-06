@@ -1617,13 +1617,9 @@ endif()
 # Add executables
 
 if (ANDROID)
-    find_library(ANDROID_GLESV2_LIBRARY GLESv2)
-    find_library(ANDROID_GLESV3_LIBRARY GLESv3)
-    if(NOT ANDROID_GLESV2_LIBRARY OR NOT ANDROID_GLESV3_LIBRARY)
-        message(SEND_ERROR "Android GLESv2/GLESv3 libraries are required")
-    endif()
 	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}" "${CMAKE_CURRENT_SOURCE_DIR}/src/glad/glad.c")
-    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY} ${ANDROID_GLESV2_LIBRARY} ${ANDROID_GLESV3_LIBRARY})
+    # GLES calls are resolved from the active SDL/EGL context through GLAD.
+    target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY})
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
 else()
     add_executable_shared(arx "${ARX_SOURCES}" "${ARX_LIBRARIES}" "${ALL_INCLUDES}")
