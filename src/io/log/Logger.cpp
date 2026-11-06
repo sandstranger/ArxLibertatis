@@ -119,6 +119,17 @@ void LogManager::deleteAllBackends() {
 	
 }
 
+/*!
+ * Multiplayer (co-op) logs: everything logged by the multiplayer code (src/net, Coop*)
+ * and every "[coop..." line from its hooks in the rest of the engine. They flood the
+ * log during normal play, so they are dropped unless this is set to true.
+ */
+constexpr bool multiplayerLogs = false;
+
+bool isMultiplayerLog(const logger::Source & source, std::string_view str) {
+	return std::string_view(source.name).substr(0, 4) == "Coop" || str.substr(0, 5) == "[coop";
+}
+
 } // anonymous namespace
 
 void Logger::add(logger::Backend * backend) {
@@ -162,6 +173,10 @@ void Logger::log(const char * file, int line, LogLevel level, std::string_view s
 	std::scoped_lock lock(LogManager::mutex);
 	
 	const logger::Source * source = LogManager::getSource(file);
+	
+	if(!multiplayerLogs && level != Critical && isMultiplayerLog(*source, str)) {
+		return;
+	}
 	
 	for(logger::Backend * backend : LogManager::backends) {
 		backend->log(*source, line, level, str);

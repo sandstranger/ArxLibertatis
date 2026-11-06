@@ -373,6 +373,7 @@ void OpenGLRenderer::initialize() {
 		//    a whole-framebuffer resolve into a resolve attachment of the open render pass.
 		m_glesMaxMSAASamples = 0;
 		m_glesMSAAResolveBlit = false;
+		m_glesMSAABlitANGLE = false;
 		if(gl.has("GL_EXT_multisampled_render_to_texture")
 		   && glFramebufferTexture2DMultisampleEXT && glRenderbufferStorageMultisampleEXT) {
 			GLint maxSamples = 0;
@@ -384,19 +385,40 @@ void OpenGLRenderer::initialize() {
 			glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
 			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
 			m_glesMSAAResolveBlit = true;
+		} else if(gl.has("GL_ANGLE_framebuffer_multisample") && gl.has("GL_ANGLE_framebuffer_blit")
+		          && gl.has("GL_OES_rgb8_rgba8")
+		          && glRenderbufferStorageMultisampleANGLE && glBlitFramebufferANGLE) {
+			// OpenGL ES 2.0 feature level under ANGLE: the same multisampled framebuffer and
+			// resolve through GL_ANGLE_framebuffer_multisample and GL_ANGLE_framebuffer_blit.
+			GLint maxSamples = 0;
+			glGetIntegerv(GL_MAX_SAMPLES_ANGLE, &maxSamples);
+			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
+			m_glesMSAAResolveBlit = true;
+			m_glesMSAABlitANGLE = true;
+		}
+		if(m_glesMSAAResolveBlit) {
 			// The resolve can only become a resolve attachment if the multisampled color
-			// format matches the window surface.
+			// format matches the window surface. Query it the way the actual context
+			// version allows: OpenGL ES 3.0 describes the window as attachments of the
+			// default framebuffer, OpenGL ES 2.0 has the x_BITS state.
 			GLint red = 0, green = 0, blue = 0, alpha = 0;
-			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red);
-			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &green);
-			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &blue);
-			glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, &alpha);
+			if(gl.is(3, 0)) {
+				glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red);
+				glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &green);
+				glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &blue);
+				glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, &alpha);
+			} else {
+				glGetIntegerv(GL_RED_BITS, &red);
+				glGetIntegerv(GL_GREEN_BITS, &green);
+				glGetIntegerv(GL_BLUE_BITS, &blue);
+				glGetIntegerv(GL_ALPHA_BITS, &alpha);
+			}
 			if(red == 5 && green == 6 && blue == 5 && alpha == 0) {
 				m_glesWindowColorFormat = GL_RGB565;
 			} else if(alpha == 0) {
-				m_glesWindowColorFormat = GL_RGB8;
+				m_glesWindowColorFormat = GL_RGB8_OES;
 			} else {
-				m_glesWindowColorFormat = GL_RGBA8;
+				m_glesWindowColorFormat = GL_RGBA8_OES;
 			}
 		}
 		LogInfo << "GLES render passes: "
@@ -404,6 +426,7 @@ void OpenGLRenderer::initialize() {
 		            : m_hasDiscardFramebuffer ? "glDiscardFramebufferEXT" : "no invalidation")
 		        << ", MSAA: "
 		        << (m_glesMaxMSAASamples <= 1 ? "not supported"
+		            : m_glesMSAABlitANGLE ? "multisampled framebuffer + glBlitFramebufferANGLE resolve"
 		            : m_glesMSAAResolveBlit ? "multisampled framebuffer + glBlitFramebuffer resolve"
 		            : "GL_EXT_multisampled_render_to_texture");
 		
@@ -2167,8 +2190,11 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	glm::vec4 fogPlane;
 	if(transformed) {
 		mvp = m_projection * m_view;
-		// Distance along the view direction (-z in view space)
-		fogPlane = -glm::vec4(m_view[0][2], m_view[1][2], m_view[2][2], m_view[3][2]);
+		// Fog distance: the view-space depth. Arx uses a left-handed view where visible
+		// points have z > 0 (createProjectionMatrix() in Camera.cpp puts +z into clip w),
+		// the same distance the fixed-function fog of the desktop renderer uses. Taking
+		// -z made every distance negative, so the fog factor was always clamped to 1.
+		fogPlane = glm::vec4(m_view[0][2], m_view[1][2], m_view[2][2], m_view[3][2]);
 	} else {
 		// Pre-transformed vertices: pixel coordinates, the view depth is in w
 		const float width = float(std::max(1, viewport.width()));
@@ -2374,12 +2400,21 @@ bool OpenGLRenderer::updateMultisampleFramebuffer() {
 		// Drivers round the sample count up to one they support (Mali has no 2x MSAA).
 		glGenRenderbuffers(1, &m_glesMSAAColorBuffer);
 		glBindRenderbuffer(GL_RENDERBUFFER, m_glesMSAAColorBuffer);
-		glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, m_glesWindowColorFormat, size.x, size.y);
+		if(m_glesMSAABlitANGLE) {
+			glRenderbufferStorageMultisampleANGLE(GL_RENDERBUFFER, samples, m_glesWindowColorFormat,
+			                                      size.x, size.y);
+		} else {
+			glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, m_glesWindowColorFormat, size.x, size.y);
+		}
 		GLint actualSamples = 0;
 		glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &actualSamples);
 		glGenRenderbuffers(1, &m_glesMSAADepth);
 		glBindRenderbuffer(GL_RENDERBUFFER, m_glesMSAADepth);
-		glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, m_glesDepthFormat, size.x, size.y);
+		if(m_glesMSAABlitANGLE) {
+			glRenderbufferStorageMultisampleANGLE(GL_RENDERBUFFER, samples, m_glesDepthFormat, size.x, size.y);
+		} else {
+			glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, m_glesDepthFormat, size.x, size.y);
+		}
 		glBindRenderbuffer(GL_RENDERBUFFER, GL_NONE);
 
 		glGenFramebuffers(1, &m_glesMSAAFramebuffer);
@@ -2401,7 +2436,8 @@ bool OpenGLRenderer::updateMultisampleFramebuffer() {
 		m_MSAALevel = int(m_glesMSAASamples);
 
 		LogInfo << "Using " << m_glesMSAASamples << "x MSAA (multisampled framebuffer, "
-		        << "glBlitFramebuffer resolve) at " << size.x << "x" << size.y;
+		        << (m_glesMSAABlitANGLE ? "glBlitFramebufferANGLE" : "glBlitFramebuffer")
+		        << " resolve) at " << size.x << "x" << size.y;
 
 		return true;
 	}
@@ -2502,11 +2538,18 @@ void OpenGLRenderer::resolveMultisampleFramebuffer() {
 			glDisable(GL_SCISSOR_TEST);
 		}
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GL_NONE);
-		glBlitFramebuffer(0, 0, size.x, size.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-		// The samples are not needed anymore either.
-		const GLenum color = GL_COLOR_ATTACHMENT0;
-		glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, &color);
+		if(m_glesMSAABlitANGLE) {
+			glBlitFramebufferANGLE(0, 0, size.x, size.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+			// The samples are not needed anymore either. glDiscardFramebufferEXT() only
+			// takes GL_FRAMEBUFFER, so bind the multisampled framebuffer for it again.
+			glBindFramebuffer(GL_FRAMEBUFFER, m_glesMSAAFramebuffer);
+			invalidateAttachments(false, true, false);
+		} else {
+			glBlitFramebuffer(0, 0, size.x, size.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+			// The samples are not needed anymore either.
+			const GLenum color = GL_COLOR_ATTACHMENT0;
+			glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 1, &color);
+		}
 		glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
 		if(m_scissor.isValid()) {
 			glEnable(GL_SCISSOR_TEST);
