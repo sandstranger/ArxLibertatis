@@ -842,7 +842,7 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	if(renderer->hasMapBuffer()) {
 		
 		if(setting.empty() || setting == "map" || setting == "map+subdata") {
-			return std::make_unique<GLShadowVertexBuffer<Vertex>>(renderer, capacity, usage);
+			return std::make_unique<GLMapVertexBuffer<Vertex>>(renderer, capacity, usage);
 		}
 		
 	}
@@ -858,7 +858,7 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	}
 	return createVertexBufferImpl<Vertex>(renderer, capacity, usage, std::string_view());
 #else
-    return std::make_unique<GLMapVertexBuffer<Vertex>>(renderer, capacity, usage);
+    return std::make_unique<GLShadowVertexBuffer<Vertex>>(renderer, capacity, usage);
 #endif
 }
 
