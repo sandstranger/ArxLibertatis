@@ -46,6 +46,9 @@ enum GLArrayClientState {
 
 void bindBuffer(GLuint buffer);
 void unbindBuffer(GLuint buffer);
+#ifdef ANDROID
+void resetVertexArrayState();
+#endif
 void setVertexArrayTexCoord(int index, const void * coord, size_t stride);
 bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount);
 void clearVertexArray(const void * ref);
