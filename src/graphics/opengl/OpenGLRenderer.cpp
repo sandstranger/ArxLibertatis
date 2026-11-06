@@ -398,6 +398,9 @@ void OpenGLRenderer::afterResize() {
 void OpenGLRenderer::reinit() {
 	arx_assert(!isInitialized());
 #ifdef ANDROID
+	// A recreated EGL context has fresh bindings and disabled attributes.
+	resetVertexArrayState();
+	maxTextureStage = 0;
 	m_MSAALevel = 0;
 	m_hasMSAA = false;
 	m_glstate.setCull(false);
