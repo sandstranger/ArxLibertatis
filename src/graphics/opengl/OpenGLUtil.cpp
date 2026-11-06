@@ -104,6 +104,7 @@ OpenGLInfo::OpenGLInfo()
     #endif
 
     #ifdef ANDROID
+    ogl_extensions.clear();
     if(m_isES && m_version >= 30) {
         GLint extensionCount = 0;
         glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
