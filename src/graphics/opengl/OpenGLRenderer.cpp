@@ -558,6 +558,8 @@ void OpenGLRenderer::shutdown() {
 		glDeleteBuffers(1, &m_glesImmediateVertexBuffer);
 		m_glesImmediateVertexBuffer = 0;
 	}
+	m_glesImmediateVertexBufferCapacity = 0;
+	m_glesImmediateVertexBufferOffset = 0;
 	if(m_glesImmediateIndexBuffer) {
 		glDeleteBuffers(1, &m_glesImmediateIndexBuffer);
 		m_glesImmediateIndexBuffer = 0;
@@ -984,11 +986,43 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 	beforeDraw<TexturedVertex>();
 
 #ifdef ANDROID
-	if(!m_glesImmediateVertexBuffer) glGenBuffers(1, &m_glesImmediateVertexBuffer);
+	if(nvertices == 0 || nindices == 0) {
+		return;
+	}
+	if(nvertices > size_t(std::numeric_limits<GLsizeiptr>::max()) / sizeof(TexturedVertex)) {
+		LogError << "Immediate GLES vertex upload exceeds GLsizeiptr range";
+		return;
+	}
+	const size_t vertexBytes = nvertices * sizeof(TexturedVertex);
+
+	if(!m_glesImmediateVertexBuffer) {
+		glGenBuffers(1, &m_glesImmediateVertexBuffer);
+	}
 	bindBuffer(m_glesImmediateVertexBuffer);
-	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(nvertices * sizeof(TexturedVertex)),
-	             vertices, GL_STREAM_DRAW);
-	setVertexArray<TexturedVertex>(this, nullptr, this);
+	if(vertexBytes > m_glesImmediateVertexBufferCapacity) {
+		size_t newCapacity = std::max<size_t>(1024 * 1024, m_glesImmediateVertexBufferCapacity);
+		while(newCapacity < vertexBytes) {
+			if(newCapacity > size_t(std::numeric_limits<GLsizeiptr>::max()) / 2) {
+				newCapacity = vertexBytes;
+				break;
+			}
+			newCapacity *= 2;
+		}
+		m_glesImmediateVertexBufferCapacity = newCapacity;
+		m_glesImmediateVertexBufferOffset = 0;
+		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(newCapacity), nullptr, GL_STREAM_DRAW);
+	} else if(m_glesImmediateVertexBufferOffset >
+	          m_glesImmediateVertexBufferCapacity - vertexBytes) {
+		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(m_glesImmediateVertexBufferCapacity),
+		             nullptr, GL_STREAM_DRAW);
+		m_glesImmediateVertexBufferOffset = 0;
+	}
+
+	const size_t vertexOffset = m_glesImmediateVertexBufferOffset;
+	glBufferSubData(GL_ARRAY_BUFFER, GLintptr(vertexOffset), GLsizeiptr(vertexBytes), vertices);
+	m_glesImmediateVertexBufferOffset += vertexBytes;
+	const TexturedVertex * baseVertices = reinterpret_cast<const TexturedVertex *>(vertexOffset);
+	setVertexArray<TexturedVertex>(this, baseVertices, this);
 	drawIndexedElements(primitive, indices, nindices, 0, nvertices);
 #else
 	bindBuffer(GL_NONE);
