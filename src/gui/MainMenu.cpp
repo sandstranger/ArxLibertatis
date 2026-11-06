@@ -1065,10 +1065,7 @@ public:
 		{
 			std::string_view label = getLocalised("system_menus_options_video_antialiasing");
 			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
-			// Only offered if the renderer really has it (exactly 2x MSAA on Android)
-			const bool msaaSupported = GRenderer->isMSAASupported();
-			cb->setChecked(msaaSupported && config.video.antialiasing);
-			cb->setEnabled(msaaSupported);
+			cb->setChecked(config.video.antialiasing);
 			cb->stateChanged = [this](bool checked) {
 				config.video.antialiasing = checked;
 				setAlphaCutoutAntialisingState();

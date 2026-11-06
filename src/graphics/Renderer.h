@@ -381,9 +381,6 @@ public:
 	
 	[[nodiscard]] virtual AlphaCutoutAntialising getMaxSupportedAlphaCutoutAntialiasing() const = 0;
 	
-	//! Whether antialiasing (MSAA) can be turned on at all
-	[[nodiscard]] virtual bool isMSAASupported() const { return true; }
-	
 	[[nodiscard]] virtual std::unique_ptr<VertexBuffer<TexturedVertex>> createVertexBufferTL(size_t capacity, BufferUsage usage) = 0;
 	[[nodiscard]] virtual std::unique_ptr<VertexBuffer<SMY_VERTEX>> createVertexBuffer(size_t capacity, BufferUsage usage) = 0;
 	[[nodiscard]] virtual std::unique_ptr<VertexBuffer<SMY_VERTEX3>> createVertexBuffer3(size_t capacity, BufferUsage usage) = 0;

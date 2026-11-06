@@ -57,13 +57,6 @@
 
 #ifdef ANDROID
 extern bool g_useGLES2_0;
-
-namespace {
-
-//! MSAA sample count: antialiasing is only offered if the driver really renders with it
-const GLsizei glesMSAASamples = 2;
-
-} // anonymous namespace
 #endif
 
 
@@ -426,30 +419,6 @@ void OpenGLRenderer::initialize() {
 				m_glesWindowColorFormat = GL_RGB8_OES;
 			} else {
 				m_glesWindowColorFormat = GL_RGBA8_OES;
-			}
-		}
-		if(m_glesMaxMSAASamples > 1) {
-			// Drivers round a sample count up to one they support (Mali has 4x, 8x and 16x
-			// but no 2x), so ask for 2x the way updateMultisampleFramebuffer() will and only
-			// offer antialiasing if that is what the driver gives.
-			GLuint probe = 0;
-			glGenRenderbuffers(1, &probe);
-			glBindRenderbuffer(GL_RENDERBUFFER, probe);
-			if(m_glesMSAABlitANGLE) {
-				glRenderbufferStorageMultisampleANGLE(GL_RENDERBUFFER, glesMSAASamples, m_glesWindowColorFormat, 4, 4);
-			} else if(m_glesMSAAResolveBlit) {
-				glRenderbufferStorageMultisample(GL_RENDERBUFFER, glesMSAASamples, m_glesWindowColorFormat, 4, 4);
-			} else {
-				glRenderbufferStorageMultisampleEXT(GL_RENDERBUFFER, glesMSAASamples, m_glesDepthFormat, 4, 4);
-			}
-			GLint samples = 0;
-			glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &samples);
-			glBindRenderbuffer(GL_RENDERBUFFER, GL_NONE);
-			glDeleteRenderbuffers(1, &probe);
-			if(samples != glesMSAASamples) {
-				LogInfo << "GLES MSAA: " << glesMSAASamples << "x requested, the driver gives " << samples
-				        << "x; antialiasing is not offered";
-				m_glesMaxMSAASamples = 0;
 			}
 		}
 		LogInfo << "GLES render passes: "
@@ -1079,14 +1048,6 @@ Renderer::AlphaCutoutAntialising OpenGLRenderer::getMaxSupportedAlphaCutoutAntia
 #endif
 }
 
-bool OpenGLRenderer::isMSAASupported() const {
-#ifdef ANDROID
-	return m_glesMaxMSAASamples > 1 && !m_glesMSAAFailed;
-#else
-	return true;
-#endif
-}
-
 template <typename Vertex>
 static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRenderer * renderer,
                                                                     size_t capacity,
@@ -1605,6 +1566,9 @@ void OpenGLRenderer::flushState() {
 
 #ifdef ANDROID
 namespace {
+
+//! MSAA sample count, resolved in tile memory by GL_EXT_multisampled_render_to_texture
+const GLsizei glesMSAASamples = 2;
 
 //! Texture unit for copying the resolved MSAA image, above the renderer's texture stages
 const GLuint glesCopyTextureUnit = 3;
