@@ -21,6 +21,9 @@
 
 static GLArrayClientState glArrayClientState = GL_NoArray;
 static const void * glArrayClientStateRef = nullptr;
+#ifdef ANDROID
+static const void * glArrayClientStateOffset = nullptr;
+#endif
 static int glArrayClientStateTexCount = 1;
 static GLuint glBoundBuffer = GL_NONE;
 
@@ -28,6 +31,7 @@ static GLuint glBoundBuffer = GL_NONE;
 void resetVertexArrayState() {
 	glArrayClientState = GL_NoArray;
 	glArrayClientStateRef = nullptr;
+	glArrayClientStateOffset = nullptr;
 	// Every vertex layout has UV0; mark UV1/UV2 as previously enabled so
 	// the first single-UV layout disables their stale arrays after a resize.
 	glArrayClientStateTexCount = 3;
@@ -55,11 +59,22 @@ void setVertexArrayTexCoord(int index, const void * coord, size_t stride) {
 #endif
 }
 
-bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount) {
+bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount, const void * vertexOffset) {
 
+#ifdef ANDROID
+	// A VBO can be reused with different base offsets for indexed draws.
+	// Skip redundant pointer setup only when both the buffer and its base
+	// offset are unchanged.
+	if(glArrayClientState == type && glArrayClientStateRef == ref
+	   && glArrayClientStateOffset == vertexOffset) {
+		return false;
+	}
+#else
+	ARX_UNUSED(vertexOffset);
 	if(glArrayClientState == type && glArrayClientStateRef == ref) {
 		return false;
 	}
+#endif
 
 	if(glArrayClientState != type) {
 		arx_assert(texcount >= 1);
@@ -78,6 +93,9 @@ bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount) 
 
 	glArrayClientState = type;
 	glArrayClientStateRef = ref;
+#ifdef ANDROID
+	glArrayClientStateOffset = vertexOffset;
+#endif
 
 	return true;
 }
