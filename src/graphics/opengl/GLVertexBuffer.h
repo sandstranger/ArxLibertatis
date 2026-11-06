@@ -431,8 +431,9 @@ public:
 		bindBuffer(m_buffer);
 		
 		if(!m_initialized || (flags & DiscardBuffer)) {
-			// Orphan buffer to avoid waiting if the GL is still using the old contents
-			initialize();
+			// Match the ANGLE-tested Android path: orphan before mapping.
+			glBufferData(GL_ARRAY_BUFFER, capacity() * sizeof(Vertex), nullptr, GL_DYNAMIC_DRAW);
+			m_initialized = true;
 		}
 		
 #ifdef ANDROID
