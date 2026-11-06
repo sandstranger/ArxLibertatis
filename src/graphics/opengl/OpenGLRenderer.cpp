@@ -759,10 +759,12 @@ void OpenGLRenderer::SetAntialiasing(bool enable) {
 #endif
 }
 
+#ifndef ANDROID
 static const GLenum arxToGlFillMode[] = {
 	GL_LINE,  // FillWireframe,
 	GL_FILL,  // FillSolid
 };
+#endif
 
 void OpenGLRenderer::SetFillMode(FillMode mode) {
 #ifndef ANDROID
