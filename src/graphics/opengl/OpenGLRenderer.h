@@ -203,6 +203,8 @@ private:
 	GLuint m_glesProgram = 0;
 	GLuint m_glesImmediateVertexBuffer = 0;
 	GLuint m_glesImmediateIndexBuffer = 0;
+	size_t m_glesImmediateIndexBufferCapacity = 0;
+	size_t m_glesImmediateIndexBufferOffset = 0;
 	bool m_glesProgramBound = false;
 	bool m_glesUniformCacheValid = false;
 	glm::mat4 m_glesCachedProjection{1.f};
