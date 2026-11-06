@@ -392,8 +392,8 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		// Verify that we actually got an accelerated context
 		GLint texunits = 0;
 #ifdef ANDROID
-		// GLES entry points are linked from the NDK GLES libraries. Avoid
-		// resolving them through SDL_GL_GetProcAddress on Android.
+		// Resolve GLES entry points through the active SDL/EGL context so
+		// ANGLE and the native GLES driver use their own dispatch table.
 		(void)glGetError(); // clear error flags
 		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &texunits);
 		if(glGetError() != GL_NO_ERROR) {
