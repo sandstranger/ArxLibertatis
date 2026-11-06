@@ -903,11 +903,7 @@ const GLenum arxToGlPrimitiveType[] = {
 void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * vertices, size_t nvertices, unsigned short * indices, size_t nindices) {
 	
 	beforeDraw<TexturedVertex>();
-	
-	bindBuffer(GL_NONE);
-	
-	setVertexArray(this, vertices, vertices);
-	
+
 #ifdef ANDROID
 	if(!m_glesImmediateVertexBuffer) glGenBuffers(1, &m_glesImmediateVertexBuffer);
 	if(!m_glesImmediateIndexBuffer) glGenBuffers(1, &m_glesImmediateIndexBuffer);
@@ -924,6 +920,8 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 	               GL_UNSIGNED_SHORT, nullptr);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 #else
+	bindBuffer(GL_NONE);
+	setVertexArray(this, vertices, vertices);
 	if(hasDrawRangeElements()) {
 		glDrawRangeElements(arxToGlPrimitiveType[primitive], 0, nvertices - 1, nindices, GL_UNSIGNED_SHORT, indices);
 	} else {
