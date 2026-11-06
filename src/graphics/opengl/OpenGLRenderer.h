@@ -187,7 +187,7 @@ private:
 	glm::mat4x4 m_view;
 
 #ifdef ANDROID
-	void initializeGLESProgram();
+	bool initializeGLESProgram();
 	void shutdownGLESProgram();
 	void prepareGLESProgram(bool transformed);
 
