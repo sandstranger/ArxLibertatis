@@ -1175,11 +1175,11 @@ attribute vec2 aTexCoord2;
 uniform mat4 uProjection;
 uniform mat4 uView;
 uniform int uTransform;
-varying vec4 vColor;
-varying vec2 vTexCoord0;
-varying vec2 vTexCoord1;
-varying vec2 vTexCoord2;
-varying float vFogDistance;
+varying mediump vec4 vColor;
+varying mediump vec2 vTexCoord0;
+varying mediump vec2 vTexCoord1;
+varying mediump vec2 vTexCoord2;
+varying mediump float vFogDistance;
 void main() {
     if(uTransform != 0) {
         vec4 viewPosition = uView * vec4(aPosition.xyz, 1.0);
@@ -1219,11 +1219,11 @@ uniform vec4 uFogColor;
 uniform vec2 uFogRange;
 uniform int uAlphaCutout;
 uniform float uAlphaThreshold;
-varying vec4 vColor;
-varying vec2 vTexCoord0;
-varying vec2 vTexCoord1;
-varying vec2 vTexCoord2;
-varying float vFogDistance;
+varying mediump vec4 vColor;
+varying mediump vec2 vTexCoord0;
+varying mediump vec2 vTexCoord1;
+varying mediump vec2 vTexCoord2;
+varying mediump float vFogDistance;
 float opScale(int op) {
     if(op == 3) return 2.0;
     if(op == 4) return 4.0;
@@ -1241,7 +1241,7 @@ void main() {
     if(uUseTexture0 != 0) color = applyStage(color, texture2D(uTexture0, vTexCoord0), uColorOp0, uAlphaOp0);
     if(uUseTexture1 != 0) color = applyStage(color, texture2D(uTexture1, vTexCoord1), uColorOp1, uAlphaOp1);
     if(uUseTexture2 != 0) color = applyStage(color, texture2D(uTexture2, vTexCoord2), uColorOp2, uAlphaOp2);
-    if(uAlphaCutout != 0 && color.a < uAlphaThreshold) discard;
+    if(uAlphaCutout != 0 && color.a <= uAlphaThreshold) discard;
     if(uFogEnabled != 0) {
         float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
         color.rgb = mix(uFogColor.rgb, color.rgb, fog);
@@ -1261,11 +1261,11 @@ in vec2 aTexCoord2;
 uniform mat4 uProjection;
 uniform mat4 uView;
 uniform int uTransform;
-out vec4 vColor;
-out vec2 vTexCoord0;
-out vec2 vTexCoord1;
-out vec2 vTexCoord2;
-out float vFogDistance;
+out mediump vec4 vColor;
+out mediump vec2 vTexCoord0;
+out mediump vec2 vTexCoord1;
+out mediump vec2 vTexCoord2;
+out mediump float vFogDistance;
 void main() {
     if(uTransform != 0) {
         vec4 viewPosition = uView * vec4(aPosition.xyz, 1.0);
@@ -1306,11 +1306,11 @@ uniform vec4 uFogColor;
 uniform vec2 uFogRange;
 uniform int uAlphaCutout;
 uniform float uAlphaThreshold;
-in vec4 vColor;
-in vec2 vTexCoord0;
-in vec2 vTexCoord1;
-in vec2 vTexCoord2;
-in float vFogDistance;
+in mediump vec4 vColor;
+in mediump vec2 vTexCoord0;
+in mediump vec2 vTexCoord1;
+in mediump vec2 vTexCoord2;
+in mediump float vFogDistance;
 out vec4 fragColor;
 float opScale(int op) {
     if(op == 3) return 2.0;
@@ -1329,7 +1329,7 @@ void main() {
     if(uUseTexture0 != 0) color = applyStage(color, texture(uTexture0, vTexCoord0), uColorOp0, uAlphaOp0);
     if(uUseTexture1 != 0) color = applyStage(color, texture(uTexture1, vTexCoord1), uColorOp1, uAlphaOp1);
     if(uUseTexture2 != 0) color = applyStage(color, texture(uTexture2, vTexCoord2), uColorOp2, uAlphaOp2);
-    if(uAlphaCutout != 0 && color.a < uAlphaThreshold) discard;
+    if(uAlphaCutout != 0 && color.a <= uAlphaThreshold) discard;
     if(uFogEnabled != 0) {
         float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
         color.rgb = mix(uFogColor.rgb, color.rgb, fog);
