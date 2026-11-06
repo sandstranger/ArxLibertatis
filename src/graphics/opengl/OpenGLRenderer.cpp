@@ -946,8 +946,13 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	}
 	return createVertexBufferImpl<Vertex>(renderer, capacity, usage, std::string_view());
 #else
-    // Match the working Android path from master: map the buffer directly.
-    return std::make_unique<GLMapVertexBuffer<Vertex>>(renderer, capacity, usage);
+    // Prefer the same mapped-buffer strategy as master when OES_mapbuffer
+    // is actually exposed by ANGLE/native GLES. Keep the shadow upload path
+    // for drivers which do not provide that extension.
+    if(renderer->hasMapBuffer()) {
+        return std::make_unique<GLMapVertexBuffer<Vertex>>(renderer, capacity, usage);
+    }
+    return std::make_unique<GLShadowVertexBuffer<Vertex>>(renderer, capacity, usage);
 #endif
 }
 
