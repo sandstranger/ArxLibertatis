@@ -1483,145 +1483,81 @@ void GLTexture::upload() {
         }
     }
 
+#ifdef ANDROID
+    // GLES 3 removed the legacy LUMINANCE/ALPHA/INTENSITY and BGR formats.
+    // Normalize every decoded source image to RGBA so both ES 2 and ES 3 use
+    // the same well-defined upload path.
+    Image glesImage = m_image;
+    if(!glesImage.convertTo(Image::Format_R8G8B8A8)) {
+        LogError << "Could not convert texture to RGBA for OpenGL ES";
+        return;
+    }
+    const Image &textureImage = glesImage;
+    GLint internal = g_useGLES2_0 ? GL_RGBA : GL_RGBA8;
+    GLenum format = GL_RGBA;
+#else
     GLint internalUnsized;
     GLint internalSized;
     GLenum format;
 
     if (isIntensity()) {
-
-        internalUnsized =
-                GL_INTENSITY;
-
-        internalSized =
-                GL_INTENSITY8;
-
-        format =
-                GL_RED;
-
-    } else if (getFormat() ==
-               Image::Format_L8) {
-
-        internalUnsized =
-                GL_LUMINANCE;
-
-        internalSized =
-                GL_LUMINANCE8;
-
-        format =
-                GL_LUMINANCE;
-
-    } else if (getFormat() ==
-               Image::Format_A8) {
-
-        internalUnsized =
-                GL_ALPHA;
-
-        internalSized =
-                GL_ALPHA8;
-
-        format =
-                GL_ALPHA;
-
-    } else if (getFormat() ==
-               Image::Format_L8A8) {
-
-        internalUnsized =
-                GL_LUMINANCE_ALPHA;
-
-        internalSized =
-                GL_LUMINANCE8_ALPHA8;
-
-        format =
-                GL_LUMINANCE_ALPHA;
-
-    } else if (getFormat() ==
-               Image::Format_R8G8B8) {
-
-        internalUnsized =
-                GL_RGB;
-
-        internalSized =
-                GL_RGB8;
-
-        format =
-                GL_RGB;
-
-    } else if (getFormat() ==
-               Image::Format_B8G8R8) {
-
-        internalUnsized =
-                GL_RGB;
-
-        internalSized =
-                GL_RGB8;
-
-        format =
-                GL_BGR;
-
-    } else if (getFormat() ==
-               Image::Format_R8G8B8A8) {
-
-        internalUnsized =
-                GL_RGBA;
-
-        internalSized =
-                GL_RGBA8;
-
-        format =
-                GL_RGBA;
-
-    } else if (getFormat() ==
-               Image::Format_B8G8R8A8) {
-
-        internalUnsized =
-                GL_RGBA;
-
-        internalSized =
-                GL_RGBA8;
-
-        format =
-                GL_BGRA;
-
+        internalUnsized = GL_INTENSITY;
+        internalSized = GL_INTENSITY8;
+        format = GL_RED;
+    } else if (getFormat() == Image::Format_L8) {
+        internalUnsized = GL_LUMINANCE;
+        internalSized = GL_LUMINANCE8;
+        format = GL_LUMINANCE;
+    } else if (getFormat() == Image::Format_A8) {
+        internalUnsized = GL_ALPHA;
+        internalSized = GL_ALPHA8;
+        format = GL_ALPHA;
+    } else if (getFormat() == Image::Format_L8A8) {
+        internalUnsized = GL_LUMINANCE_ALPHA;
+        internalSized = GL_LUMINANCE8_ALPHA8;
+        format = GL_LUMINANCE_ALPHA;
+    } else if (getFormat() == Image::Format_R8G8B8) {
+        internalUnsized = GL_RGB;
+        internalSized = GL_RGB8;
+        format = GL_RGB;
+    } else if (getFormat() == Image::Format_B8G8R8) {
+        internalUnsized = GL_RGB;
+        internalSized = GL_RGB8;
+        format = GL_BGR;
+    } else if (getFormat() == Image::Format_R8G8B8A8) {
+        internalUnsized = GL_RGBA;
+        internalSized = GL_RGBA8;
+        format = GL_RGBA;
+    } else if (getFormat() == Image::Format_B8G8R8A8) {
+        internalUnsized = GL_RGBA;
+        internalSized = GL_RGBA8;
+        format = GL_BGRA;
     } else {
-
-        arx_assert_msg(
-                false,
-                "Unsupported image format: %ld",
-                long(getFormat())
-        );
-
+        arx_assert_msg(false, "Unsupported image format: %ld", long(getFormat()));
         return;
     }
 
-    GLint internal =
-            renderer->hasSizedTextureFormats()
-            ? internalSized
-            : internalUnsized;
+    GLint internal = renderer->hasSizedTextureFormats() ? internalSized : internalUnsized;
+    const Image &textureImage = m_image;
+#endif
 
-    if (hasMipmaps()) {
-
-        glTexParameteri(
-                GL_TEXTURE_2D,
-                GL_GENERATE_MIPMAP,
-                GL_TRUE
-        );
-
-        if (renderer->getMaxAnisotropy() > 1.f) {
-
-            glTexParameterf(
-                    GL_TEXTURE_2D,
-                    GL_TEXTURE_MAX_ANISOTROPY_EXT,
-                    renderer->getMaxAnisotropy()
-            );
+    const bool generateMipmaps = hasMipmaps();
+    if(generateMipmaps) {
+#ifndef ANDROID
+        glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
+#endif
+        if(renderer->getMaxAnisotropy() > 1.f) {
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                            renderer->getMaxAnisotropy());
         }
-
     } else {
-
-        glTexParameteri(
-                GL_TEXTURE_2D,
-                GL_TEXTURE_MAX_LEVEL,
-                0
-        );
+#ifndef ANDROID
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+#else
+        if(!g_useGLES2_0) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        }
+#endif
     }
 
     if (getStoredSize() != getSize()) {
@@ -1629,20 +1565,12 @@ void GLTexture::upload() {
         Image extended;
 
         extended.create(
-                size_t(
-                        getStoredSize().x
-                ),
-
-                size_t(
-                        getStoredSize().y
-                ),
-
-                m_image.getFormat()
+                size_t(getStoredSize().x),
+                size_t(getStoredSize().y),
+                textureImage.getFormat()
         );
 
-        extended.extendClampToEdgeBorder(
-                m_image
-        );
+        extended.extendClampToEdgeBorder(textureImage);
 
         glTexImage2D(
                 GL_TEXTURE_2D,
@@ -1667,9 +1595,15 @@ void GLTexture::upload() {
                 0,
                 format,
                 GL_UNSIGNED_BYTE,
-                m_image.getData()
+                textureImage.getData()
         );
     }
+
+#ifdef ANDROID
+    if(generateMipmaps) {
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+#endif
 }
 
 void GLTexture::destroy() {
