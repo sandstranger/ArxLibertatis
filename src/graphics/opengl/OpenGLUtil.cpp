@@ -21,6 +21,7 @@
 
 #include <cstring>
 #include <cstdio>
+#include <sstream>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/adaptor/reversed.hpp>
