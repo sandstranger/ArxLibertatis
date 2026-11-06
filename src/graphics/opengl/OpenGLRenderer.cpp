@@ -1030,6 +1030,30 @@ static const GLenum arxToGlBlendFactor[] = {
 
 void OpenGLRenderer::flushState() {
 #ifdef ANDROID
+	BlendingFactor srcFactor = m_state.getBlendSrc();
+	BlendingFactor dstFactor = m_state.getBlendDst();
+	m_glesAlphaThreshold = 0.5f;
+	bool useAlphaToCoverage = false;
+	if(m_state.getAlphaCutout()) {
+		if(srcFactor == BlendOne && dstFactor == BlendZero) {
+			useAlphaToCoverage = m_hasMSAA
+			        && config.video.alphaCutoutAntialiasing != int(NoAlphaCutoutAA);
+			if(useAlphaToCoverage) {
+				m_glesAlphaThreshold = 0.f;
+			}
+		} else if(srcFactor == BlendOne && dstFactor == BlendOne) {
+			srcFactor = BlendSrcAlpha;
+			m_glesAlphaThreshold = 0.f;
+		} else if(srcFactor == BlendSrcAlpha || dstFactor == BlendInvSrcAlpha) {
+			m_glesAlphaThreshold = 0.f;
+		}
+	}
+	if(useAlphaToCoverage != m_glalphaToCoverage) {
+		if(useAlphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+		else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+		m_glalphaToCoverage = useAlphaToCoverage;
+	}
+
 	if(m_glstate != m_state) {
 		if(m_glstate.getCull() != m_state.getCull()) {
 			if(m_state.getCull()) glEnable(GL_CULL_FACE);
@@ -1038,29 +1062,6 @@ void OpenGLRenderer::flushState() {
 		if(m_glstate.getBlendSrc() != m_state.getBlendSrc()
 		   || m_glstate.getBlendDst() != m_state.getBlendDst()
 		   || m_glstate.getAlphaCutout() != m_state.getAlphaCutout()) {
-			BlendingFactor srcFactor = m_state.getBlendSrc();
-			BlendingFactor dstFactor = m_state.getBlendDst();
-			m_glesAlphaThreshold = 0.5f;
-			bool useAlphaToCoverage = false;
-			if(m_state.getAlphaCutout()) {
-				if(srcFactor == BlendOne && dstFactor == BlendZero) {
-					useAlphaToCoverage = m_hasMSAA
-					        && config.video.alphaCutoutAntialiasing == int(FuzzyAlphaCutoutAA);
-					if(useAlphaToCoverage) {
-						m_glesAlphaThreshold = 0.f;
-					}
-				} else if(srcFactor == BlendOne && dstFactor == BlendOne) {
-					srcFactor = BlendSrcAlpha;
-					m_glesAlphaThreshold = 0.f;
-				} else if(srcFactor == BlendSrcAlpha || dstFactor == BlendInvSrcAlpha) {
-					m_glesAlphaThreshold = 0.f;
-				}
-			}
-			if(useAlphaToCoverage != m_glalphaToCoverage) {
-				if(useAlphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-				else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-				m_glalphaToCoverage = useAlphaToCoverage;
-			}
 			GLenum src = arxToGlBlendFactor[srcFactor];
 			GLenum dst = arxToGlBlendFactor[dstFactor];
 			if(m_glblendSrc != src || m_glblendDst != dst) {
@@ -1080,10 +1081,6 @@ void OpenGLRenderer::flushState() {
 			glPolygonOffset(offset, offset);
 		}
 		m_glstate = m_state;
-	}
-	if(!m_state.getAlphaCutout() && m_glalphaToCoverage) {
-		glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-		m_glalphaToCoverage = false;
 	}
 	m_glesAlphaCutout = m_state.getAlphaCutout();
 	glActiveTexture(GL_TEXTURE0);
