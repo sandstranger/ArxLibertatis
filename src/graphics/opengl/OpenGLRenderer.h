@@ -202,6 +202,8 @@ private:
 
 	GLuint m_glesProgram = 0;
 	GLuint m_glesImmediateVertexBuffer = 0;
+	size_t m_glesImmediateVertexBufferCapacity = 0;
+	size_t m_glesImmediateVertexBufferOffset = 0;
 	GLuint m_glesImmediateIndexBuffer = 0;
 	size_t m_glesImmediateIndexBufferCapacity = 0;
 	size_t m_glesImmediateIndexBufferOffset = 0;
