@@ -21,6 +21,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
