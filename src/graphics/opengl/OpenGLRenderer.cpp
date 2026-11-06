@@ -862,6 +862,17 @@ void OpenGLRenderer::Clear(BufferFlags bufferFlags, Color clearColor, float clea
 	
 	if(bufferFlags & ColorBuffer) {
 		Color4f colorf(clearColor);
+#ifdef ANDROID
+		if(std::abs(m_glesGamma - 1.f) > 0.001f) {
+			// The brightness curve of glesFragmentShader for the background as well: it is
+			// the fog color, and without the curve it showed through the fog as a dark (or
+			// light) hole wherever nothing is drawn past the far plane.
+			const float invGamma = 1.f / m_glesGamma;
+			colorf.r = std::pow(colorf.r, invGamma);
+			colorf.g = std::pow(colorf.g, invGamma);
+			colorf.b = std::pow(colorf.b, invGamma);
+		}
+#endif
 		glClearColor(colorf.r, colorf.g, colorf.b, colorf.a);
 		buffers |= GL_COLOR_BUFFER_BIT;
 	}
