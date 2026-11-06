@@ -326,6 +326,10 @@ void OpenGLRenderer::initialize() {
 		if(!m_hasMapBuffer) {
 			LogWarning << "Missing OpenGL extension GL_OES_mapbuffer";
 		}
+#ifdef ANDROID
+		LogInfo << "GLES vertex upload: "
+		        << (m_hasMapBuffer ? "GL_OES_mapbuffer" : "CPU shadow + buffer upload");
+#endif
 	} else {
 #ifndef ANDROID       
 		// ARB_map_buffer_range requires OpenGL 2.1
