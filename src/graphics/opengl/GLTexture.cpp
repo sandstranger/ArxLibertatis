@@ -1391,9 +1391,14 @@ void GLTexture::upload() {
                     Image::Format_L8A8
             );
 
+    // ETC2 only for textures loaded from files. Textures built at runtime (font glyph
+    // atlases, procedural images) change while the game runs: compressing them on the
+    // CPU again for every update costs time, fills the disk cache with one entry per
+    // version, and EAC artifacts degrade small text.
     if (!g_useGLES2_0 &&
         s_enableETC2TextureSupport &&
         isSupportedForEtc2 &&
+        !getFileName().empty() &&
         m_image.isValid()) {
 
         const int storedW =

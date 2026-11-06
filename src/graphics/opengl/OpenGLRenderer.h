@@ -21,6 +21,7 @@
 #define ARX_GRAPHICS_OPENGL_OPENGLRENDERER_H
 
 #include <memory>
+#include <vector>
 
 #include <boost/intrusive/list.hpp>
 
@@ -244,7 +245,8 @@ private:
 	 * One linked program per shader variant.
 	 *
 	 * Everything that would otherwise be uniform control flow is compiled in only where
-	 * it is used: the number of texture stages, alpha cutout (discard) and fog.
+	 * it is used: the number of texture stages, alpha cutout (discard), fog and the
+	 * brightness gamma curve.
 	 * A shader that may discard turns off early depth/stencil updates and forward pixel
 	 * kill on Mali for every draw that uses it, so opaque geometry must not share a
 	 * program with alpha-tested geometry.
@@ -258,7 +260,7 @@ private:
 		GLint uniformFogParams = -1;
 		GLint uniformFogColor = -1;
 		GLint uniformAlphaThreshold = -1;
-		GLint uniformGamma = -1;
+		GLint uniformInvGamma = -1;
 		GLint uniformStageA[3] = { -1, -1, -1 };
 		GLint uniformStageB[3] = { -1, -1, -1 };
 		GLint uniformStageC[3] = { -1, -1, -1 };
@@ -268,7 +270,7 @@ private:
 		float fogParams[2] = { 0.f, 0.f };
 		float fogColor[3] = { 0.f, 0.f, 0.f };
 		float alphaThreshold = 0.f;
-		float gamma = 0.f;
+		float invGamma = 0.f;
 		float stageA[3][4] = {};
 		float stageB[3][4] = {};
 		float stageC[3][4] = {};
@@ -278,7 +280,8 @@ private:
 	enum GLESProgramVariant {
 		GLESProgramAlphaCutout = 1 << 0,
 		GLESProgramFog = 1 << 1,
-		GLESProgramStageBucketShift = 2,
+		GLESProgramGamma = 1 << 2,
+		GLESProgramStageBucketShift = 3,
 		GLESProgramStageBucketCount = 3, // 0, 1 or 3 texture stages
 		GLESProgramVariantCount = GLESProgramStageBucketCount << GLESProgramStageBucketShift
 	};
@@ -286,6 +289,7 @@ private:
 	GLESProgram m_glesPrograms[GLESProgramVariantCount];
 	GLuint m_glesBoundProgram = 0;
 	bool m_hasCoreMapBufferRange = false;
+	std::vector<GLint> m_glesProgramBinaryFormats;
 	bool m_hasInvalidateFramebuffer = false;
 	bool m_hasDiscardFramebuffer = false;
 	bool m_glesBlendEnabled = false;

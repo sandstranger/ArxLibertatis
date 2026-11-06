@@ -19,12 +19,18 @@
 
 #include "graphics/opengl/OpenGLRenderer.h"
 
+#include <cmath>
 #include <cstring>
 #include <algorithm>
 #include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
+#ifdef ANDROID
+#include <cstdio>
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -123,6 +129,10 @@ void OpenGLRenderer::initialize() {
 	if(gl.isES() && !gl.is(3, 0)) {
 		g_useGLES2_0 = true;
 	}
+	// Feature level: the legacy OpenGL ES 2.0 mode uses OpenGL ES 2.0 and its extensions
+	// only, even when the driver created a newer context (Mali and Adreno always do).
+	m_glesIsES3 = gl.isES() && gl.is(3, 0) && !g_useGLES2_0;
+	LogInfo << "OpenGL ES feature level: " << (m_glesIsES3 ? "3.0" : "2.0");
 #endif
 	
 	LogInfo << "Using OpenGL " << gl.versionString();
@@ -244,11 +254,19 @@ void OpenGLRenderer::initialize() {
 	}
 	
 	if(gl.isES()) {
+#ifdef ANDROID
+		m_hasTextureNPOT = m_glesIsES3 || gl.has("GL_OES_texture_npot");
+#else
 		m_hasTextureNPOT = gl.is(3, 0) || gl.has("GL_OES_texture_npot");
+#endif
 		if(!m_hasTextureNPOT) {
 			LogWarning << "Missing OpenGL extension GL_OES_texture_npot";
 		}
+#ifdef ANDROID
+		m_hasSizedTextureFormats = m_glesIsES3 || gl.has("GL_OES_required_internalformat");
+#else
 		m_hasSizedTextureFormats = gl.has("GL_OES_required_internalformat", 3, 0);
+#endif
 		m_hasIntensityTextures = false;
 		m_hasBGRTextureTransfer = false;
 	} else {
@@ -281,25 +299,24 @@ void OpenGLRenderer::initialize() {
 		        gl.has("GL_OES_draw_elements_base_vertex", 3, 2)
 		        || gl.has("GL_EXT_draw_elements_base_vertex");
 #ifdef ANDROID
-		m_hasDrawElementsBaseVertex = hasBaseVertexExtension
+		// The OpenGL ES 2.0 feature level moves the attribute pointers instead.
+		m_hasDrawElementsBaseVertex = m_glesIsES3 && hasBaseVertexExtension
 		        && (glDrawElementsBaseVertexOES != nullptr
 		            || glDrawElementsBaseVertexEXT != nullptr);
-		if(hasBaseVertexExtension && !m_hasDrawElementsBaseVertex) {
+		if(m_glesIsES3 && hasBaseVertexExtension && !m_hasDrawElementsBaseVertex) {
 			LogWarning << "Base-vertex extension advertised without a usable GLES entry point";
 		}
-#else
-		m_hasDrawElementsBaseVertex = hasBaseVertexExtension;
-#endif
-		m_hasDrawRangeElements = gl.is(3, 0);
-#ifdef ANDROID
+		m_hasDrawRangeElements = m_glesIsES3;
 		if(m_hasDrawElementsBaseVertex) {
-			LogInfo << "GLES indexed draws: client indices + "
+			LogInfo << "GLES indexed draws: "
 			        << (glDrawElementsBaseVertexOES ? "GL_OES_draw_elements_base_vertex" :
 			                                            "GL_EXT_draw_elements_base_vertex");
 		} else {
-			LogInfo << "GLES indexed draws: client indices + shifted vertex attributes"
-			        << " (no usable base-vertex entry point)";
+			LogInfo << "GLES indexed draws: shifted vertex attributes";
 		}
+#else
+		m_hasDrawElementsBaseVertex = hasBaseVertexExtension;
+		m_hasDrawRangeElements = gl.is(3, 0);
 #endif
 	} else {
 #ifndef ANDROID       
@@ -320,7 +337,7 @@ void OpenGLRenderer::initialize() {
 #ifdef ANDROID
 		// Only trust entry points GLAD actually resolved for this context.
 		// OpenGL ES 2.0 needs GL_OES_mapbuffer as well for glUnmapBufferOES().
-		m_hasCoreMapBufferRange = gl.is(3, 0) && glMapBufferRange && glUnmapBuffer;
+		m_hasCoreMapBufferRange = m_glesIsES3 && glMapBufferRange && glUnmapBuffer;
 		m_hasMapBufferRange = m_hasCoreMapBufferRange
 		                      || (gl.has("GL_EXT_map_buffer_range") && glMapBufferRangeEXT
 		                          && glUnmapBufferOES);
@@ -341,12 +358,11 @@ void OpenGLRenderer::initialize() {
 		        << (m_hasMapBufferRange ? "unsynchronized glMapBufferRange + orphaning"
 		                                : "client memory streaming");
 
-		m_glesIsES3 = gl.is(3, 0);
-		m_glesDepthFormat = (gl.is(3, 0) || gl.has("GL_OES_depth24")) ? GL_DEPTH_COMPONENT24_OES
-		                                                              : GL_DEPTH_COMPONENT16;
-
+		m_glesDepthFormat = (m_glesIsES3 || gl.has("GL_OES_depth24")) ? GL_DEPTH_COMPONENT24_OES
+		                                                               : GL_DEPTH_COMPONENT16;
+		
 		// Attachment invalidation at the end of render passes
-		m_hasInvalidateFramebuffer = gl.is(3, 0) && glInvalidateFramebuffer;
+		m_hasInvalidateFramebuffer = m_glesIsES3 && glInvalidateFramebuffer;
 		m_hasDiscardFramebuffer = gl.has("GL_EXT_discard_framebuffer") && glDiscardFramebufferEXT;
 
 		// Multisampling resolved in tile memory into a single-sampled texture
@@ -363,6 +379,20 @@ void OpenGLRenderer::initialize() {
 		        << ", MSAA: "
 		        << (m_glesMaxMSAASamples > 1 ? "GL_EXT_multisampled_render_to_texture"
 		                                     : "not supported");
+		
+		// Program binaries for the shader cache (OpenGL ES 3.0 feature level only)
+		m_glesProgramBinaryFormats.clear();
+		if(m_glesIsES3 && glGetProgramBinary && glProgramBinary && glProgramParameteri) {
+			GLint count = 0;
+			glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &count);
+			if(count > 0) {
+				m_glesProgramBinaryFormats.resize(size_t(count));
+				glGetIntegerv(GL_PROGRAM_BINARY_FORMATS, m_glesProgramBinaryFormats.data());
+			}
+		}
+		LogInfo << "GLES program binaries: "
+		        << (m_glesProgramBinaryFormats.empty() ? std::string("not supported")
+		            : std::to_string(m_glesProgramBinaryFormats.size()) + " format(s)");
 #endif
 	} else {
 #ifndef ANDROID       
@@ -847,9 +877,10 @@ void OpenGLRenderer::SetFogParams(float fogStart, float fogEnd) {
 
 void OpenGLRenderer::setGamma(float gamma) {
 #ifdef ANDROID
-	// The video options slider maps to a 0.5-1.5 brightness multiplier.
-	// Keep values above 1 so Android GLES can actually brighten the frame.
-	m_glesGamma = glm::clamp(gamma, 0.f, 2.f);
+	// The video options slider gives 0.5 (darker) to 1.5 (brighter), 1 is neutral.
+	// It is applied as a gamma curve like the desktop window gamma ramp (and gl4es),
+	// see glesFragmentShader.
+	m_glesGamma = glm::clamp(gamma, 0.1f, 4.f);
 #else
 	ARX_UNUSED(gamma);
 #endif
@@ -1468,7 +1499,183 @@ GLuint compileGLESShader(GLenum type, const std::string & source) {
 	return shader;
 }
 
-GLuint buildGLESProgram(const std::string & vertexSource, const std::string & fragmentSource) {
+//! Directory of the program binary cache, set from Java through JNA (empty: no cache)
+std::string g_glesProgramCacheDir;
+
+/*
+ * Program binary cache (OpenGL ES 3.0 feature level)
+ *
+ * One file per program, named after a hash of the shader sources and the driver
+ * identification (vendor, renderer, version strings). The driver can still reject a
+ * binary, for example after an update that kept the version strings: the program is
+ * then compiled from source again and the file replaced.
+ */
+const char glesProgramCacheMagic[4] = { 'A', 'R', 'X', 'P' };
+const u32 glesProgramCacheVersion = 1;
+const u32 glesProgramCacheMaxSize = 64 * 1024 * 1024;
+
+struct GLESProgramCacheHeader {
+	char magic[4];
+	u32 version;
+	u64 key;
+	u32 format;
+	u32 size;
+};
+
+struct GLESProgramCache {
+	std::string directory;
+	u64 driverHash = 0;
+	const std::vector<GLint> * formats = nullptr;
+	std::vector<std::string> usedFiles;
+	size_t loaded = 0;
+	size_t compiled = 0;
+};
+
+u64 hashBytes(u64 hash, const void * data, size_t size) {
+	const unsigned char * bytes = static_cast<const unsigned char *>(data);
+	for(size_t i = 0; i < size; i++) {
+		hash ^= bytes[i];
+		hash *= 1099511628211ull;
+	}
+	return hash;
+}
+
+u64 hashString(u64 hash, const char * string) {
+	if(string) {
+		hash = hashBytes(hash, string, std::strlen(string));
+	}
+	return hashBytes(hash, "", 1);
+}
+
+std::string glesProgramCacheFile(u64 key) {
+	char name[32];
+	std::snprintf(name, sizeof(name), "%016llx.bin", static_cast<unsigned long long>(key));
+	return name;
+}
+
+GLuint loadCachedGLESProgram(const GLESProgramCache & cache, const std::string & file, u64 key) {
+
+	const std::string path = cache.directory + "/" + file;
+	FILE * stream = std::fopen(path.c_str(), "rb");
+	if(!stream) {
+		return 0;
+	}
+
+	GLESProgramCacheHeader header;
+	std::vector<char> binary;
+	// Only formats the driver lists may be passed to glProgramBinary(): anything else is
+	// an error, and errors are undefined behavior in a no-error context.
+	bool valid = std::fread(&header, sizeof(header), 1, stream) == 1
+	             && std::memcmp(header.magic, glesProgramCacheMagic, sizeof(header.magic)) == 0
+	             && header.version == glesProgramCacheVersion && header.key == key
+	             && header.size > 0 && header.size <= glesProgramCacheMaxSize
+	             && std::find(cache.formats->begin(), cache.formats->end(), GLint(header.format))
+	                != cache.formats->end();
+	if(valid) {
+		binary.resize(header.size);
+		valid = std::fread(binary.data(), 1, binary.size(), stream) == binary.size();
+	}
+	std::fclose(stream);
+	if(!valid) {
+		std::remove(path.c_str());
+		return 0;
+	}
+
+	GLuint program = glCreateProgram();
+	if(!program) {
+		return 0;
+	}
+	glProgramBinary(program, GLenum(header.format), binary.data(), GLsizei(binary.size()));
+	GLint linked = GL_FALSE;
+	glGetProgramiv(program, GL_LINK_STATUS, &linked);
+	if(linked != GL_TRUE) {
+		glDeleteProgram(program);
+		std::remove(path.c_str());
+		return 0;
+	}
+
+	return program;
+}
+
+void saveCachedGLESProgram(const GLESProgramCache & cache, GLuint program, const std::string & file,
+                           u64 key) {
+
+	GLint length = 0;
+	glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &length);
+	if(length <= 0 || u32(length) > glesProgramCacheMaxSize) {
+		return;
+	}
+
+	std::vector<char> binary(static_cast<size_t>(length));
+	GLsizei written = 0;
+	GLenum format = GL_NONE;
+	glGetProgramBinary(program, length, &written, &format, binary.data());
+	if(written <= 0) {
+		return;
+	}
+
+	GLESProgramCacheHeader header;
+	std::memcpy(header.magic, glesProgramCacheMagic, sizeof(header.magic));
+	header.version = glesProgramCacheVersion;
+	header.key = key;
+	header.format = u32(format);
+	header.size = u32(written);
+
+	// Write to a temporary file first so an interrupted write never leaves a broken binary.
+	const std::string path = cache.directory + "/" + file;
+	const std::string temporary = path + ".tmp";
+	FILE * stream = std::fopen(temporary.c_str(), "wb");
+	if(!stream) {
+		return;
+	}
+	bool ok = std::fwrite(&header, sizeof(header), 1, stream) == 1
+	                  && std::fwrite(binary.data(), 1, size_t(written), stream) == size_t(written);
+	ok = (std::fclose(stream) == 0) && ok;
+	if(!ok || std::rename(temporary.c_str(), path.c_str()) != 0) {
+		std::remove(temporary.c_str());
+	}
+
+}
+
+//! Remove binaries of other shader sources or driver versions
+void cleanGLESProgramCache(const GLESProgramCache & cache) {
+
+	DIR * directory = opendir(cache.directory.c_str());
+	if(!directory) {
+		return;
+	}
+
+	while(dirent * entry = readdir(directory)) {
+		const std::string name = entry->d_name;
+		const bool binary = name.size() == 20 && name.compare(16, 4, ".bin") == 0;
+		const bool temporary = name.size() == 24 && name.compare(16, 8, ".bin.tmp") == 0;
+		if((!binary && !temporary) || name.find_first_not_of("0123456789abcdef") != 16) {
+			continue;
+		}
+		if(temporary || std::find(cache.usedFiles.begin(), cache.usedFiles.end(), name) == cache.usedFiles.end()) {
+			std::remove((cache.directory + "/" + name).c_str());
+		}
+	}
+
+	closedir(directory);
+}
+
+GLuint buildGLESProgram(const std::string & vertexSource, const std::string & fragmentSource,
+                        GLESProgramCache * cache) {
+
+	u64 key = 0;
+	std::string file;
+	if(cache) {
+		key = hashBytes(cache->driverHash, vertexSource.data(), vertexSource.size());
+		key = hashBytes(key, "", 1);
+		key = hashBytes(key, fragmentSource.data(), fragmentSource.size());
+		file = glesProgramCacheFile(key);
+		cache->usedFiles.push_back(file);
+		if(GLuint program = loadCachedGLESProgram(*cache, file, key)) {
+			cache->loaded++;
+			return program;
+		}
+	}
 
 	GLuint vertex = compileGLESShader(GL_VERTEX_SHADER, vertexSource);
 	if(!vertex) {
@@ -1494,6 +1701,9 @@ GLuint buildGLESProgram(const std::string & vertexSource, const std::string & fr
 	glBindAttribLocation(program, 2, "aTexCoord0");
 	glBindAttribLocation(program, 3, "aTexCoord1");
 	glBindAttribLocation(program, 4, "aTexCoord2");
+	if(cache) {
+		glProgramParameteri(program, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
+	}
 	glLinkProgram(program);
 	glDeleteShader(vertex);
 	glDeleteShader(fragment);
@@ -1508,6 +1718,11 @@ GLuint buildGLESProgram(const std::string & vertexSource, const std::string & fr
 		LogError << "GLES program link failed: " << log;
 		glDeleteProgram(program);
 		return 0;
+	}
+
+	if(cache) {
+		saveCachedGLESProgram(*cache, program, file, key);
+		cache->compiled++;
 	}
 
 	return program;
@@ -1536,7 +1751,7 @@ const char * const glesShaderPrefix300 =
 	"#define ARX_FRAG_COLOR arxFragColor\n";
 
 /*
- * Variants: ARX_STAGES (0, 1 or 3 texture stages), ARX_ALPHA_CUTOUT and ARX_FOG.
+ * Variants: ARX_STAGES (0, 1 or 3 texture stages), ARX_ALPHA_CUTOUT, ARX_FOG and ARX_GAMMA.
  * Nothing in the shaders branches on uniforms, values that only depend on uniforms
  * (MVP matrix, fog plane and scale, texture combiner coefficients) come from the CPU.
  * Linear fog is evaluated per vertex: the fog factor is affine in the vertex position,
@@ -1596,7 +1811,9 @@ precision mediump float;
 out vec4 arxFragColor;
 #endif
 ARX_VARYING_IN mediump vec4 vColor;
-uniform float uGamma;
+#ifdef ARX_GAMMA
+uniform float uInvGamma;
+#endif
 #if ARX_STAGES >= 1
 uniform sampler2D uTexture0;
 uniform vec4 uStageA0;
@@ -1644,7 +1861,10 @@ void main() {
 #ifdef ARX_FOG
     color.rgb = mix(uFogColor, color.rgb, clamp(vFog, 0.0, 1.0));
 #endif
-    color.rgb = clamp(color.rgb * uGamma, 0.0, 1.0);
+#ifdef ARX_GAMMA
+    // Brightness: gamma curve like the desktop window gamma ramp, blacks and whites stay
+    color.rgb = pow(color.rgb, vec3(uInvGamma));
+#endif
     ARX_FRAG_COLOR = color;
 }
 )";
@@ -1693,11 +1913,37 @@ void glesCombinerCoefficients(TextureStage::TextureOp op, float & a, float & b, 
 
 } // namespace
 
+extern "C" {
+
+//! Directory for cached OpenGL ES program binaries, empty or null disables the cache
+__attribute__((used)) __attribute__((visibility("default")))
+void setGLESShaderCacheDir(const char * path) {
+	g_glesProgramCacheDir = (path != nullptr) ? path : "";
+}
+
+}
+
 bool OpenGLRenderer::initializeGLESProgram() {
 
 	shutdownGLESProgram();
 
-	// Compile and link everything up front, never while rendering.
+	// Compile and link everything up front, never while rendering. On the OpenGL ES 3.0
+	// feature level the linked programs are cached on disk when a cache directory is set.
+	GLESProgramCache cacheStorage;
+	GLESProgramCache * cache = nullptr;
+	if(m_glesIsES3 && !m_glesProgramBinaryFormats.empty() && !g_glesProgramCacheDir.empty()) {
+		mkdir(g_glesProgramCacheDir.c_str(), 0700);
+		cacheStorage.directory = g_glesProgramCacheDir;
+		cacheStorage.formats = &m_glesProgramBinaryFormats;
+		u64 driverHash = hashString(14695981039346656037ull, "arx-gles-program-cache");
+		const GLenum strings[] = { GL_VENDOR, GL_RENDERER, GL_VERSION, GL_SHADING_LANGUAGE_VERSION };
+		for(GLenum name : strings) {
+			driverHash = hashString(driverHash, reinterpret_cast<const char *>(glGetString(name)));
+		}
+		cacheStorage.driverHash = driverHash;
+		cache = &cacheStorage;
+	}
+
 	const std::string prefix = g_useGLES2_0 ? glesShaderPrefix100 : glesShaderPrefix300;
 
 	const char * samplerNames[3] = { "uTexture0", "uTexture1", "uTexture2" };
@@ -1718,8 +1964,11 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		if(variant & GLESProgramFog) {
 			defines += "#define ARX_FOG 1\n";
 		}
+		if(variant & GLESProgramGamma) {
+			defines += "#define ARX_GAMMA 1\n";
+		}
 
-		GLuint id = buildGLESProgram(defines + glesVertexShader, defines + glesFragmentShader);
+		GLuint id = buildGLESProgram(defines + glesVertexShader, defines + glesFragmentShader, cache);
 		if(!id) {
 			shutdownGLESProgram();
 			return false;
@@ -1733,7 +1982,7 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		program.uniformFogParams = glGetUniformLocation(id, "uFogParams");
 		program.uniformFogColor = glGetUniformLocation(id, "uFogColor");
 		program.uniformAlphaThreshold = glGetUniformLocation(id, "uAlphaThreshold");
-		program.uniformGamma = glGetUniformLocation(id, "uGamma");
+		program.uniformInvGamma = glGetUniformLocation(id, "uInvGamma");
 		glUseProgram(id);
 		m_glesBoundProgram = id;
 		for(GLint i = 0; i < 3; ++i) {
@@ -1750,7 +1999,8 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	}
 
 	// Copy of the resolved MSAA image into the window surface
-	m_glesCopyProgram = buildGLESProgram(prefix + glesCopyVertexShader, prefix + glesCopyFragmentShader);
+	m_glesCopyProgram = buildGLESProgram(prefix + glesCopyVertexShader, prefix + glesCopyFragmentShader,
+	                                     cache);
 	if(m_glesCopyProgram) {
 		glUseProgram(m_glesCopyProgram);
 		m_glesBoundProgram = m_glesCopyProgram;
@@ -1770,6 +2020,14 @@ bool OpenGLRenderer::initializeGLESProgram() {
 
 	glUseProgram(0);
 	m_glesBoundProgram = 0;
+
+	if(cache) {
+		cleanGLESProgramCache(*cache);
+		LogInfo << "GLES program cache: " << cache->loaded << " loaded, " << cache->compiled
+		        << " compiled (" << cache->directory << ")";
+	} else if(m_glesIsES3 && !g_glesProgramCacheDir.empty()) {
+		LogInfo << "GLES program cache disabled: the driver has no program binary formats";
+	}
 
 	return true;
 }
@@ -1822,6 +2080,9 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	}
 	if(m_state.getFog()) {
 		variant |= GLESProgramFog;
+	}
+	if(std::abs(m_glesGamma - 1.f) > 0.001f) {
+		variant |= GLESProgramGamma;
 	}
 
 	GLESProgram & program = m_glesPrograms[variant];
@@ -1891,9 +2152,12 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		program.alphaThreshold = m_glesAlphaThreshold;
 	}
 
-	if(program.uniformGamma >= 0 && (!cacheValid || program.gamma != m_glesGamma)) {
-		glUniform1f(program.uniformGamma, m_glesGamma);
-		program.gamma = m_glesGamma;
+	if(program.uniformInvGamma >= 0) {
+		const float invGamma = 1.f / m_glesGamma;
+		if(!cacheValid || program.invGamma != invGamma) {
+			glUniform1f(program.uniformInvGamma, invGamma);
+			program.invGamma = invGamma;
+		}
 	}
 
 	const size_t stageCount = size_t(glesStageCounts[bucket]);
