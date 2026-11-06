@@ -86,7 +86,8 @@ public:
 	
 	void drawIndexed(Primitive primitive, const TexturedVertex * vertices, size_t nvertices,
 	                 unsigned short * indices, size_t nindices) override;
-	void drawIndexedElements(Primitive primitive, const unsigned short * indices, size_t nindices);
+	void drawIndexedElements(Primitive primitive, const unsigned short * indices, size_t nindices,
+	                         size_t baseVertex = 0, size_t vertexCount = 0);
 	
 	bool getSnapshot(Image & image) override;
 	bool getSnapshot(Image & image, size_t width, size_t height) override;
@@ -118,7 +119,14 @@ public:
 	bool hasBufferStorage() const { return m_hasBufferStorage; }
 	bool hasBufferUsageStream() const { return m_hasBufferUsageStream; }
 	bool hasDrawRangeElements() const { return m_hasDrawRangeElements; }
-	bool hasDrawElementsBaseVertex() const { return m_hasDrawElementsBaseVertex; }
+	bool hasDrawElementsBaseVertex() const {
+#ifdef ANDROID
+		return m_hasDrawElementsBaseVertex
+		       && (glDrawElementsBaseVertexOES != nullptr || glDrawElementsBaseVertexEXT != nullptr);
+#else
+		return m_hasDrawElementsBaseVertex;
+#endif
+	}
 	bool hasClearDepthf() const { return m_hasClearDepthf; }
 	bool hasVertexFogCoordinate() const { return m_hasVertexFogCoordinate; }
 	bool hasSampleShading() const { return m_hasSampleShading; }
