@@ -1003,9 +1003,21 @@ void OpenGLRenderer::flushState() {
 			else glDisable(GL_CULL_FACE);
 		}
 		if(m_glstate.getBlendSrc() != m_state.getBlendSrc()
-		   || m_glstate.getBlendDst() != m_state.getBlendDst()) {
-			GLenum src = arxToGlBlendFactor[m_state.getBlendSrc()];
-			GLenum dst = arxToGlBlendFactor[m_state.getBlendDst()];
+		   || m_glstate.getBlendDst() != m_state.getBlendDst()
+		   || m_glstate.getAlphaCutout() != m_state.getAlphaCutout()) {
+			BlendingFactor srcFactor = m_state.getBlendSrc();
+			BlendingFactor dstFactor = m_state.getBlendDst();
+			m_glesAlphaThreshold = 0.5f;
+			if(m_state.getAlphaCutout()) {
+				if(srcFactor == BlendOne && dstFactor == BlendOne) {
+					srcFactor = BlendSrcAlpha;
+					m_glesAlphaThreshold = 0.f;
+				} else if(srcFactor == BlendSrcAlpha || dstFactor == BlendInvSrcAlpha) {
+					m_glesAlphaThreshold = 0.f;
+				}
+			}
+			GLenum src = arxToGlBlendFactor[srcFactor];
+			GLenum dst = arxToGlBlendFactor[dstFactor];
 			if(m_glblendSrc != src || m_glblendDst != dst) {
 				glBlendFunc(src, dst);
 				m_glblendSrc = src;
@@ -1025,10 +1037,11 @@ void OpenGLRenderer::flushState() {
 		m_glstate = m_state;
 	}
 	m_glesAlphaCutout = m_state.getAlphaCutout();
-	m_glesAlphaThreshold = (m_glesAlphaCutout && m_state.isBlendEnabled()) ? 0.0f : 0.5f;
+	glActiveTexture(GL_TEXTURE0);
 	for(size_t i = 0; i < m_TextureStages.size(); ++i) {
 		GetTextureStage(i)->apply();
 	}
+	glActiveTexture(GL_TEXTURE0);
 #else
 
 	
