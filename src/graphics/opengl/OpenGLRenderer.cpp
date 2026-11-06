@@ -431,12 +431,16 @@ void OpenGLRenderer::reinit() {
 	m_glstate.setBlend(BlendOne, BlendZero);
 	m_glblendSrc = GL_ONE;
 	m_glblendDst = GL_ZERO;
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_SCISSOR_TEST);
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_ALWAYS);
 	glDepthMask(GL_TRUE);
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_ONE, GL_ZERO);
 	glEnable(GL_POLYGON_OFFSET_FILL);
+	glPolygonOffset(0.f, 0.f);
+	glActiveTexture(GL_TEXTURE0);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	GLint texunits = 1;
