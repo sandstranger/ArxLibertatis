@@ -409,7 +409,18 @@ void OpenGLRenderer::reinit() {
 	resetVertexArrayState();
 	maxTextureStage = 0;
 	m_MSAALevel = 0;
-	m_hasMSAA = false;
+	{
+		GLint sampleBuffers = 0;
+		GLint samples = 0;
+		glGetIntegerv(GL_SAMPLE_BUFFERS, &sampleBuffers);
+		if(sampleBuffers > 0) {
+			glGetIntegerv(GL_SAMPLES, &samples);
+			m_MSAALevel = std::max(0, samples);
+		}
+	}
+	m_hasMSAA = m_MSAALevel > 0 && config.video.antialiasing;
+	m_glalphaToCoverage = false;
+	glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
 	m_glstate.setCull(false);
 	m_glstate.setFog(false);
 	m_glstate.setAlphaCutout(false);
@@ -738,7 +749,11 @@ void OpenGLRenderer::SetFogParams(float fogStart, float fogEnd) {
 
 void OpenGLRenderer::SetAntialiasing(bool enable) {
 #ifdef ANDROID
-	ARX_UNUSED(enable);
+	if(m_MSAALevel <= 0 || (enable && !config.video.antialiasing) || enable == m_hasMSAA) {
+		return;
+	}
+	m_hasMSAA = enable;
+	flushState();
 #else
 
 	
@@ -806,9 +821,7 @@ void OpenGLRenderer::setMaxAnisotropy(float value) {
 
 Renderer::AlphaCutoutAntialising OpenGLRenderer::getMaxSupportedAlphaCutoutAntialiasing() const {
 #ifdef ANDROID
-	// The GLES path currently uses shader discard without a multisampled
-	// alpha-to-coverage target, so it must not advertise cutout AA support.
-	return NoAlphaCutoutAA;
+	return m_MSAALevel > 0 ? FuzzyAlphaCutoutAA : NoAlphaCutoutAA;
 #else
 	#ifdef GL_VERSION_4_0
 	if(hasSampleShading()) {
@@ -1028,13 +1041,25 @@ void OpenGLRenderer::flushState() {
 			BlendingFactor srcFactor = m_state.getBlendSrc();
 			BlendingFactor dstFactor = m_state.getBlendDst();
 			m_glesAlphaThreshold = 0.5f;
+			bool useAlphaToCoverage = false;
 			if(m_state.getAlphaCutout()) {
-				if(srcFactor == BlendOne && dstFactor == BlendOne) {
+				if(srcFactor == BlendOne && dstFactor == BlendZero) {
+					useAlphaToCoverage = m_hasMSAA
+					        && config.video.alphaCutoutAntialiasing == int(FuzzyAlphaCutoutAA);
+					if(useAlphaToCoverage) {
+						m_glesAlphaThreshold = 0.f;
+					}
+				} else if(srcFactor == BlendOne && dstFactor == BlendOne) {
 					srcFactor = BlendSrcAlpha;
 					m_glesAlphaThreshold = 0.f;
 				} else if(srcFactor == BlendSrcAlpha || dstFactor == BlendInvSrcAlpha) {
 					m_glesAlphaThreshold = 0.f;
 				}
+			}
+			if(useAlphaToCoverage != m_glalphaToCoverage) {
+				if(useAlphaToCoverage) glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+				else glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+				m_glalphaToCoverage = useAlphaToCoverage;
 			}
 			GLenum src = arxToGlBlendFactor[srcFactor];
 			GLenum dst = arxToGlBlendFactor[dstFactor];
@@ -1055,6 +1080,10 @@ void OpenGLRenderer::flushState() {
 			glPolygonOffset(offset, offset);
 		}
 		m_glstate = m_state;
+	}
+	if(!m_state.getAlphaCutout() && m_glalphaToCoverage) {
+		glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+		m_glalphaToCoverage = false;
 	}
 	m_glesAlphaCutout = m_state.getAlphaCutout();
 	glActiveTexture(GL_TEXTURE0);
