@@ -23,7 +23,7 @@
 #include "graphics/opengl/OpenGLRenderer.h"
 #include "io/log/Logger.h"
 
-GLTextureStage::GLTextureStage(OpenGLRenderer * _renderer, unsigned stage) : TextureStage(stage), renderer(_renderer), tex(nullptr), current(nullptr) {
+GLTextureStage::GLTextureStage(OpenGLRenderer * _renderer, unsigned stage) : TextureStage(stage), renderer(_renderer), tex(nullptr), current(nullptr), lodBias(0.f) {
 	
 	if(mStage == 0) {
 		ops[ColorOp] = OpModulate;
@@ -158,12 +158,11 @@ void GLTextureStage::setAlphaOp(TextureOp op) {
 }
 
 void GLTextureStage::setMipMapLODBias(float bias) {
+	lodBias = bias;
 #ifndef ANDROID
 	if(mStage != 0) glActiveTexture(GL_TEXTURE0 + mStage);
 	glTexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS, bias);
 	if(mStage != 0) glActiveTexture(GL_TEXTURE0);
-#else
-	ARX_UNUSED(bias);
 #endif
 }
 
