@@ -38,6 +38,7 @@
 #if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
 
 #include "arm_neon.h"
+#include "io/log/Logger.h"
 
 #endif
 
