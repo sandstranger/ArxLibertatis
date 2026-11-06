@@ -1214,7 +1214,7 @@ varying mediump vec2 vTexCoord2;
 varying mediump float vFogDistance;
 void main() {
     if(uTransform != 0) {
-        vec4 viewPosition = uView * vec4(aPosition.xyz, 1.0);
+        vec4 viewPosition = uView * aPosition;
         gl_Position = uProjection * viewPosition;
         vFogDistance = max(-viewPosition.z, 0.0);
     } else {
@@ -1266,7 +1266,7 @@ vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
     else if(colorOp >= 2) previous.rgb *= texel.rgb * opScale(colorOp);
     if(alphaOp == 1) previous.a = texel.a;
     else if(alphaOp >= 2) previous.a *= texel.a * opScale(alphaOp);
-    return previous;
+    return clamp(previous, 0.0, 1.0);
 }
 void main() {
     vec4 color = vColor;
@@ -1300,7 +1300,7 @@ out mediump vec2 vTexCoord2;
 out mediump float vFogDistance;
 void main() {
     if(uTransform != 0) {
-        vec4 viewPosition = uView * vec4(aPosition.xyz, 1.0);
+        vec4 viewPosition = uView * aPosition;
         gl_Position = uProjection * viewPosition;
         vFogDistance = max(-viewPosition.z, 0.0);
     } else {
@@ -1354,7 +1354,7 @@ vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
     else if(colorOp >= 2) previous.rgb *= texel.rgb * opScale(colorOp);
     if(alphaOp == 1) previous.a = texel.a;
     else if(alphaOp >= 2) previous.a *= texel.a * opScale(alphaOp);
-    return previous;
+    return clamp(previous, 0.0, 1.0);
 }
 void main() {
     vec4 color = vColor;
