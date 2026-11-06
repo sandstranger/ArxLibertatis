@@ -754,7 +754,8 @@ void OpenGLRenderer::SetFogParams(float fogStart, float fogEnd) {
 
 void OpenGLRenderer::setGamma(float gamma) {
 #ifdef ANDROID
-	m_glesGamma = std::max(0.f, gamma);
+	// SDL's window brightness contract is a normalized [0, 1] multiplier.
+	m_glesGamma = glm::clamp(gamma, 0.f, 1.f);
 #else
 	ARX_UNUSED(gamma);
 #endif
