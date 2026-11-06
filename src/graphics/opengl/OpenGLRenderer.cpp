@@ -115,6 +115,13 @@ void OpenGLRenderer::initialize() {
 	#endif
 	
 	OpenGLInfo gl;
+#ifdef ANDROID
+	// SDL may return a lower compatible context than requested on some devices.
+	// Keep the shader and texture upload paths aligned with the actual context.
+	if(gl.isES() && !gl.is(3, 0)) {
+		g_useGLES2_0 = true;
+	}
+#endif
 	
 	LogInfo << "Using OpenGL " << gl.versionString();
 	CrashHandler::setVariable("OpenGL version", gl.versionString());
