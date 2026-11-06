@@ -41,7 +41,11 @@
 
 #endif
 
+#ifdef ANDROID
 extern bool g_useGLES2_0;
+#else
+static constexpr bool g_useGLES2_0 = false;
+#endif
 
 static std::vector<uint8_t> s_decodeBuffer;
 static std::vector<uint8_t> s_etc2Buffer;
