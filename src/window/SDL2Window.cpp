@@ -369,7 +369,7 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
         // Resolve GLES entry points from the active EGL implementation. This is
         // required when Android routes the context through ANGLE instead of the
         // platform driver's directly linked GLES symbols.
-        if(!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
+        if(!gladLoadGLES2Loader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
             if(lastTry) {
                 LogError << "Could not load OpenGL ES entry points through SDL";
             }
