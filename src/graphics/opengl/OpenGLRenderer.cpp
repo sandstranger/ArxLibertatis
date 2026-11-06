@@ -522,7 +522,7 @@ void OpenGLRenderer::reinit() {
 	glClientActiveTexture(GL_TEXTURE0);
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 	m_currentTransform = GL_UnsetTransform;
-	switchVertexArray(GL_NoArray, 0, 1);
+	switchVertexArray(GL_NoArray, 0, 1, nullptr);
 #endif
 	onRendererInit();
 }
