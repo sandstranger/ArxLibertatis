@@ -2167,8 +2167,11 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	glm::vec4 fogPlane;
 	if(transformed) {
 		mvp = m_projection * m_view;
-		// Distance along the view direction (-z in view space)
-		fogPlane = -glm::vec4(m_view[0][2], m_view[1][2], m_view[2][2], m_view[3][2]);
+		// Fog distance: the view-space depth. Arx uses a left-handed view where visible
+		// points have z > 0 (createProjectionMatrix() in Camera.cpp puts +z into clip w),
+		// the same distance the fixed-function fog of the desktop renderer uses. Taking
+		// -z made every distance negative, so the fog factor was always clamped to 1.
+		fogPlane = glm::vec4(m_view[0][2], m_view[1][2], m_view[2][2], m_view[3][2]);
 	} else {
 		// Pre-transformed vertices: pixel coordinates, the view depth is in w
 		const float width = float(std::max(1, viewport.width()));
