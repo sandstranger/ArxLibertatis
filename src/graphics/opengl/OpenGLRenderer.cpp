@@ -294,10 +294,11 @@ void OpenGLRenderer::initialize() {
 	}
 	
 	if(gl.isES()) {
-		// EXT_map_buffer_range requires OpenGL ES 1.1
-		m_hasMapBufferRange = gl.is(3, 0) || gl.has("GL_EXT_map_buffer_range");
+		// Use the GLES 3.0 core entry point only. GLES 2.0's EXT variant has a
+		// different symbol and remains on the shadow-buffer fallback.
+		m_hasMapBufferRange = gl.is(3, 0) && (glMapBufferRange != nullptr);
 		if(!m_hasMapBufferRange) {
-			LogWarning << "Missing OpenGL extension GL_EXT_map_buffer_range";
+			LogWarning << "GLES map-buffer-range streaming is unavailable";
 		}
 		// OES_mapbuffer requires OpenGL ES 1.1
 		m_hasMapBuffer = gl.has("GL_OES_mapbuffer");
@@ -920,6 +921,11 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	}
 	return createVertexBufferImpl<Vertex>(renderer, capacity, usage, std::string_view());
 #else
+    if(renderer->hasMapBufferRange()) {
+        return std::make_unique<GLESMapRangeVertexBuffer<Vertex>>(renderer, capacity, usage);
+    }
+    // GLES 2.0 does not guarantee buffer mapping. Keep the portable fallback
+    // there, but do not force GLES 3.0 / ANGLE through an extra CPU shadow copy.
     return std::make_unique<GLShadowVertexBuffer<Vertex>>(renderer, capacity, usage);
 #endif
 }
