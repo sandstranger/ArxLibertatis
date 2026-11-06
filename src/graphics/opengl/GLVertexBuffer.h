@@ -193,11 +193,19 @@ public:
 		bindBuffer(m_buffer);
 		
 #ifdef ANDROID
-		// GLES has no base-vertex draw call. Shift attribute base and submit
-		// indices through the renderer's temporary element buffer.
-		const Vertex * baseVertices = reinterpret_cast<const Vertex *>(offset * sizeof(Vertex));
-		setVertexArray<Vertex>(m_renderer, baseVertices, this);
-		m_renderer->drawIndexedElements(primitive, indices, nbindices);
+		if(m_renderer->hasDrawElementsBaseVertex()) {
+			// Keep the VBO attribute base stable and let the OES/EXT draw call
+			// apply the ring-buffer offset. This avoids reprogramming every
+			// vertex attribute when ANGLE exposes base-vertex drawing.
+			setVertexArray<Vertex>(m_renderer, nullptr, this);
+			m_renderer->drawIndexedElements(primitive, indices, nbindices, offset, count);
+		} else {
+			// Portable GLES fallback: shift the attribute base and use the
+			// streaming element buffer for this draw's indices.
+			const Vertex * baseVertices = reinterpret_cast<const Vertex *>(offset * sizeof(Vertex));
+			setVertexArray<Vertex>(m_renderer, baseVertices, this);
+			m_renderer->drawIndexedElements(primitive, indices, nbindices);
+		}
 #else
 		setVertexArray<Vertex>(m_renderer, nullptr, this);
 		GLenum mode = arxToGlPrimitiveType[primitive];
