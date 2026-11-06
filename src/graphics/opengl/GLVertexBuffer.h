@@ -427,9 +427,14 @@ public:
 			initialize();
 		}
 		
+#ifdef ANDROID
+		void * buf = glMapBufferOES(GL_ARRAY_BUFFER, GL_WRITE_ONLY_OES);
+#else
 		void * buf = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
+#endif
 		if(!buf) {
 			LogError << "Could not map vertex buffer!";
+			return nullptr;
 		}
 		
 		return reinterpret_cast<Vertex *>(buf) + offset;
@@ -439,7 +444,11 @@ public:
 		
 		bindBuffer(m_buffer);
 		
+#ifdef ANDROID
+		GLboolean ret = glUnmapBufferOES(GL_ARRAY_BUFFER);
+#else
 		GLboolean ret = glUnmapBuffer(GL_ARRAY_BUFFER);
+#endif
 		if(ret == GL_FALSE) {
 			LogWarning << "Vertex buffer invalidated";
 		}
