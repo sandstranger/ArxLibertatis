@@ -1058,7 +1058,7 @@ void OpenGLRenderer::flushState() {
 	}
 	m_glesAlphaCutout = m_state.getAlphaCutout();
 	glActiveTexture(GL_TEXTURE0);
-	for(size_t i = 0; i < m_TextureStages.size(); ++i) {
+	for(size_t i = 0; i < m_TextureStages.size() && i <= maxTextureStage; ++i) {
 		GetTextureStage(i)->apply();
 	}
 	glActiveTexture(GL_TEXTURE0);
@@ -1506,7 +1506,7 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	if(m_glesUniformAlphaThreshold >= 0) glUniform1f(m_glesUniformAlphaThreshold, m_glesAlphaThreshold);
 	for(size_t i = 0; i < 3; ++i) {
 		GLTextureStage * stage = i < m_TextureStages.size() ? GetTextureStage(i) : nullptr;
-		if(m_glesUniformUseTexture[i] >= 0) glUniform1i(m_glesUniformUseTexture[i], stage && stage->getTexture() && stage->isEnabled() ? 1 : 0);
+		if(m_glesUniformUseTexture[i] >= 0) glUniform1i(m_glesUniformUseTexture[i], stage && i <= maxTextureStage && stage->getTexture() && stage->isEnabled() ? 1 : 0);
 		if(m_glesUniformColorOp[i] >= 0) glUniform1i(m_glesUniformColorOp[i], stage ? GLint(stage->getColorOp()) : GLint(TextureStage::OpDisable));
 		if(m_glesUniformAlphaOp[i] >= 0) glUniform1i(m_glesUniformAlphaOp[i], stage ? GLint(stage->getAlphaOp()) : GLint(TextureStage::OpDisable));
 		if(m_glesUniformLodBias[i] >= 0) glUniform1f(m_glesUniformLodBias[i], stage ? stage->getMipMapLODBias() : 0.f);
