@@ -327,7 +327,13 @@ public:
 
 	//! Set the output brightness multiplier when the platform has no window-level brightness control.
 	virtual void setGamma(float gamma) { (void)gamma; }
-	
+
+	//! Called by the window right before the frame is presented.
+	virtual void endFrame() { }
+
+	//! Called by the window right after the frame has been presented.
+	virtual void beginFrame() { }
+
 	void addListener(Listener * listener);
 	void removeListener(Listener * listener);
 	

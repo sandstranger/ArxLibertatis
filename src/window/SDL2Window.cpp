@@ -1055,11 +1055,21 @@ int SDLCALL SDL2Window::EventFilter(void* userdata, SDL_Event* event){
 void SDL2Window::showFrame() {
 	ARX_PROFILE_FUNC();
 #ifdef ANDROID
-    if (SwappySwapBuffers()){
-        return;
-    }
-#endif    
+	// The renderer finishes its render passes (MSAA resolve copy, attachment
+	// invalidation) before the swap and starts the next frame after it.
+	const bool rendering = m_renderer && m_renderer->isInitialized();
+	if(rendering) {
+		m_renderer->endFrame();
+	}
+	if(!SwappySwapBuffers()) {
+		SDL_GL_SwapWindow(m_window);
+	}
+	if(rendering) {
+		m_renderer->beginFrame();
+	}
+#else
 	SDL_GL_SwapWindow(m_window);
+#endif
 }
 
 void SDL2Window::hide() {

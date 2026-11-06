@@ -337,9 +337,32 @@ void OpenGLRenderer::initialize() {
 			LogWarning << "Missing OpenGL extension GL_OES_mapbuffer";
 		}
 #ifdef ANDROID
-		LogInfo << "GLES vertex upload: "
-		        << (m_hasMapBufferRange ? "unsynchronized glMapBufferRange ring + orphaning"
-		                                : "CPU shadow + buffer upload");
+		LogInfo << "GLES vertex and index upload: "
+		        << (m_hasMapBufferRange ? "unsynchronized glMapBufferRange + orphaning"
+		                                : "client memory streaming");
+
+		m_glesIsES3 = gl.is(3, 0);
+		m_glesDepthFormat = (gl.is(3, 0) || gl.has("GL_OES_depth24")) ? GL_DEPTH_COMPONENT24_OES
+		                                                              : GL_DEPTH_COMPONENT16;
+
+		// Attachment invalidation at the end of render passes
+		m_hasInvalidateFramebuffer = gl.is(3, 0) && glInvalidateFramebuffer;
+		m_hasDiscardFramebuffer = gl.has("GL_EXT_discard_framebuffer") && glDiscardFramebufferEXT;
+
+		// Multisampling resolved in tile memory into a single-sampled texture
+		m_glesMaxMSAASamples = 0;
+		if(gl.has("GL_EXT_multisampled_render_to_texture")
+		   && glFramebufferTexture2DMultisampleEXT && glRenderbufferStorageMultisampleEXT) {
+			GLint maxSamples = 0;
+			glGetIntegerv(GL_MAX_SAMPLES_EXT, &maxSamples);
+			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
+		}
+		LogInfo << "GLES render passes: "
+		        << (m_hasInvalidateFramebuffer ? "glInvalidateFramebuffer"
+		            : m_hasDiscardFramebuffer ? "glDiscardFramebufferEXT" : "no invalidation")
+		        << ", MSAA: "
+		        << (m_glesMaxMSAASamples > 1 ? "GL_EXT_multisampled_render_to_texture"
+		                                     : "not supported");
 #endif
 	} else {
 #ifndef ANDROID       
@@ -450,17 +473,21 @@ void OpenGLRenderer::reinit() {
 	viewport = Rect();
 	m_scissor = Rect();
 	maxTextureStage = 0;
+	// The window surface is never multisampled: MSAA is done in m_glesMSAAFramebuffer,
+	// which beginFrame() creates and binds. A new context starts without any of the
+	// renderer's objects.
 	m_MSAALevel = 0;
-	{
-		GLint sampleBuffers = 0;
-		GLint samples = 0;
-		glGetIntegerv(GL_SAMPLE_BUFFERS, &sampleBuffers);
-		if(sampleBuffers > 0) {
-			glGetIntegerv(GL_SAMPLES, &samples);
-			m_MSAALevel = std::max(0, samples);
-		}
-	}
-	m_hasMSAA = m_MSAALevel > 0 && config.video.antialiasing;
+	m_hasMSAA = false;
+	m_glesMSAAFramebuffer = 0;
+	m_glesMSAAColor = 0;
+	m_glesMSAADepth = 0;
+	m_glesMSAASamples = 0;
+	m_glesMSAASize = Vec2i(0);
+	m_glesMSAAFailed = false;
+	m_glesIndexBuffer = 0;
+	m_glesIndexBufferCapacity = 0;
+	m_glesIndexBufferOffset = 0;
+	m_glesImmediateVertexOffset = 0;
 	m_glalphaToCoverage = false;
 	glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
 	m_glstate.setCull(false);
@@ -500,6 +527,10 @@ void OpenGLRenderer::reinit() {
 		resetVertexArrayState();
 		return;
 	}
+	if(hasMapBufferRange()) {
+		m_glesImmediateVertices = createVertexBufferTL(16 * 1024, Stream);
+	}
+	beginFrame();
 #else
 	m_MSAALevel = 0;
 	{
@@ -570,6 +601,15 @@ void OpenGLRenderer::shutdown() {
 	
 	arx_assert(isInitialized());
 #ifdef ANDROID
+	destroyMultisampleFramebuffer();
+	m_glesImmediateVertices.reset();
+	if(m_glesIndexBuffer) {
+		unbindIndexBuffer(m_glesIndexBuffer);
+		glDeleteBuffers(1, &m_glesIndexBuffer);
+		m_glesIndexBuffer = 0;
+	}
+	m_glesIndexBufferCapacity = 0;
+	m_glesIndexBufferOffset = 0;
 	shutdownGLESProgram();
 #endif
 	
@@ -707,7 +747,25 @@ void OpenGLRenderer::SetScissor(const Rect & rect) {
 }
 
 void OpenGLRenderer::Clear(BufferFlags bufferFlags, Color clearColor, float clearDepth, size_t nrects, Rect * rect) {
-	
+
+#ifdef ANDROID
+	if(!m_glesPassStarted) {
+		if(nrects == 0) {
+			// A full clear before the first draw becomes the load operation of the
+			// render pass: tile memory is initialized, nothing is read from memory.
+			if(bufferFlags & ColorBuffer) {
+				m_glesPassCleared |= GL_COLOR_BUFFER_BIT;
+			}
+			if(bufferFlags & DepthBuffer) {
+				m_glesPassCleared |= GL_DEPTH_BUFFER_BIT;
+			}
+		} else {
+			// Partial clears keep the rest of the attachments: start the pass first.
+			startRenderPass();
+		}
+	}
+#endif
+
 	GLbitfield buffers = 0;
 	
 	if(bufferFlags & ColorBuffer) {
@@ -871,7 +929,7 @@ void OpenGLRenderer::setMaxAnisotropy(float value) {
 
 Renderer::AlphaCutoutAntialising OpenGLRenderer::getMaxSupportedAlphaCutoutAntialiasing() const {
 #ifdef ANDROID
-	return m_MSAALevel > 0 ? FuzzyAlphaCutoutAA : NoAlphaCutoutAA;
+	return m_glesMaxMSAASamples > 1 ? FuzzyAlphaCutoutAA : NoAlphaCutoutAA;
 #else
 	#ifdef GL_VERSION_4_0
 	if(hasSampleShading()) {
@@ -994,20 +1052,35 @@ const GLenum arxToGlPrimitiveType[] = {
 
 void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * vertices, size_t nvertices, unsigned short * indices, size_t nindices) {
 	
-	beforeDraw<TexturedVertex>();
-
 #ifdef ANDROID
+	
 	if(nvertices == 0 || nindices == 0) {
 		return;
 	}
-	// Draw straight from client memory like the desktop renderer: the driver (or
-	// ANGLE) copies the data into its own transient storage. Appending into a GL
-	// buffer with glBufferSubData() instead forces ANGLE to end the render pass
-	// for every draw, which is extremely slow on tiled GPUs such as Mali.
+	
+	if(m_glesImmediateVertices && nvertices <= m_glesImmediateVertices->capacity()) {
+		// Append to a streaming vertex buffer with unsynchronized maps, orphan it on wrap.
+		size_t offset = m_glesImmediateVertexOffset;
+		if(offset + nvertices > m_glesImmediateVertices->capacity()) {
+			offset = 0;
+		}
+		m_glesImmediateVertices->setData(vertices, nvertices, offset, offset ? NoOverwrite : DiscardBuffer);
+		m_glesImmediateVertices->drawIndexed(primitive, nvertices, offset, indices, nindices);
+		m_glesImmediateVertexOffset = offset + nvertices;
+		return;
+	}
+	
+	// No buffer mapping: let the driver copy the vertices from client memory.
+	beforeDraw<TexturedVertex>();
 	bindBuffer(GL_NONE);
 	setVertexArray(this, vertices, vertices);
-	drawIndexedElements(primitive, indices, nindices, 0, nvertices);
+	const void * indexData = streamIndices(indices, nindices);
+	drawIndexedElements(primitive, indexData, nindices, 0, nvertices);
+	
 #else
+	
+	beforeDraw<TexturedVertex>();
+	
 	bindBuffer(GL_NONE);
 	setVertexArray(this, vertices, vertices);
 	if(hasDrawRangeElements()) {
@@ -1015,52 +1088,100 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 	} else {
 		glDrawElements(arxToGlPrimitiveType[primitive], nindices, GL_UNSIGNED_SHORT, indices);
 	}
+	
 #endif
 	
 }
 
-void OpenGLRenderer::drawIndexedElements(Primitive primitive, const unsigned short * indices,
-                                              size_t nindices, size_t baseVertex, size_t vertexCount) {
 #ifdef ANDROID
+
+const void * OpenGLRenderer::streamIndices(const unsigned short * indices, size_t count) {
+	
+	const size_t bytes = count * sizeof(unsigned short);
+	
+	if(!hasMapBufferRange() || bytes == 0) {
+		// Client memory indices require that no element array buffer is bound.
+		bindIndexBuffer(GL_NONE);
+		return indices;
+	}
+	
+	if(!m_glesIndexBuffer) {
+		glGenBuffers(1, &m_glesIndexBuffer);
+	}
+	bindIndexBuffer(m_glesIndexBuffer);
+	
+	// Indices are appended to one buffer. Queued draws may still read everything before
+	// the write position, so only unused space is written, without synchronization.
+	// When the buffer is full it is orphaned with glBufferData(): the driver hands out
+	// new storage and keeps the old one alive for the queued draws.
+	size_t offset = (m_glesIndexBufferOffset + 3) & ~size_t(3);
+	if(offset + bytes > m_glesIndexBufferCapacity) {
+		size_t capacity = std::max(m_glesIndexBufferCapacity, size_t(1024 * 1024));
+		while(capacity < bytes) {
+			capacity *= 2;
+		}
+		m_glesIndexBufferCapacity = capacity;
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(capacity), nullptr, GL_STREAM_DRAW);
+		offset = 0;
+	}
+	
+	void * buffer = mapBufferRange(GL_ELEMENT_ARRAY_BUFFER, offset, bytes,
+	                               GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+	if(!buffer) {
+		LogError << "Could not map index buffer!";
+		bindIndexBuffer(GL_NONE);
+		return indices;
+	}
+	std::memcpy(buffer, indices, bytes);
+	unmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
+	
+	m_glesIndexBufferOffset = offset + bytes;
+	
+	return reinterpret_cast<const void *>(offset);
+}
+
+void OpenGLRenderer::drawIndexedElements(Primitive primitive, const void * indices, size_t nindices,
+                                         size_t baseVertex, size_t vertexCount) {
+	
 	if(nindices == 0) {
 		return;
 	}
 	arx_assert(nindices <= size_t(std::numeric_limits<GLsizei>::max()));
 	arx_assert(baseVertex <= size_t(std::numeric_limits<GLint>::max()));
-
-	// Indices always come from client memory: this renderer never binds an
-	// element array buffer (resetVertexArrayState() unbinds it). Native drivers
-	// and ANGLE stream client indices through their own transient buffers, which
-	// never interrupts the current render pass. Writing them into a shared EBO
-	// with glBufferSubData() made ANGLE end the render pass on every draw.
+	
 	const GLenum mode = arxToGlPrimitiveType[primitive];
 	const GLsizei count = GLsizei(nindices);
-
+	
+	// Passing the vertex range saves the driver from scanning the indices.
+	const bool range = hasDrawRangeElements() && vertexCount > 0;
+	const GLuint end = range ? GLuint(vertexCount - 1) : 0;
+	
 	if(baseVertex != 0) {
 		// Only reached when hasDrawElementsBaseVertex() is true, otherwise
 		// BaseGLVertexBuffer::drawIndexed() moves the attribute pointers instead.
 		arx_assert(hasDrawElementsBaseVertex());
-		if(glDrawElementsBaseVertexOES) {
-			glDrawElementsBaseVertexOES(mode, count, GL_UNSIGNED_SHORT, indices, GLint(baseVertex));
+		const GLint base = GLint(baseVertex);
+		if(range && glDrawRangeElementsBaseVertexOES) {
+			glDrawRangeElementsBaseVertexOES(mode, 0, end, count, GL_UNSIGNED_SHORT, indices, base);
+		} else if(range && glDrawRangeElementsBaseVertexEXT) {
+			glDrawRangeElementsBaseVertexEXT(mode, 0, end, count, GL_UNSIGNED_SHORT, indices, base);
+		} else if(glDrawElementsBaseVertexOES) {
+			glDrawElementsBaseVertexOES(mode, count, GL_UNSIGNED_SHORT, indices, base);
 		} else {
-			glDrawElementsBaseVertexEXT(mode, count, GL_UNSIGNED_SHORT, indices, GLint(baseVertex));
+			glDrawElementsBaseVertexEXT(mode, count, GL_UNSIGNED_SHORT, indices, base);
 		}
 		return;
 	}
-
-	if(hasDrawRangeElements() && vertexCount > 0) {
-		glDrawRangeElements(mode, 0, GLuint(vertexCount - 1), count, GL_UNSIGNED_SHORT, indices);
+	
+	if(range) {
+		glDrawRangeElements(mode, 0, end, count, GL_UNSIGNED_SHORT, indices);
 	} else {
 		glDrawElements(mode, count, GL_UNSIGNED_SHORT, indices);
 	}
-#else
-	ARX_UNUSED(primitive);
-	ARX_UNUSED(indices);
-	ARX_UNUSED(nindices);
-	ARX_UNUSED(baseVertex);
-	ARX_UNUSED(vertexCount);
-#endif
+	
 }
+
+#endif // ANDROID
 
 bool OpenGLRenderer::getSnapshot(Image & image) {
 	
@@ -1181,11 +1302,10 @@ void OpenGLRenderer::flushState() {
 		m_glstate = m_state;
 	}
 	m_glesAlphaCutout = m_state.getAlphaCutout();
-	glActiveTexture(GL_TEXTURE0);
+	// GL_TEXTURE0 is always the active unit outside of GLTextureStage::apply().
 	for(size_t i = 0; i < m_TextureStages.size() && i <= maxTextureStage; ++i) {
 		GetTextureStage(i)->apply();
 	}
-	glActiveTexture(GL_TEXTURE0);
 #else
 
 	
@@ -1316,6 +1436,15 @@ void OpenGLRenderer::flushState() {
 #ifdef ANDROID
 namespace {
 
+//! MSAA sample count, resolved in tile memory by GL_EXT_multisampled_render_to_texture
+const GLsizei glesMSAASamples = 2;
+
+//! Texture unit for copying the resolved MSAA image, above the renderer's texture stages
+const GLuint glesCopyTextureUnit = 3;
+
+//! Number of texture stages compiled into each stage bucket of the shader variants
+const int glesStageCounts[3] = { 0, 1, 3 };
+
 GLuint compileGLESShader(GLenum type, const std::string & source) {
 	GLuint shader = glCreateShader(type);
 	if(!shader) {
@@ -1339,10 +1468,23 @@ GLuint compileGLESShader(GLenum type, const std::string & source) {
 	return shader;
 }
 
-GLuint linkGLESProgram(GLuint vertex, GLuint fragment) {
+GLuint buildGLESProgram(const std::string & vertexSource, const std::string & fragmentSource) {
+
+	GLuint vertex = compileGLESShader(GL_VERTEX_SHADER, vertexSource);
+	if(!vertex) {
+		return 0;
+	}
+	GLuint fragment = compileGLESShader(GL_FRAGMENT_SHADER, fragmentSource);
+	if(!fragment) {
+		glDeleteShader(vertex);
+		return 0;
+	}
+
 	GLuint program = glCreateProgram();
 	if(!program) {
 		LogError << "Could not create GLES shader program";
+		glDeleteShader(vertex);
+		glDeleteShader(fragment);
 		return 0;
 	}
 	glAttachShader(program, vertex);
@@ -1353,6 +1495,9 @@ GLuint linkGLESProgram(GLuint vertex, GLuint fragment) {
 	glBindAttribLocation(program, 3, "aTexCoord1");
 	glBindAttribLocation(program, 4, "aTexCoord2");
 	glLinkProgram(program);
+	glDeleteShader(vertex);
+	glDeleteShader(fragment);
+
 	GLint linked = GL_FALSE;
 	glGetProgramiv(program, GL_LINK_STATUS, &linked);
 	if(linked != GL_TRUE) {
@@ -1364,6 +1509,7 @@ GLuint linkGLESProgram(GLuint vertex, GLuint fragment) {
 		glDeleteProgram(program);
 		return 0;
 	}
+
 	return program;
 }
 
@@ -1389,108 +1535,161 @@ const char * const glesShaderPrefix300 =
 	"#define ARX_TEXTURE texture\n"
 	"#define ARX_FRAG_COLOR arxFragColor\n";
 
+/*
+ * Variants: ARX_STAGES (0, 1 or 3 texture stages), ARX_ALPHA_CUTOUT and ARX_FOG.
+ * Nothing in the shaders branches on uniforms, values that only depend on uniforms
+ * (MVP matrix, fog plane and scale, texture combiner coefficients) come from the CPU.
+ * Linear fog is evaluated per vertex: the fog factor is affine in the vertex position,
+ * so interpolating it is exact and only the clamp is left to the fragment shader.
+ */
 const char * const glesVertexShader = R"(
 precision highp float;
-ARX_VS_IN vec4 aPosition;
-ARX_VS_IN vec4 aColor;
-ARX_VS_IN vec2 aTexCoord0;
-ARX_VS_IN vec2 aTexCoord1;
-ARX_VS_IN vec2 aTexCoord2;
-uniform mat4 uProjection;
-uniform mat4 uView;
-uniform int uTransform;
+ARX_VS_IN highp vec4 aPosition;
+ARX_VS_IN mediump vec4 aColor;
+uniform highp mat4 uMVP;
 ARX_VARYING_OUT mediump vec4 vColor;
-ARX_VARYING_OUT mediump vec2 vTexCoord0;
-ARX_VARYING_OUT mediump vec2 vTexCoord1;
-ARX_VARYING_OUT mediump vec2 vTexCoord2;
-ARX_VARYING_OUT mediump float vFogDistance;
+#if ARX_STAGES >= 1
+ARX_VS_IN highp vec2 aTexCoord0;
+ARX_VARYING_OUT highp vec2 vTexCoord0;
+#endif
+#if ARX_STAGES >= 3
+ARX_VS_IN highp vec2 aTexCoord1;
+ARX_VS_IN highp vec2 aTexCoord2;
+ARX_VARYING_OUT highp vec2 vTexCoord1;
+ARX_VARYING_OUT highp vec2 vTexCoord2;
+#endif
+#ifdef ARX_FOG
+uniform highp vec4 uFogPlane;
+uniform highp vec2 uFogParams;
+ARX_VARYING_OUT mediump float vFog;
+#endif
 void main() {
-    if(uTransform != 0) {
-        vec4 viewPosition = uView * aPosition;
-        gl_Position = uProjection * viewPosition;
-        vFogDistance = max(-viewPosition.z, 0.0);
-    } else {
-        gl_Position = uProjection * aPosition;
-        vFogDistance = abs(aPosition.w);
-    }
+    gl_Position = uMVP * aPosition;
     vColor = aColor;
+#if ARX_STAGES >= 1
     vTexCoord0 = aTexCoord0;
+#endif
+#if ARX_STAGES >= 3
     vTexCoord1 = aTexCoord1;
     vTexCoord2 = aTexCoord2;
+#endif
+#ifdef ARX_FOG
+    vFog = (uFogParams.x - dot(uFogPlane, aPosition)) * uFogParams.y;
+#endif
 }
 )";
 
 /*
- * ARX_ALPHA_CUTOUT and ARX_FOG select the fragment shader variant. Keeping
- * "discard" out of the programs used for opaque geometry matters on Mali:
- * a shader that may discard disables forward pixel kill and early depth
- * updates for every draw that uses it.
+ * Texture stages implement the fixed-function combiner as
+ *   result = clamp(previous * A + texel * B + previous * texel * C, 0, 1)
+ * with per-stage coefficients (rgb for the color operation, a for the alpha operation).
+ * Color math runs in mediump (FP16 on Mali), texture coordinates stay highp.
  */
 const char * const glesFragmentShader = R"(
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
 precision mediump float;
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+#define ARX_HIGHP highp
+#else
+#define ARX_HIGHP mediump
 #endif
 #ifdef ARX_GLSL_300
 out vec4 arxFragColor;
 #endif
+ARX_VARYING_IN mediump vec4 vColor;
+uniform float uGamma;
+#if ARX_STAGES >= 1
 uniform sampler2D uTexture0;
+uniform vec4 uStageA0;
+uniform vec4 uStageB0;
+uniform vec4 uStageC0;
+uniform float uLodBias0;
+ARX_VARYING_IN ARX_HIGHP vec2 vTexCoord0;
+#endif
+#if ARX_STAGES >= 3
 uniform sampler2D uTexture1;
 uniform sampler2D uTexture2;
-uniform float uLodBias0;
+uniform vec4 uStageA1;
+uniform vec4 uStageB1;
+uniform vec4 uStageC1;
+uniform vec4 uStageA2;
+uniform vec4 uStageB2;
+uniform vec4 uStageC2;
 uniform float uLodBias1;
 uniform float uLodBias2;
-uniform int uUseTexture0;
-uniform int uUseTexture1;
-uniform int uUseTexture2;
-uniform int uColorOp0;
-uniform int uColorOp1;
-uniform int uColorOp2;
-uniform int uAlphaOp0;
-uniform int uAlphaOp1;
-uniform int uAlphaOp2;
+ARX_VARYING_IN ARX_HIGHP vec2 vTexCoord1;
+ARX_VARYING_IN ARX_HIGHP vec2 vTexCoord2;
+#endif
 #ifdef ARX_ALPHA_CUTOUT
 uniform float uAlphaThreshold;
 #endif
 #ifdef ARX_FOG
-uniform vec4 uFogColor;
-uniform vec2 uFogRange;
-ARX_VARYING_IN mediump float vFogDistance;
+uniform vec3 uFogColor;
+ARX_VARYING_IN mediump float vFog;
 #endif
-uniform float uGamma;
-ARX_VARYING_IN mediump vec4 vColor;
-ARX_VARYING_IN mediump vec2 vTexCoord0;
-ARX_VARYING_IN mediump vec2 vTexCoord1;
-ARX_VARYING_IN mediump vec2 vTexCoord2;
-float opScale(int op) {
-    if(op == 3) return 2.0;
-    if(op == 4) return 4.0;
-    return 1.0;
-}
-vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
-    if(colorOp == 1) previous.rgb = texel.rgb;
-    else if(colorOp >= 2) previous.rgb *= texel.rgb * opScale(colorOp);
-    if(alphaOp == 1) previous.a = texel.a;
-    else if(alphaOp >= 2) previous.a *= texel.a * opScale(alphaOp);
-    return clamp(previous, 0.0, 1.0);
-}
 void main() {
     vec4 color = vColor;
-    if(uUseTexture0 != 0) color = applyStage(color, ARX_TEXTURE(uTexture0, vTexCoord0, uLodBias0), uColorOp0, uAlphaOp0);
-    if(uUseTexture1 != 0) color = applyStage(color, ARX_TEXTURE(uTexture1, vTexCoord1, uLodBias1), uColorOp1, uAlphaOp1);
-    if(uUseTexture2 != 0) color = applyStage(color, ARX_TEXTURE(uTexture2, vTexCoord2, uLodBias2), uColorOp2, uAlphaOp2);
+#if ARX_STAGES >= 1
+    vec4 texel0 = ARX_TEXTURE(uTexture0, vTexCoord0, uLodBias0);
+    color = clamp(color * uStageA0 + texel0 * uStageB0 + color * texel0 * uStageC0, 0.0, 1.0);
+#endif
+#if ARX_STAGES >= 3
+    vec4 texel1 = ARX_TEXTURE(uTexture1, vTexCoord1, uLodBias1);
+    color = clamp(color * uStageA1 + texel1 * uStageB1 + color * texel1 * uStageC1, 0.0, 1.0);
+    vec4 texel2 = ARX_TEXTURE(uTexture2, vTexCoord2, uLodBias2);
+    color = clamp(color * uStageA2 + texel2 * uStageB2 + color * texel2 * uStageC2, 0.0, 1.0);
+#endif
 #ifdef ARX_ALPHA_CUTOUT
     if(color.a <= uAlphaThreshold) discard;
 #endif
 #ifdef ARX_FOG
-    float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
-    color.rgb = mix(uFogColor.rgb, color.rgb, fog);
+    color.rgb = mix(uFogColor, color.rgb, clamp(vFog, 0.0, 1.0));
 #endif
     color.rgb = clamp(color.rgb * uGamma, 0.0, 1.0);
     ARX_FRAG_COLOR = color;
 }
 )";
+
+//! Full-screen copy of the resolved MSAA texture into the window surface
+const char * const glesCopyVertexShader = R"(
+precision highp float;
+ARX_VS_IN highp vec2 aPosition;
+ARX_VARYING_OUT highp vec2 vTexCoord;
+void main() {
+    vTexCoord = aPosition * 0.5 + 0.5;
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+)";
+
+const char * const glesCopyFragmentShader = R"(
+precision mediump float;
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+#define ARX_HIGHP highp
+#else
+#define ARX_HIGHP mediump
+#endif
+#ifdef ARX_GLSL_300
+out vec4 arxFragColor;
+#endif
+uniform sampler2D uTexture;
+ARX_VARYING_IN ARX_HIGHP vec2 vTexCoord;
+void main() {
+    ARX_FRAG_COLOR = ARX_TEXTURE(uTexture, vTexCoord);
+}
+)";
+
+//! Combiner coefficients (see glesFragmentShader) for one texture operation
+void glesCombinerCoefficients(TextureStage::TextureOp op, float & a, float & b, float & c) {
+	a = 0.f;
+	b = 0.f;
+	c = 0.f;
+	switch(op) {
+		case TextureStage::OpDisable:    a = 1.f; break;
+		case TextureStage::OpSelectArg1: b = 1.f; break;
+		case TextureStage::OpModulate:   c = 1.f; break;
+		case TextureStage::OpModulate2X: c = 2.f; break;
+		case TextureStage::OpModulate4X: c = 4.f; break;
+	}
+}
 
 } // namespace
 
@@ -1498,51 +1697,41 @@ bool OpenGLRenderer::initializeGLESProgram() {
 
 	shutdownGLESProgram();
 
+	// Compile and link everything up front, never while rendering.
 	const std::string prefix = g_useGLES2_0 ? glesShaderPrefix100 : glesShaderPrefix300;
 
-	GLuint vertex = compileGLESShader(GL_VERTEX_SHADER, prefix + glesVertexShader);
-	if(!vertex) {
-		return false;
-	}
-
 	const char * samplerNames[3] = { "uTexture0", "uTexture1", "uTexture2" };
-	const char * useNames[3] = { "uUseTexture0", "uUseTexture1", "uUseTexture2" };
-	const char * colorNames[3] = { "uColorOp0", "uColorOp1", "uColorOp2" };
-	const char * alphaNames[3] = { "uAlphaOp0", "uAlphaOp1", "uAlphaOp2" };
+	const char * stageANames[3] = { "uStageA0", "uStageA1", "uStageA2" };
+	const char * stageBNames[3] = { "uStageB0", "uStageB1", "uStageB2" };
+	const char * stageCNames[3] = { "uStageC0", "uStageC1", "uStageC2" };
 	const char * lodBiasNames[3] = { "uLodBias0", "uLodBias1", "uLodBias2" };
 
-	bool success = true;
 	for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
 
-		std::string source = prefix;
+		std::string defines = prefix;
+		defines += "#define ARX_STAGES ";
+		defines += std::to_string(glesStageCounts[variant >> GLESProgramStageBucketShift]);
+		defines += "\n";
 		if(variant & GLESProgramAlphaCutout) {
-			source += "#define ARX_ALPHA_CUTOUT 1\n";
+			defines += "#define ARX_ALPHA_CUTOUT 1\n";
 		}
 		if(variant & GLESProgramFog) {
-			source += "#define ARX_FOG 1\n";
+			defines += "#define ARX_FOG 1\n";
 		}
-		source += glesFragmentShader;
 
-		GLuint fragment = compileGLESShader(GL_FRAGMENT_SHADER, source);
-		if(!fragment) {
-			success = false;
-			break;
-		}
-		GLuint id = linkGLESProgram(vertex, fragment);
-		glDeleteShader(fragment);
+		GLuint id = buildGLESProgram(defines + glesVertexShader, defines + glesFragmentShader);
 		if(!id) {
-			success = false;
-			break;
+			shutdownGLESProgram();
+			return false;
 		}
 
 		GLESProgram & program = m_glesPrograms[variant];
+		program = GLESProgram();
 		program.id = id;
-		program.cacheValid = false;
-		program.uniformProjection = glGetUniformLocation(id, "uProjection");
-		program.uniformView = glGetUniformLocation(id, "uView");
-		program.uniformTransform = glGetUniformLocation(id, "uTransform");
+		program.uniformMVP = glGetUniformLocation(id, "uMVP");
+		program.uniformFogPlane = glGetUniformLocation(id, "uFogPlane");
+		program.uniformFogParams = glGetUniformLocation(id, "uFogParams");
 		program.uniformFogColor = glGetUniformLocation(id, "uFogColor");
-		program.uniformFogRange = glGetUniformLocation(id, "uFogRange");
 		program.uniformAlphaThreshold = glGetUniformLocation(id, "uAlphaThreshold");
 		program.uniformGamma = glGetUniformLocation(id, "uGamma");
 		glUseProgram(id);
@@ -1552,19 +1741,31 @@ bool OpenGLRenderer::initializeGLESProgram() {
 			if(sampler >= 0) {
 				glUniform1i(sampler, i);
 			}
-			program.uniformUseTexture[i] = glGetUniformLocation(id, useNames[i]);
-			program.uniformColorOp[i] = glGetUniformLocation(id, colorNames[i]);
-			program.uniformAlphaOp[i] = glGetUniformLocation(id, alphaNames[i]);
+			program.uniformStageA[i] = glGetUniformLocation(id, stageANames[i]);
+			program.uniformStageB[i] = glGetUniformLocation(id, stageBNames[i]);
+			program.uniformStageC[i] = glGetUniformLocation(id, stageCNames[i]);
 			program.uniformLodBias[i] = glGetUniformLocation(id, lodBiasNames[i]);
 		}
 
 	}
 
-	glDeleteShader(vertex);
-
-	if(!success) {
-		shutdownGLESProgram();
-		return false;
+	// Copy of the resolved MSAA image into the window surface
+	m_glesCopyProgram = buildGLESProgram(prefix + glesCopyVertexShader, prefix + glesCopyFragmentShader);
+	if(m_glesCopyProgram) {
+		glUseProgram(m_glesCopyProgram);
+		m_glesBoundProgram = m_glesCopyProgram;
+		GLint sampler = glGetUniformLocation(m_glesCopyProgram, "uTexture");
+		if(sampler >= 0) {
+			glUniform1i(sampler, GLint(glesCopyTextureUnit));
+		}
+		// One triangle covering the whole viewport
+		const GLfloat triangle[] = { -1.f, -1.f, 3.f, -1.f, -1.f, 3.f };
+		glGenBuffers(1, &m_glesCopyVertices);
+		bindBuffer(m_glesCopyVertices);
+		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(triangle)), triangle, GL_STATIC_DRAW);
+		bindBuffer(GL_NONE);
+	} else {
+		LogWarning << "MSAA is not available: could not build the GLES copy program";
 	}
 
 	glUseProgram(0);
@@ -1587,11 +1788,35 @@ void OpenGLRenderer::shutdownGLESProgram() {
 		program = GLESProgram();
 	}
 
+	if(m_glesCopyProgram) {
+		glDeleteProgram(m_glesCopyProgram);
+		m_glesCopyProgram = 0;
+	}
+
+	if(m_glesCopyVertices) {
+		unbindBuffer(m_glesCopyVertices);
+		glDeleteBuffers(1, &m_glesCopyVertices);
+		m_glesCopyVertices = 0;
+	}
+
 }
 
 void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 
-	size_t variant = 0;
+	// Texture stages that contribute to this draw
+	GLTextureStage * stages[3] = { nullptr, nullptr, nullptr };
+	bool active[3] = { false, false, false };
+	size_t usedStages = 0;
+	for(size_t i = 0; i < 3 && i < m_TextureStages.size() && i <= maxTextureStage; ++i) {
+		stages[i] = GetTextureStage(i);
+		active[i] = stages[i]->getTexture() && stages[i]->isEnabled();
+		if(active[i]) {
+			usedStages = i + 1;
+		}
+	}
+
+	const size_t bucket = (usedStages == 0) ? 0 : (usedStages == 1) ? 1 : 2;
+	size_t variant = bucket << GLESProgramStageBucketShift;
 	if(m_glesAlphaCutout) {
 		variant |= GLESProgramAlphaCutout;
 	}
@@ -1609,57 +1834,55 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		m_glesBoundProgram = program.id;
 	}
 
-	glm::mat4 projection = m_projection;
-	glm::mat4 view = m_view;
-	if(!transformed) {
-		const float width = float(std::max(1, viewport.width()));
-		const float height = float(std::max(1, viewport.height()));
-		projection = glm::mat4(1.f);
-		projection = glm::translate(projection, glm::vec3(-1.f, 1.f, 0.f));
-		projection = glm::scale(projection, glm::vec3(2.f / width, -2.f / height, 1.f));
-		projection = glm::translate(projection, glm::vec3(0.5f, 0.5f, 0.f));
-		view = glm::mat4(1.f);
-	}
-
 	const bool cacheValid = program.cacheValid;
 
-	if(program.uniformProjection >= 0
-	   && (!cacheValid || std::memcmp(glm::value_ptr(program.projection), glm::value_ptr(projection),
-	                                  sizeof(glm::mat4)) != 0)) {
-		glUniformMatrix4fv(program.uniformProjection, 1, GL_FALSE, glm::value_ptr(projection));
-		program.projection = projection;
+	glm::mat4 mvp;
+	glm::vec4 fogPlane;
+	if(transformed) {
+		mvp = m_projection * m_view;
+		// Distance along the view direction (-z in view space)
+		fogPlane = -glm::vec4(m_view[0][2], m_view[1][2], m_view[2][2], m_view[3][2]);
+	} else {
+		// Pre-transformed vertices: pixel coordinates, the view depth is in w
+		const float width = float(std::max(1, viewport.width()));
+		const float height = float(std::max(1, viewport.height()));
+		mvp = glm::mat4(1.f);
+		mvp = glm::translate(mvp, glm::vec3(-1.f, 1.f, 0.f));
+		mvp = glm::scale(mvp, glm::vec3(2.f / width, -2.f / height, 1.f));
+		mvp = glm::translate(mvp, glm::vec3(0.5f, 0.5f, 0.f));
+		fogPlane = glm::vec4(0.f, 0.f, 0.f, 1.f);
 	}
 
-	if(program.uniformView >= 0
-	   && (!cacheValid || std::memcmp(glm::value_ptr(program.view), glm::value_ptr(view),
-	                                  sizeof(glm::mat4)) != 0)) {
-		glUniformMatrix4fv(program.uniformView, 1, GL_FALSE, glm::value_ptr(view));
-		program.view = view;
+	if(program.uniformMVP >= 0
+	   && (!cacheValid || std::memcmp(glm::value_ptr(program.mvp), glm::value_ptr(mvp), sizeof(glm::mat4)) != 0)) {
+		glUniformMatrix4fv(program.uniformMVP, 1, GL_FALSE, glm::value_ptr(mvp));
+		program.mvp = mvp;
 	}
 
-	const GLint transform = transformed ? 1 : 0;
-	if(program.uniformTransform >= 0 && (!cacheValid || program.transform != transform)) {
-		glUniform1i(program.uniformTransform, transform);
-		program.transform = transform;
+	if(program.uniformFogPlane >= 0 && (!cacheValid || program.fogPlane != fogPlane)) {
+		glUniform4f(program.uniformFogPlane, fogPlane.x, fogPlane.y, fogPlane.z, fogPlane.w);
+		program.fogPlane = fogPlane;
+	}
+
+	if(program.uniformFogParams >= 0) {
+		const float fogEnd = m_glesFogEnd;
+		const float fogScale = 1.f / (m_glesFogEnd - m_glesFogStart);
+		if(!cacheValid || program.fogParams[0] != fogEnd || program.fogParams[1] != fogScale) {
+			glUniform2f(program.uniformFogParams, fogEnd, fogScale);
+			program.fogParams[0] = fogEnd;
+			program.fogParams[1] = fogScale;
+		}
 	}
 
 	if(program.uniformFogColor >= 0) {
 		Color4f fog(m_glesFogColor);
 		if(!cacheValid || program.fogColor[0] != fog.r || program.fogColor[1] != fog.g
-		   || program.fogColor[2] != fog.b || program.fogColor[3] != fog.a) {
-			glUniform4f(program.uniformFogColor, fog.r, fog.g, fog.b, fog.a);
+		   || program.fogColor[2] != fog.b) {
+			glUniform3f(program.uniformFogColor, fog.r, fog.g, fog.b);
 			program.fogColor[0] = fog.r;
 			program.fogColor[1] = fog.g;
 			program.fogColor[2] = fog.b;
-			program.fogColor[3] = fog.a;
 		}
-	}
-
-	if(program.uniformFogRange >= 0
-	   && (!cacheValid || program.fogStart != m_glesFogStart || program.fogEnd != m_glesFogEnd)) {
-		glUniform2f(program.uniformFogRange, m_glesFogStart, m_glesFogEnd);
-		program.fogStart = m_glesFogStart;
-		program.fogEnd = m_glesFogEnd;
 	}
 
 	if(program.uniformAlphaThreshold >= 0
@@ -1673,31 +1896,277 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		program.gamma = m_glesGamma;
 	}
 
-	for(size_t i = 0; i < 3; ++i) {
-		GLTextureStage * stage = i < m_TextureStages.size() ? GetTextureStage(i) : nullptr;
-		const GLint useTexture = stage && i <= maxTextureStage && stage->getTexture() && stage->isEnabled() ? 1 : 0;
-		const GLint colorOp = stage ? GLint(stage->getColorOp()) : GLint(TextureStage::OpDisable);
-		const GLint alphaOp = stage ? GLint(stage->getAlphaOp()) : GLint(TextureStage::OpDisable);
-		const float lodBias = stage ? stage->getMipMapLODBias() : 0.f;
-		if(program.uniformUseTexture[i] >= 0 && (!cacheValid || program.useTexture[i] != useTexture)) {
-			glUniform1i(program.uniformUseTexture[i], useTexture);
-			program.useTexture[i] = useTexture;
+	const size_t stageCount = size_t(glesStageCounts[bucket]);
+	for(size_t i = 0; i < stageCount; ++i) {
+
+		float a[4] = { 1.f, 1.f, 1.f, 1.f };
+		float b[4] = { 0.f, 0.f, 0.f, 0.f };
+		float c[4] = { 0.f, 0.f, 0.f, 0.f };
+		if(active[i]) {
+			glesCombinerCoefficients(stages[i]->getColorOp(), a[0], b[0], c[0]);
+			a[1] = a[2] = a[0];
+			b[1] = b[2] = b[0];
+			c[1] = c[2] = c[0];
+			glesCombinerCoefficients(stages[i]->getAlphaOp(), a[3], b[3], c[3]);
 		}
-		if(program.uniformColorOp[i] >= 0 && (!cacheValid || program.colorOp[i] != colorOp)) {
-			glUniform1i(program.uniformColorOp[i], colorOp);
-			program.colorOp[i] = colorOp;
+
+		if(program.uniformStageA[i] >= 0 && (!cacheValid || std::memcmp(program.stageA[i], a, sizeof(a)) != 0)) {
+			glUniform4fv(program.uniformStageA[i], 1, a);
+			std::memcpy(program.stageA[i], a, sizeof(a));
 		}
-		if(program.uniformAlphaOp[i] >= 0 && (!cacheValid || program.alphaOp[i] != alphaOp)) {
-			glUniform1i(program.uniformAlphaOp[i], alphaOp);
-			program.alphaOp[i] = alphaOp;
+		if(program.uniformStageB[i] >= 0 && (!cacheValid || std::memcmp(program.stageB[i], b, sizeof(b)) != 0)) {
+			glUniform4fv(program.uniformStageB[i], 1, b);
+			std::memcpy(program.stageB[i], b, sizeof(b));
 		}
+		if(program.uniformStageC[i] >= 0 && (!cacheValid || std::memcmp(program.stageC[i], c, sizeof(c)) != 0)) {
+			glUniform4fv(program.uniformStageC[i], 1, c);
+			std::memcpy(program.stageC[i], c, sizeof(c));
+		}
+
+		const float lodBias = stages[i] ? stages[i]->getMipMapLODBias() : 0.f;
 		if(program.uniformLodBias[i] >= 0 && (!cacheValid || program.lodBias[i] != lodBias)) {
 			glUniform1f(program.uniformLodBias[i], lodBias);
 			program.lodBias[i] = lodBias;
 		}
+
 	}
 
 	program.cacheValid = true;
 }
+
+/*
+ * Render passes on tile-based GPUs
+ *
+ * A frame renders into a single framebuffer: the MSAA framebuffer when antialiasing is
+ * enabled, the window surface otherwise.
+ *  - Every attachment is cleared before the first draw (Clear() calls of the game,
+ *    completed by startRenderPass()), so nothing is ever loaded into tile memory.
+ *  - Depth is invalidated before the pass ends, so it never leaves tile memory.
+ *  - Multisampled color is resolved into a single-sampled texture as part of the tile
+ *    write-back (GL_EXT_multisampled_render_to_texture), the extra samples never reach
+ *    memory. One full-screen copy then puts the image into the window surface.
+ * This also keeps the window surface single-sampled, so Swappy's sync fence before
+ * eglSwapBuffers() cannot force ANGLE to store and resolve multisampled data.
+ */
+
+void OpenGLRenderer::beginFrame() {
+
+	m_glesPassStarted = false;
+	m_glesPassCleared = 0;
+
+	// Binds the framebuffer for this frame. Its previous contents stay valid until the
+	// first draw or clear, for snapshots taken between frames.
+	updateMultisampleFramebuffer();
+
+}
+
+void OpenGLRenderer::endFrame() {
+
+	if(m_glesMSAAFramebuffer) {
+		resolveMultisampleFramebuffer();
+	} else {
+		invalidateAttachments(true, false, true);
+	}
+
+}
+
+void OpenGLRenderer::startRenderPass() {
+
+	BufferFlags missing = 0;
+	if(!(m_glesPassCleared & GL_COLOR_BUFFER_BIT)) {
+		missing |= ColorBuffer;
+	}
+	if(!(m_glesPassCleared & GL_DEPTH_BUFFER_BIT)) {
+		missing |= DepthBuffer;
+	}
+	if(missing) {
+		Clear(missing, Color::black, 1.f);
+	}
+
+	m_glesPassStarted = true;
+
+}
+
+void OpenGLRenderer::invalidateAttachments(bool defaultFramebuffer, bool color, bool depth) {
+
+	if(!m_hasInvalidateFramebuffer && !m_hasDiscardFramebuffer) {
+		return;
+	}
+
+	GLenum attachments[3];
+	GLsizei count = 0;
+	if(color) {
+		attachments[count++] = defaultFramebuffer ? GLenum(GL_COLOR) : GLenum(GL_COLOR_ATTACHMENT0);
+	}
+	if(depth) {
+		if(defaultFramebuffer) {
+			attachments[count++] = GL_DEPTH;
+			attachments[count++] = GL_STENCIL;
+		} else {
+			attachments[count++] = GL_DEPTH_ATTACHMENT;
+		}
+	}
+	if(count == 0) {
+		return;
+	}
+
+	if(m_hasInvalidateFramebuffer) {
+		glInvalidateFramebuffer(GL_FRAMEBUFFER, count, attachments);
+	} else {
+		glDiscardFramebufferEXT(GL_FRAMEBUFFER, count, attachments);
+	}
+
+}
+
+bool OpenGLRenderer::updateMultisampleFramebuffer() {
+
+	const Vec2i size = mainApp->getWindow()->getSize();
+	const bool wanted = config.video.antialiasing && m_glesMaxMSAASamples > 1 && m_glesCopyProgram
+	                    && m_glesCopyVertices && !m_glesMSAAFailed && size.x > 0 && size.y > 0;
+	if(!wanted) {
+		destroyMultisampleFramebuffer();
+		return false;
+	}
+
+	if(m_glesMSAAFramebuffer && size == m_glesMSAASize) {
+		glBindFramebuffer(GL_FRAMEBUFFER, m_glesMSAAFramebuffer);
+		return true;
+	}
+
+	destroyMultisampleFramebuffer();
+
+	const GLsizei samples = std::min(GLsizei(m_glesMaxMSAASamples), glesMSAASamples);
+
+	// Single-sampled color texture: the samples are resolved into it in tile memory
+	glGenTextures(1, &m_glesMSAAColor);
+	glActiveTexture(GL_TEXTURE0 + glesCopyTextureUnit);
+	glBindTexture(GL_TEXTURE_2D, m_glesMSAAColor);
+	glTexImage2D(GL_TEXTURE_2D, 0, m_glesIsES3 ? GL_RGBA8 : GL_RGBA, size.x, size.y, 0,
+	             GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, GL_NONE);
+	glActiveTexture(GL_TEXTURE0);
+
+	// Multisampled depth that only ever lives in tile memory
+	glGenRenderbuffers(1, &m_glesMSAADepth);
+	glBindRenderbuffer(GL_RENDERBUFFER, m_glesMSAADepth);
+	glRenderbufferStorageMultisampleEXT(GL_RENDERBUFFER, samples, m_glesDepthFormat, size.x, size.y);
+	glBindRenderbuffer(GL_RENDERBUFFER, GL_NONE);
+
+	glGenFramebuffers(1, &m_glesMSAAFramebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, m_glesMSAAFramebuffer);
+	glFramebufferTexture2DMultisampleEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+	                                     m_glesMSAAColor, 0, samples);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, m_glesMSAADepth);
+
+	const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if(status != GL_FRAMEBUFFER_COMPLETE) {
+		LogError << "MSAA framebuffer is incomplete (status " << status
+		         << "), rendering without antialiasing";
+		m_glesMSAAFailed = true;
+		destroyMultisampleFramebuffer();
+		return false;
+	}
+
+	m_glesMSAASamples = samples;
+	m_glesMSAASize = size;
+	m_MSAALevel = int(samples);
+
+	LogInfo << "Using " << samples << "x MSAA (GL_EXT_multisampled_render_to_texture) at "
+	        << size.x << "x" << size.y;
+
+	return true;
+}
+
+void OpenGLRenderer::destroyMultisampleFramebuffer() {
+
+	if(m_glesMSAAFramebuffer) {
+		glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+		glDeleteFramebuffers(1, &m_glesMSAAFramebuffer);
+		m_glesMSAAFramebuffer = 0;
+	}
+	if(m_glesMSAADepth) {
+		glDeleteRenderbuffers(1, &m_glesMSAADepth);
+		m_glesMSAADepth = 0;
+	}
+	if(m_glesMSAAColor) {
+		glDeleteTextures(1, &m_glesMSAAColor);
+		m_glesMSAAColor = 0;
+	}
+
+	m_glesMSAASamples = 0;
+	m_glesMSAASize = Vec2i(0);
+	m_MSAALevel = 0;
+	m_hasMSAA = false;
+
+}
+
+void OpenGLRenderer::resolveMultisampleFramebuffer() {
+
+	// Depth is not needed after the frame: keep it in tile memory. The color samples are
+	// resolved into m_glesMSAAColor when the render pass ends with the binding change.
+	invalidateAttachments(false, false, true);
+	glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+
+	// The copy covers the whole window: nothing has to be loaded from memory.
+	invalidateAttachments(true, true, true);
+
+	const Vec2i size = m_glesMSAASize;
+	glViewport(0, 0, size.x, size.y);
+	if(m_scissor.isValid()) {
+		glDisable(GL_SCISSOR_TEST);
+	}
+	if(m_glstate.getCull()) {
+		glDisable(GL_CULL_FACE);
+	}
+	if(m_glesBlendEnabled) {
+		glDisable(GL_BLEND);
+	}
+	if(m_glalphaToCoverage) {
+		glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+	}
+	glDisable(GL_DEPTH_TEST);
+
+	glUseProgram(m_glesCopyProgram);
+	m_glesBoundProgram = m_glesCopyProgram;
+	glActiveTexture(GL_TEXTURE0 + glesCopyTextureUnit);
+	glBindTexture(GL_TEXTURE_2D, m_glesMSAAColor);
+
+	resetVertexArrayState();
+	bindBuffer(m_glesCopyVertices);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+
+	// Only the color is presented
+	invalidateAttachments(true, false, true);
+
+	// Restore the state the renderer expects
+	glBindTexture(GL_TEXTURE_2D, GL_NONE);
+	glActiveTexture(GL_TEXTURE0);
+	resetVertexArrayState();
+	glEnable(GL_DEPTH_TEST);
+	if(m_glalphaToCoverage) {
+		glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+	}
+	if(m_glesBlendEnabled) {
+		glEnable(GL_BLEND);
+	}
+	if(m_glstate.getCull()) {
+		glEnable(GL_CULL_FACE);
+	}
+	if(m_scissor.isValid()) {
+		glEnable(GL_SCISSOR_TEST);
+	}
+	if(viewport.width() > 0 && viewport.height() > 0) {
+		glViewport(viewport.left, size.y - viewport.bottom, viewport.width(), viewport.height());
+	}
+
+}
+
 #endif
 

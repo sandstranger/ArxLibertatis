@@ -23,6 +23,7 @@ static GLArrayClientState glArrayClientState = GL_NoArray;
 static const void * glArrayClientStateRef = nullptr;
 #ifdef ANDROID
 static const void * glArrayClientStateOffset = nullptr;
+static GLuint glBoundIndexBuffer = GL_NONE;
 #endif
 static int glArrayClientStateTexCount = 1;
 static GLuint glBoundBuffer = GL_NONE;
@@ -36,10 +37,24 @@ void resetVertexArrayState() {
 	// the first single-UV layout disables their stale arrays after a resize.
 	glArrayClientStateTexCount = 3;
 	glBoundBuffer = GL_NONE;
+	glBoundIndexBuffer = GL_NONE;
 	glBindBuffer(GL_ARRAY_BUFFER, GL_NONE);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, GL_NONE);
 	for(GLuint attribute = 0; attribute < 5; ++attribute) {
 		glDisableVertexAttribArray(attribute);
+	}
+}
+
+void bindIndexBuffer(GLuint buffer) {
+	if(buffer != glBoundIndexBuffer) {
+		glBoundIndexBuffer = buffer;
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer);
+	}
+}
+
+void unbindIndexBuffer(GLuint buffer) {
+	if(buffer == glBoundIndexBuffer) {
+		bindIndexBuffer(GL_NONE);
 	}
 }
 #endif
