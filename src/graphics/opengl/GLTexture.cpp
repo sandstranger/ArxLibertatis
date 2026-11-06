@@ -1700,8 +1700,17 @@ void GLTexture::apply(
             stage->tex == this
     );
 
+#ifdef ANDROID
+    // GLES 3.0 and GLES 2.0 with OES_texture_npot support repeat and mirror
+    // wrapping for NPOT textures. Keep the clamp fallback only when the
+    // renderer had to pad the texture to a power-of-two size.
+    const bool canWrapNPOT = renderer->hasTextureNPOT();
+#else
+    const bool canWrapNPOT = false;
+#endif
+
     TextureStage::WrapMode newWrapMode =
-            (!isNPOT)
+            (!isNPOT || canWrapNPOT)
             ? stage->getWrapMode()
             : TextureStage::WrapClamp;
 
