@@ -60,6 +60,7 @@ void GLTextureStage::resetTexture() {
 	tex = nullptr;
 }
 
+#ifndef ANDROID
 struct GLTexEnvParam {
 	
 	GLenum combine;
@@ -92,6 +93,8 @@ void GLTextureStage::setOp(OpType alpha, GLint op, GLint scale) {
 	setTexEnv(GL_TEXTURE_ENV, glTexEnv[alpha].combine, op);
 	setTexEnv(GL_TEXTURE_ENV, glTexEnv[alpha].scale, scale);
 }
+
+#endif // !ANDROID
 
 void GLTextureStage::setOp(OpType alpha, TextureOp op) {
 	bool wasEnabled = isEnabled();
