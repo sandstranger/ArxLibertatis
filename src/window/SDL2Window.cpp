@@ -396,16 +396,22 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 #endif
 		if(texunits < m_minTextureUnits) {
 			if(lastTry) {
-				typedef const GLubyte * (GLAPIENTRY * glGetString_t)(GLenum name);
-				glGetString_t glGetString_p = FunctionPointer(SDL_GL_GetProcAddress("glGetString"));
 				const char * glVendor = nullptr;
 				const char * glRenderer = nullptr;
 				const char * glVersion = nullptr;
+#ifdef ANDROID
+				glVendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
+				glRenderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+				glVersion = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+#else
+				typedef const GLubyte * (GLAPIENTRY * glGetString_t)(GLenum name);
+				glGetString_t glGetString_p = FunctionPointer(SDL_GL_GetProcAddress("glGetString"));
 				if(glGetString_p) {
 					glVendor = reinterpret_cast<const char *>(glGetString_p(GL_VENDOR));
 					glRenderer = reinterpret_cast<const char *>(glGetString_p(GL_RENDERER));
 					glVersion = reinterpret_cast<const char *>(glGetString_p(GL_VERSION));
 				}
+#endif
 				if(!glVendor) {
 					glVendor = "(unknown)";
 				}
