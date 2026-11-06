@@ -945,8 +945,24 @@ bool OpenGLRenderer::getSnapshot(Image & image) {
 	Vec2i size = mainApp->getWindow()->getSize();
 	
 	image.create(size_t(size.x), size_t(size.y), Image::Format_R8G8B8);
-	
+#ifdef ANDROID
+	// GLES 2 only guarantees RGBA readback. Strip alpha after reading to keep
+	// the renderer's existing RGB Image contract.
+	Image rgba;
+	rgba.create(size_t(size.x), size_t(size.y), Image::Format_R8G8B8A8);
+	glReadPixels(0, 0, size.x, size.y, GL_RGBA, GL_UNSIGNED_BYTE, rgba.getData());
+	const unsigned char * src = rgba.getData();
+	unsigned char * dst = image.getData();
+	for(size_t i = 0, pixels = size_t(size.x) * size_t(size.y); i < pixels; ++i) {
+		dst[0] = src[0];
+		dst[1] = src[1];
+		dst[2] = src[2];
+		src += 4;
+		dst += 3;
+	}
+#else
 	glReadPixels(0, 0, size.x, size.y, GL_RGB, GL_UNSIGNED_BYTE, image.getData());
+#endif
 	
 	image.flipY();
 	
@@ -1427,7 +1443,7 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	if(m_glesUniformAlphaThreshold >= 0) glUniform1f(m_glesUniformAlphaThreshold, m_glesAlphaThreshold);
 	for(size_t i = 0; i < 3; ++i) {
 		GLTextureStage * stage = i < m_TextureStages.size() ? GetTextureStage(i) : nullptr;
-		if(m_glesUniformUseTexture[i] >= 0) glUniform1i(m_glesUniformUseTexture[i], stage && stage->getTexture() ? 1 : 0);
+		if(m_glesUniformUseTexture[i] >= 0) glUniform1i(m_glesUniformUseTexture[i], stage && stage->getTexture() && stage->isEnabled() ? 1 : 0);
 		if(m_glesUniformColorOp[i] >= 0) glUniform1i(m_glesUniformColorOp[i], stage ? GLint(stage->getColorOp()) : GLint(TextureStage::OpDisable));
 		if(m_glesUniformAlphaOp[i] >= 0) glUniform1i(m_glesUniformAlphaOp[i], stage ? GLint(stage->getAlphaOp()) : GLint(TextureStage::OpDisable));
 	}
