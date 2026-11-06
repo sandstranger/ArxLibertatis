@@ -1913,6 +1913,7 @@ out vec4 arxFragColor;
 ARX_VARYING_IN mediump vec4 vColor;
 #ifdef ARX_GAMMA
 uniform float uInvGamma;
+uniform float uGammaInverted;
 #endif
 #if ARX_STAGES >= 1
 uniform sampler2D uTexture0;
@@ -1962,8 +1963,13 @@ void main() {
     color.rgb = mix(uFogColor, color.rgb, clamp(vFog, 0.0, 1.0));
 #endif
 #ifdef ARX_GAMMA
-    // Brightness: gamma curve like the desktop window gamma ramp, blacks and whites stay
-    color.rgb = pow(color.rgb, vec3(uInvGamma));
+    // Brightness: gamma curve like the desktop window gamma ramp, blacks and whites stay.
+    // With uGammaInverted the color is what this draw takes away from the framebuffer
+    // (dst * (1 - color): shadows, scorch marks, fades), so the curve goes on what is
+    // kept, like the ramp would after the blend.
+    vec3 gammaIn = mix(color.rgb, vec3(1.0) - color.rgb, uGammaInverted);
+    vec3 gammaOut = pow(gammaIn, vec3(uInvGamma));
+    color.rgb = mix(gammaOut, vec3(1.0) - gammaOut, uGammaInverted);
 #endif
     ARX_FRAG_COLOR = color;
 }
@@ -2083,6 +2089,7 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		program.uniformFogColor = glGetUniformLocation(id, "uFogColor");
 		program.uniformAlphaThreshold = glGetUniformLocation(id, "uAlphaThreshold");
 		program.uniformInvGamma = glGetUniformLocation(id, "uInvGamma");
+		program.uniformGammaInverted = glGetUniformLocation(id, "uGammaInverted");
 		glUseProgram(id);
 		m_glesBoundProgram = id;
 		for(GLint i = 0; i < 3; ++i) {
@@ -2260,6 +2267,18 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		if(!cacheValid || program.invGamma != invGamma) {
 			glUniform1f(program.uniformInvGamma, invGamma);
 			program.invGamma = invGamma;
+		}
+	}
+
+	if(program.uniformGammaInverted >= 0) {
+		// ZERO, ONE_MINUS_SRC_COLOR: the fragment color only darkens what is behind it.
+		// Applying the curve to it directly turned faint texels into visible steps, the
+		// blob shadows showed every quad as a dark square.
+		const float inverted = (m_state.getBlendSrc() == BlendZero
+		                        && m_state.getBlendDst() == BlendInvSrcColor) ? 1.f : 0.f;
+		if(!cacheValid || program.gammaInverted != inverted) {
+			glUniform1f(program.uniformGammaInverted, inverted);
+			program.gammaInverted = inverted;
 		}
 	}
 

@@ -261,6 +261,7 @@ private:
 		GLint uniformFogColor = -1;
 		GLint uniformAlphaThreshold = -1;
 		GLint uniformInvGamma = -1;
+		GLint uniformGammaInverted = -1;
 		GLint uniformStageA[3] = { -1, -1, -1 };
 		GLint uniformStageB[3] = { -1, -1, -1 };
 		GLint uniformStageC[3] = { -1, -1, -1 };
@@ -271,6 +272,7 @@ private:
 		float fogColor[3] = { 0.f, 0.f, 0.f };
 		float alphaThreshold = 0.f;
 		float invGamma = 0.f;
+		float gammaInverted = 0.f;
 		float stageA[3][4] = {};
 		float stageB[3][4] = {};
 		float stageC[3][4] = {};
