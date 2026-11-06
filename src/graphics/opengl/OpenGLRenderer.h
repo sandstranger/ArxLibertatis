@@ -191,6 +191,8 @@ private:
 	void prepareGLESProgram(bool transformed);
 
 	GLuint m_glesProgram = 0;
+	GLuint m_glesImmediateVertexBuffer = 0;
+	GLuint m_glesImmediateIndexBuffer = 0;
 	GLint m_glesUniformProjection = -1;
 	GLint m_glesUniformView = -1;
 	GLint m_glesUniformTransform = -1;
