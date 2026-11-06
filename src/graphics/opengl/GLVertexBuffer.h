@@ -544,12 +544,10 @@ public:
 
 		bindBuffer(m_buffer);
 
-		if(!m_initialized) {
-			GLenum usage = m_usage == Renderer::Static ? GL_STATIC_DRAW : GL_DYNAMIC_DRAW;
-			if(m_usage == Renderer::Stream && m_renderer->hasBufferUsageStream()) {
-				usage = GL_STREAM_DRAW;
-			}
-			glBufferData(GL_ARRAY_BUFFER, capacity() * sizeof(Vertex), nullptr, usage);
+		// Match the working master path: orphan on first use and every full discard,
+		// so the driver does not wait for previous GPU reads from this buffer.
+		if(!m_initialized || (flags & DiscardBuffer)) {
+			glBufferData(GL_ARRAY_BUFFER, capacity() * sizeof(Vertex), nullptr, GL_DYNAMIC_DRAW);
 			m_initialized = true;
 		}
 
@@ -560,7 +558,9 @@ public:
 		if(flags & DiscardRange) {
 			glflags |= GL_MAP_INVALIDATE_RANGE_BIT;
 		}
-		// GL_MAP_UNSYNCHRONIZED_BIT is not part of core GLES 3.0.
+		if(flags & NoOverwrite) {
+			glflags |= GL_MAP_UNSYNCHRONIZED_BIT;
+		}
 
 		const size_t mapCount = std::min(count, capacity() - offset);
 		const size_t byteOffset = offset * sizeof(Vertex);
