@@ -294,11 +294,10 @@ void OpenGLRenderer::initialize() {
 	}
 	
 	if(gl.isES()) {
-		// Use the GLES 3.0 core entry point only. GLES 2.0's EXT variant has a
-		// different symbol and remains on the shadow-buffer fallback.
-		m_hasMapBufferRange = gl.is(3, 0) && (glMapBufferRange != nullptr);
+		// EXT_map_buffer_range requires OpenGL ES 1.1
+		m_hasMapBufferRange = gl.is(3, 0) || gl.has("GL_EXT_map_buffer_range");
 		if(!m_hasMapBufferRange) {
-			LogWarning << "GLES map-buffer-range streaming is unavailable";
+			LogWarning << "Missing OpenGL ES extension GL_EXT_map_buffer_range";
 		}
 		// OES_mapbuffer requires OpenGL ES 1.1
 		m_hasMapBuffer = gl.has("GL_OES_mapbuffer");
