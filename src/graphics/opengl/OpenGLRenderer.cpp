@@ -758,8 +758,9 @@ void OpenGLRenderer::SetFogParams(float fogStart, float fogEnd) {
 
 void OpenGLRenderer::setGamma(float gamma) {
 #ifdef ANDROID
-	// SDL's window brightness contract is a normalized [0, 1] multiplier.
-	m_glesGamma = glm::clamp(gamma, 0.f, 1.f);
+	// The video options slider maps to a 0.5-1.5 brightness multiplier.
+	// Keep values above 1 so Android GLES can actually brighten the frame.
+	m_glesGamma = glm::clamp(gamma, 0.f, 2.f);
 #else
 	ARX_UNUSED(gamma);
 #endif
