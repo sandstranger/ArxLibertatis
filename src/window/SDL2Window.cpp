@@ -691,6 +691,10 @@ bool SDL2Window::initialize() {
 	onCreate();
 	onToggleFullscreen(m_fullscreen);
 	updateSize(true);
+	if(!m_renderer->isInitialized()) {
+		LogError << "Could not initialize the OpenGL ES renderer";
+		return false;
+	}
 	
 	onShow(true);
 	onFocus(true);
@@ -832,6 +836,10 @@ void SDL2Window::updateSize(bool force) {
 	
 	if(force || m_mode.resolution != oldMode.resolution) {
 		m_renderer->afterResize();
+		if(!m_renderer->isInitialized()) {
+			LogError << "Renderer did not recover after the window resize";
+			return;
+		}
 		m_renderer->SetViewport(Rect(m_mode.resolution.x, m_mode.resolution.y));
 	}
 	
