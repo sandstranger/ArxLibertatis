@@ -1348,8 +1348,7 @@ void main() {
 }
 )";
 
-static const char * gles3VertexShader = R"(
-#version 300 es
+static const char * gles3VertexShader = R"(#version 300 es
 precision highp float;
 in vec4 aPosition;
 in vec4 aColor;
@@ -1380,8 +1379,7 @@ void main() {
 }
 )";
 
-static const char * gles3FragmentShader = R"(
-#version 300 es
+static const char * gles3FragmentShader = R"(#version 300 es
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
