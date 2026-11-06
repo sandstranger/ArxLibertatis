@@ -406,8 +406,12 @@ void OpenGLRenderer::afterResize() {
 void OpenGLRenderer::reinit() {
 	arx_assert(!isInitialized());
 #ifdef ANDROID
-	// A recreated EGL context has fresh bindings and disabled attributes.
+	// A recreated EGL context has fresh bindings, viewport/scissor state and
+	// disabled vertex attributes. Clear the renderer-side caches as well so
+	// the next SetViewport/SetScissor call always reaches the new context.
 	resetVertexArrayState();
+	viewport = Rect();
+	m_scissor = Rect();
 	maxTextureStage = 0;
 	m_MSAALevel = 0;
 	{
