@@ -908,19 +908,11 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 
 #ifdef ANDROID
 	if(!m_glesImmediateVertexBuffer) glGenBuffers(1, &m_glesImmediateVertexBuffer);
-	if(!m_glesImmediateIndexBuffer) glGenBuffers(1, &m_glesImmediateIndexBuffer);
-
 	bindBuffer(m_glesImmediateVertexBuffer);
 	glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(nvertices * sizeof(TexturedVertex)),
 	             vertices, GL_STREAM_DRAW);
 	setVertexArray(this, nullptr, this);
-
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_glesImmediateIndexBuffer);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(nindices * sizeof(unsigned short)),
-	             indices, GL_STREAM_DRAW);
-	glDrawElements(arxToGlPrimitiveType[primitive], GLsizei(nindices),
-	               GL_UNSIGNED_SHORT, nullptr);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	drawIndexedElements(primitive, indices, nindices);
 #else
 	bindBuffer(GL_NONE);
 	setVertexArray(this, vertices, vertices);
@@ -931,6 +923,21 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 	}
 #endif
 	
+}
+
+void OpenGLRenderer::drawIndexedElements(Primitive primitive, const unsigned short * indices, size_t nindices) {
+#ifdef ANDROID
+	if(!m_glesImmediateIndexBuffer) glGenBuffers(1, &m_glesImmediateIndexBuffer);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_glesImmediateIndexBuffer);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(nindices * sizeof(unsigned short)),
+	             indices, GL_STREAM_DRAW);
+	glDrawElements(arxToGlPrimitiveType[primitive], GLsizei(nindices), GL_UNSIGNED_SHORT, nullptr);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+#else
+	ARX_UNUSED(primitive);
+	ARX_UNUSED(indices);
+	ARX_UNUSED(nindices);
+#endif
 }
 
 bool OpenGLRenderer::getSnapshot(Image & image) {
