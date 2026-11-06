@@ -101,7 +101,7 @@ void OpenGLRenderer::initialize() {
 	epoxy_handle_external_wglMakeCurrent();
 	#endif
 	
-	#elif ARX_HAVE_GLEW
+	#elif !defined(ANDROID) && ARX_HAVE_GLEW
 	
 	if(glewInit() != GLEW_OK) {
 		LogError << "GLEW init failed";
