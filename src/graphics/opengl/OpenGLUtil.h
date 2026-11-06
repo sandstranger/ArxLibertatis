@@ -34,13 +34,13 @@
 #include <windows.h>
 #endif
 
-#if ARX_HAVE_EPOXY
+#if ANDROID
+#include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
+#elif ARX_HAVE_EPOXY
 #include <epoxy/gl.h>
 #elif ARX_HAVE_GLEW
 #include <GL/glew.h>
-#elif ANDROID
-#include <GLES3/gl3.h>
-#include <GLES2/gl2ext.h>
 #else
 #error "OpenGL renderer not supported: need ARX_HAVE_EPOXY or ARX_HAVE_GLEW"
 #endif
