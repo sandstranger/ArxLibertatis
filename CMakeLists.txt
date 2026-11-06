@@ -499,7 +499,12 @@ list(APPEND ARX_LIBRARIES ${FREETYPE_LIBRARIES})
 
 # OpenGL
 if (ANDROID)
+    # Android uses the platform GLES entry points directly. Do not inherit a
+    # desktop loader selection from a cached or toolchain-provided CMake value.
     set(ARX_HAVE_OPENGL 1)
+    set(ARX_HAVE_EPOXY 0)
+    set(ARX_HAVE_GLEW 0)
+    set(ARX_HAVE_GL_STATIC 0)
     add_definitions(-DAL_ALEXT_PROTOTYPES)
 endif ()
 
