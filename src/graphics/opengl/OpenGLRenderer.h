@@ -85,6 +85,7 @@ public:
 	
 	void drawIndexed(Primitive primitive, const TexturedVertex * vertices, size_t nvertices,
 	                 unsigned short * indices, size_t nindices) override;
+	void drawIndexedElements(Primitive primitive, const unsigned short * indices, size_t nindices);
 	
 	bool getSnapshot(Image & image) override;
 	bool getSnapshot(Image & image, size_t width, size_t height) override;
