@@ -193,18 +193,17 @@ public:
 		bindBuffer(m_buffer);
 		
 #ifdef ANDROID
+		// The indices stay in client memory (see OpenGLRenderer::drawIndexedElements()).
 		if(m_renderer->hasDrawElementsBaseVertex()) {
-			// Keep the VBO attribute base stable and let the OES/EXT draw call
-			// apply the ring-buffer offset. This avoids reprogramming every
-			// vertex attribute when ANGLE exposes base-vertex drawing.
+			// Keep the attribute pointers at the start of the buffer and let the
+			// OES/EXT base-vertex draw apply the offset.
 			setVertexArray<Vertex>(m_renderer, nullptr, this);
 			m_renderer->drawIndexedElements(primitive, indices, nbindices, offset, count);
 		} else {
-			// Portable GLES fallback: shift the attribute base and use the
-			// streaming element buffer for this draw's indices.
+			// No base-vertex draws: move the attribute pointers to the offset instead.
 			const Vertex * baseVertices = reinterpret_cast<const Vertex *>(offset * sizeof(Vertex));
 			setVertexArray<Vertex>(m_renderer, baseVertices, this);
-			m_renderer->drawIndexedElements(primitive, indices, nbindices);
+			m_renderer->drawIndexedElements(primitive, indices, nbindices, 0, count);
 		}
 #else
 		setVertexArray<Vertex>(m_renderer, nullptr, this);
@@ -466,6 +465,151 @@ protected:
 	using Base::m_initialized;
 	
 };
+
+#ifdef ANDROID
+
+/*!
+ * Vertex buffer for OpenGL ES 3.0 or GL_EXT_map_buffer_range (native drivers and ANGLE).
+ *
+ * A range that draws already queued in this or the previous frames may still read
+ * is never rewritten with glBufferSubData() or a synchronized map: ANGLE's Vulkan
+ * backend has to end the current render pass for such an update (or copy the whole
+ * buffer first), which is extremely slow on tiled GPUs, especially Mali.
+ *  - DiscardBuffer (and the first use) orphans the storage with glBufferData(nullptr),
+ *    so the driver hands out fresh memory and keeps the old one alive for queued draws.
+ *  - NoOverwrite maps with GL_MAP_UNSYNCHRONIZED_BIT, matching the desktop renderer:
+ *    the caller promises not to touch data that queued draws still use.
+ */
+template <class Vertex>
+class GLESMapRangeVertexBuffer final : public GLVertexBuffer<Vertex> {
+
+	typedef GLVertexBuffer<Vertex> Base;
+
+public:
+
+	using Base::capacity;
+
+	GLESMapRangeVertexBuffer(const GLESMapRangeVertexBuffer &) = delete;
+	GLESMapRangeVertexBuffer & operator=(const GLESMapRangeVertexBuffer &) = delete;
+
+	GLESMapRangeVertexBuffer(OpenGLRenderer * renderer, size_t size, Renderer::BufferUsage usage)
+		: Base(renderer, size, usage)
+		, m_mapped(false)
+	{ }
+
+	void setData(const Vertex * vertices, size_t count, size_t offset, BufferFlags flags) override {
+
+		arx_assert(offset < capacity());
+		arx_assert(offset + count <= capacity());
+		arx_assert(!m_mapped);
+
+		bindBuffer(m_buffer);
+
+		if(offset == 0 && count == capacity()) {
+			// Respecifying the whole buffer with data never waits for the GPU.
+			initialize(vertices);
+			return;
+		}
+
+		if(count == 0) {
+			if(!m_initialized || (flags & DiscardBuffer)) {
+				initialize();
+			}
+			return;
+		}
+
+		// Only the written range is replaced, the rest of the buffer is kept.
+		Vertex * dst = map(flags | DiscardRange, offset, count);
+		if(!dst) {
+			glBufferSubData(GL_ARRAY_BUFFER, GLintptr(offset * sizeof(Vertex)),
+			                GLsizeiptr(count * sizeof(Vertex)), vertices);
+			return;
+		}
+		std::memcpy(dst, vertices, count * sizeof(Vertex));
+		unmap();
+
+	}
+
+	Vertex * lock(BufferFlags flags, size_t offset, size_t count) override {
+
+		arx_assert(offset < capacity());
+		arx_assert(!m_mapped);
+
+		bindBuffer(m_buffer);
+
+		count = std::min(std::max(count, size_t(1)), capacity() - offset);
+
+		return map(flags, offset, count);
+	}
+
+	void unlock() override {
+
+		if(!m_mapped) {
+			return;
+		}
+
+		bindBuffer(m_buffer);
+
+		unmap();
+
+	}
+
+	~GLESMapRangeVertexBuffer() override {
+		if(m_mapped) {
+			bindBuffer(m_buffer);
+			unmap();
+		}
+	}
+
+private:
+
+	Vertex * map(BufferFlags flags, size_t offset, size_t count) {
+
+		GLbitfield access = GL_MAP_WRITE_BIT;
+
+		if(!m_initialized || (flags & DiscardBuffer)) {
+			// The fresh storage is not used by any draw yet, so no synchronization is needed.
+			initialize();
+			access |= GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
+		} else {
+			if(flags & DiscardRange) {
+				access |= GL_MAP_INVALIDATE_RANGE_BIT;
+			}
+			if(flags & NoOverwrite) {
+				access |= GL_MAP_UNSYNCHRONIZED_BIT;
+			}
+		}
+
+		void * buf = m_renderer->mapBufferRange(GL_ARRAY_BUFFER, offset * sizeof(Vertex),
+		                                        count * sizeof(Vertex), access);
+		if(!buf) {
+			LogError << "Could not map vertex buffer!";
+			return nullptr;
+		}
+
+		m_mapped = true;
+
+		return reinterpret_cast<Vertex *>(buf);
+	}
+
+	void unmap() {
+		m_mapped = false;
+		if(!m_renderer->unmapBuffer(GL_ARRAY_BUFFER)) {
+			LogWarning << "Vertex buffer invalidated";
+		}
+	}
+
+	using Base::initialize;
+
+	using Base::m_renderer;
+	using Base::m_buffer;
+	using Base::m_initialized;
+
+	bool m_mapped;
+
+};
+
+#endif // ANDROID
 
 #ifndef ANDROID
 template <class Vertex>

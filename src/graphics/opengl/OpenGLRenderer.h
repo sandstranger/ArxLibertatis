@@ -111,10 +111,19 @@ public:
 	bool hasBGRTextureTransfer() const { return m_hasBGRTextureTransfer; }
 	
 	bool hasMapBuffer() const { return m_hasMapBuffer; }
-#ifndef ANDROID
 	bool hasMapBufferRange() const { return m_hasMapBufferRange; }
-#else
-	bool hasMapBufferRange() const { return false; }
+#ifdef ANDROID
+	//! glMapBufferRange() from OpenGL ES 3.0 or GL_EXT_map_buffer_range on OpenGL ES 2.0
+	void * mapBufferRange(GLenum target, size_t offset, size_t length, GLbitfield access) const {
+		if(m_hasCoreMapBufferRange) {
+			return glMapBufferRange(target, GLintptr(offset), GLsizeiptr(length), access);
+		}
+		return glMapBufferRangeEXT(target, GLintptr(offset), GLsizeiptr(length), access);
+	}
+	bool unmapBuffer(GLenum target) const {
+		GLboolean result = m_hasCoreMapBufferRange ? glUnmapBuffer(target) : glUnmapBufferOES(target);
+		return result != GL_FALSE;
+	}
 #endif
 	bool hasBufferStorage() const { return m_hasBufferStorage; }
 	bool hasBufferUsageStream() const { return m_hasBufferUsageStream; }
@@ -200,42 +209,53 @@ private:
 	void shutdownGLESProgram();
 	void prepareGLESProgram(bool transformed);
 
-	GLuint m_glesProgram = 0;
-	GLuint m_glesImmediateVertexBuffer = 0;
-	size_t m_glesImmediateVertexBufferCapacity = 0;
-	size_t m_glesImmediateVertexBufferOffset = 0;
-	GLuint m_glesImmediateIndexBuffer = 0;
-	size_t m_glesImmediateIndexBufferCapacity = 0;
-	size_t m_glesImmediateIndexBufferOffset = 0;
-	bool m_glesProgramBound = false;
-	bool m_glesUniformCacheValid = false;
-	glm::mat4 m_glesCachedProjection{1.f};
-	glm::mat4 m_glesCachedView{1.f};
-	GLint m_glesCachedTransform = -1;
-	GLint m_glesCachedFogEnabled = -1;
-	float m_glesCachedFogColor[4] = {0.f, 0.f, 0.f, 0.f};
-	float m_glesCachedFogStart = 0.f;
-	float m_glesCachedFogEnd = 0.f;
-	GLint m_glesCachedAlphaCutout = -1;
-	float m_glesCachedAlphaThreshold = 0.f;
-	float m_glesCachedGamma = 0.f;
-	GLint m_glesCachedUseTexture[3] = {-1, -1, -1};
-	GLint m_glesCachedColorOp[3] = {-1, -1, -1};
-	GLint m_glesCachedAlphaOp[3] = {-1, -1, -1};
-	float m_glesCachedLodBias[3] = {0.f, 0.f, 0.f};
-	GLint m_glesUniformProjection = -1;
-	GLint m_glesUniformView = -1;
-	GLint m_glesUniformTransform = -1;
-	GLint m_glesUniformFogEnabled = -1;
-	GLint m_glesUniformFogColor = -1;
-	GLint m_glesUniformFogRange = -1;
-	GLint m_glesUniformAlphaCutout = -1;
-	GLint m_glesUniformAlphaThreshold = -1;
-	GLint m_glesUniformGamma = -1;
-	GLint m_glesUniformLodBias[3] = {-1, -1, -1};
-	GLint m_glesUniformUseTexture[3] = {-1, -1, -1};
-	GLint m_glesUniformColorOp[3] = {-1, -1, -1};
-	GLint m_glesUniformAlphaOp[3] = {-1, -1, -1};
+	/*!
+	 * One linked program per fragment shader variant.
+	 *
+	 * Alpha cutout (discard) and fog are compiled in only where they are used:
+	 * a shader that may discard turns off early depth/stencil updates and
+	 * forward pixel kill on Mali for every draw that uses it, so opaque
+	 * geometry must not share a program with alpha-tested geometry.
+	 * Each program keeps its own uniform values, so the caches are per program.
+	 */
+	struct GLESProgram {
+		GLuint id = 0;
+		bool cacheValid = false;
+		GLint uniformProjection = -1;
+		GLint uniformView = -1;
+		GLint uniformTransform = -1;
+		GLint uniformFogColor = -1;
+		GLint uniformFogRange = -1;
+		GLint uniformAlphaThreshold = -1;
+		GLint uniformGamma = -1;
+		GLint uniformUseTexture[3] = { -1, -1, -1 };
+		GLint uniformColorOp[3] = { -1, -1, -1 };
+		GLint uniformAlphaOp[3] = { -1, -1, -1 };
+		GLint uniformLodBias[3] = { -1, -1, -1 };
+		glm::mat4 projection{1.f};
+		glm::mat4 view{1.f};
+		GLint transform = -1;
+		float fogColor[4] = { 0.f, 0.f, 0.f, 0.f };
+		float fogStart = 0.f;
+		float fogEnd = 0.f;
+		float alphaThreshold = 0.f;
+		float gamma = 0.f;
+		GLint useTexture[3] = { -1, -1, -1 };
+		GLint colorOp[3] = { -1, -1, -1 };
+		GLint alphaOp[3] = { -1, -1, -1 };
+		float lodBias[3] = { 0.f, 0.f, 0.f };
+	};
+
+	enum GLESProgramVariant {
+		GLESProgramAlphaCutout = 1 << 0,
+		GLESProgramFog = 1 << 1,
+		GLESProgramVariantCount = 1 << 2
+	};
+
+	GLESProgram m_glesPrograms[GLESProgramVariantCount];
+	GLuint m_glesBoundProgram = 0;
+	bool m_hasCoreMapBufferRange = false;
+	bool m_glesBlendEnabled = false;
 	Color m_glesFogColor;
 	float m_glesGamma = 1.f;
 	float m_glesFogStart = 0.f;

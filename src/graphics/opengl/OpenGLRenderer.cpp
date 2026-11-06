@@ -293,11 +293,12 @@ void OpenGLRenderer::initialize() {
 		m_hasDrawRangeElements = gl.is(3, 0);
 #ifdef ANDROID
 		if(m_hasDrawElementsBaseVertex) {
-			LogInfo << "GLES indexed draws: "
+			LogInfo << "GLES indexed draws: client indices + "
 			        << (glDrawElementsBaseVertexOES ? "GL_OES_draw_elements_base_vertex" :
 			                                            "GL_EXT_draw_elements_base_vertex");
 		} else {
-			LogInfo << "GLES indexed draws: shifted-attribute fallback (no usable base-vertex entry point)";
+			LogInfo << "GLES indexed draws: client indices + shifted vertex attributes"
+			        << " (no usable base-vertex entry point)";
 		}
 #endif
 	} else {
@@ -316,8 +317,17 @@ void OpenGLRenderer::initialize() {
 	}
 	
 	if(gl.isES()) {
+#ifdef ANDROID
+		// Only trust entry points GLAD actually resolved for this context.
+		// OpenGL ES 2.0 needs GL_OES_mapbuffer as well for glUnmapBufferOES().
+		m_hasCoreMapBufferRange = gl.is(3, 0) && glMapBufferRange && glUnmapBuffer;
+		m_hasMapBufferRange = m_hasCoreMapBufferRange
+		                      || (gl.has("GL_EXT_map_buffer_range") && glMapBufferRangeEXT
+		                          && glUnmapBufferOES);
+#else
 		// EXT_map_buffer_range requires OpenGL ES 1.1
 		m_hasMapBufferRange = gl.is(3, 0) || gl.has("GL_EXT_map_buffer_range");
+#endif
 		if(!m_hasMapBufferRange) {
 			LogWarning << "Missing OpenGL ES extension GL_EXT_map_buffer_range";
 		}
@@ -328,7 +338,8 @@ void OpenGLRenderer::initialize() {
 		}
 #ifdef ANDROID
 		LogInfo << "GLES vertex upload: "
-		        << (m_hasMapBuffer ? "GL_OES_mapbuffer" : "CPU shadow + buffer upload");
+		        << (m_hasMapBufferRange ? "unsynchronized glMapBufferRange ring + orphaning"
+		                                : "CPU shadow + buffer upload");
 #endif
 	} else {
 #ifndef ANDROID       
@@ -466,8 +477,10 @@ void OpenGLRenderer::reinit() {
 	glEnable(GL_DEPTH_TEST);
 	glDepthFunc(GL_ALWAYS);
 	glDepthMask(GL_TRUE);
-	glEnable(GL_BLEND);
+	// ONE/ZERO is the same as no blending: keep GL_BLEND off for it (see flushState()).
 	glBlendFunc(GL_ONE, GL_ZERO);
+	glDisable(GL_BLEND);
+	m_glesBlendEnabled = false;
 	glEnable(GL_POLYGON_OFFSET_FILL);
 	glPolygonOffset(0.f, 0.f);
 	glActiveTexture(GL_TEXTURE0);
@@ -558,18 +571,6 @@ void OpenGLRenderer::shutdown() {
 	arx_assert(isInitialized());
 #ifdef ANDROID
 	shutdownGLESProgram();
-	if(m_glesImmediateVertexBuffer) {
-		glDeleteBuffers(1, &m_glesImmediateVertexBuffer);
-		m_glesImmediateVertexBuffer = 0;
-	}
-	m_glesImmediateVertexBufferCapacity = 0;
-	m_glesImmediateVertexBufferOffset = 0;
-	if(m_glesImmediateIndexBuffer) {
-		glDeleteBuffers(1, &m_glesImmediateIndexBuffer);
-		m_glesImmediateIndexBuffer = 0;
-	}
-	m_glesImmediateIndexBufferCapacity = 0;
-	m_glesImmediateIndexBufferOffset = 0;
 #endif
 	
 	onRendererShutdown();
@@ -950,13 +951,14 @@ static std::unique_ptr<VertexBuffer<Vertex>> createVertexBufferImpl(OpenGLRender
 	}
 	return createVertexBufferImpl<Vertex>(renderer, capacity, usage, std::string_view());
 #else
-    // Prefer the same mapped-buffer strategy as master when OES_mapbuffer
-    // is actually exposed by ANGLE/native GLES. Keep the shadow upload path
-    // for drivers which do not provide that extension.
-    if(renderer->hasMapBuffer()) {
-        return std::make_unique<GLMapVertexBuffer<Vertex>>(renderer, capacity, usage);
-    }
-    return std::make_unique<GLShadowVertexBuffer<Vertex>>(renderer, capacity, usage);
+	// Never use glMapBufferOES() here: it always maps the whole buffer synchronously,
+	// and ANGLE then has to copy the entire buffer (or wait for the GPU) every time a
+	// buffer that queued draws still read is locked.
+	const bool forceShadow = (setting == "shadow" || setting == "shadow+subdata");
+	if(renderer->hasMapBufferRange() && !forceShadow) {
+		return std::make_unique<GLESMapRangeVertexBuffer<Vertex>>(renderer, capacity, usage);
+	}
+	return std::make_unique<GLShadowVertexBuffer<Vertex>>(renderer, capacity, usage);
 #endif
 }
 
@@ -998,40 +1000,12 @@ void OpenGLRenderer::drawIndexed(Primitive primitive, const TexturedVertex * ver
 	if(nvertices == 0 || nindices == 0) {
 		return;
 	}
-	if(nvertices > size_t(std::numeric_limits<GLsizeiptr>::max()) / sizeof(TexturedVertex)) {
-		LogError << "Immediate GLES vertex upload exceeds GLsizeiptr range";
-		return;
-	}
-	const size_t vertexBytes = nvertices * sizeof(TexturedVertex);
-
-	if(!m_glesImmediateVertexBuffer) {
-		glGenBuffers(1, &m_glesImmediateVertexBuffer);
-	}
-	bindBuffer(m_glesImmediateVertexBuffer);
-	if(vertexBytes > m_glesImmediateVertexBufferCapacity) {
-		size_t newCapacity = std::max<size_t>(1024 * 1024, m_glesImmediateVertexBufferCapacity);
-		while(newCapacity < vertexBytes) {
-			if(newCapacity > size_t(std::numeric_limits<GLsizeiptr>::max()) / 2) {
-				newCapacity = vertexBytes;
-				break;
-			}
-			newCapacity *= 2;
-		}
-		m_glesImmediateVertexBufferCapacity = newCapacity;
-		m_glesImmediateVertexBufferOffset = 0;
-		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(newCapacity), nullptr, GL_STREAM_DRAW);
-	} else if(m_glesImmediateVertexBufferOffset >
-	          m_glesImmediateVertexBufferCapacity - vertexBytes) {
-		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(m_glesImmediateVertexBufferCapacity),
-		             nullptr, GL_STREAM_DRAW);
-		m_glesImmediateVertexBufferOffset = 0;
-	}
-
-	const size_t vertexOffset = m_glesImmediateVertexBufferOffset;
-	glBufferSubData(GL_ARRAY_BUFFER, GLintptr(vertexOffset), GLsizeiptr(vertexBytes), vertices);
-	m_glesImmediateVertexBufferOffset += vertexBytes;
-	const TexturedVertex * baseVertices = reinterpret_cast<const TexturedVertex *>(vertexOffset);
-	setVertexArray<TexturedVertex>(this, baseVertices, this);
+	// Draw straight from client memory like the desktop renderer: the driver (or
+	// ANGLE) copies the data into its own transient storage. Appending into a GL
+	// buffer with glBufferSubData() instead forces ANGLE to end the render pass
+	// for every draw, which is extremely slow on tiled GPUs such as Mali.
+	bindBuffer(GL_NONE);
+	setVertexArray(this, vertices, vertices);
 	drawIndexedElements(primitive, indices, nindices, 0, nvertices);
 #else
 	bindBuffer(GL_NONE);
@@ -1051,78 +1025,34 @@ void OpenGLRenderer::drawIndexedElements(Primitive primitive, const unsigned sho
 	if(nindices == 0) {
 		return;
 	}
-	if(nindices > size_t(std::numeric_limits<GLsizeiptr>::max()) / sizeof(unsigned short)
-	   || nindices > size_t(std::numeric_limits<GLsizei>::max())) {
-		LogError << "Indexed GLES draw exceeds GLsizeiptr/GLsizei range";
+	arx_assert(nindices <= size_t(std::numeric_limits<GLsizei>::max()));
+	arx_assert(baseVertex <= size_t(std::numeric_limits<GLint>::max()));
+
+	// Indices always come from client memory: this renderer never binds an
+	// element array buffer (resetVertexArrayState() unbinds it). Native drivers
+	// and ANGLE stream client indices through their own transient buffers, which
+	// never interrupts the current render pass. Writing them into a shared EBO
+	// with glBufferSubData() made ANGLE end the render pass on every draw.
+	const GLenum mode = arxToGlPrimitiveType[primitive];
+	const GLsizei count = GLsizei(nindices);
+
+	if(baseVertex != 0) {
+		// Only reached when hasDrawElementsBaseVertex() is true, otherwise
+		// BaseGLVertexBuffer::drawIndexed() moves the attribute pointers instead.
+		arx_assert(hasDrawElementsBaseVertex());
+		if(glDrawElementsBaseVertexOES) {
+			glDrawElementsBaseVertexOES(mode, count, GL_UNSIGNED_SHORT, indices, GLint(baseVertex));
+		} else {
+			glDrawElementsBaseVertexEXT(mode, count, GL_UNSIGNED_SHORT, indices, GLint(baseVertex));
+		}
 		return;
 	}
 
-	const size_t indexBytes = nindices * sizeof(unsigned short);
-
-	// Keep one streaming EBO and append indices into unused storage. Orphan
-	// only when the ring wraps or grows instead of allocating fresh storage
-	// for every indexed draw.
-	if(!m_glesImmediateIndexBuffer) {
-		glGenBuffers(1, &m_glesImmediateIndexBuffer);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_glesImmediateIndexBuffer);
+	if(hasDrawRangeElements() && vertexCount > 0) {
+		glDrawRangeElements(mode, 0, GLuint(vertexCount - 1), count, GL_UNSIGNED_SHORT, indices);
+	} else {
+		glDrawElements(mode, count, GL_UNSIGNED_SHORT, indices);
 	}
-	if(indexBytes > m_glesImmediateIndexBufferCapacity) {
-		size_t newCapacity = std::max<size_t>(1024 * 1024, m_glesImmediateIndexBufferCapacity);
-		while(newCapacity < indexBytes) {
-			if(newCapacity > size_t(std::numeric_limits<GLsizeiptr>::max()) / 2) {
-				newCapacity = indexBytes;
-				break;
-			}
-			newCapacity *= 2;
-		}
-		m_glesImmediateIndexBufferCapacity = newCapacity;
-		m_glesImmediateIndexBufferOffset = 0;
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(newCapacity), nullptr, GL_STREAM_DRAW);
-	} else if(m_glesImmediateIndexBufferOffset >
-	          m_glesImmediateIndexBufferCapacity - indexBytes) {
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(m_glesImmediateIndexBufferCapacity),
-		             nullptr, GL_STREAM_DRAW);
-		m_glesImmediateIndexBufferOffset = 0;
-	}
-
-	const size_t indexOffset = m_glesImmediateIndexBufferOffset;
-	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, GLintptr(indexOffset), GLsizeiptr(indexBytes), indices);
-	m_glesImmediateIndexBufferOffset += indexBytes;
-	const void * indexPointer = reinterpret_cast<const void *>(indexOffset);
-
-	const GLenum mode = arxToGlPrimitiveType[primitive];
-	if(hasDrawElementsBaseVertex()) {
-		arx_assert(baseVertex <= size_t(std::numeric_limits<GLint>::max()));
-		const GLint glBaseVertex = GLint(baseVertex);
-
-		if(hasDrawRangeElements() && vertexCount > 0) {
-			const GLuint endVertex = GLuint(std::min(vertexCount - 1,
-			                                         size_t(std::numeric_limits<GLuint>::max())));
-			if(glDrawRangeElementsBaseVertexOES) {
-				glDrawRangeElementsBaseVertexOES(mode, 0, endVertex, GLsizei(nindices),
-				                                 GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
-				return;
-			}
-			if(glDrawRangeElementsBaseVertexEXT) {
-				glDrawRangeElementsBaseVertexEXT(mode, 0, endVertex, GLsizei(nindices),
-				                                 GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
-				return;
-			}
-		}
-
-		if(glDrawElementsBaseVertexOES) {
-			glDrawElementsBaseVertexOES(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
-			return;
-		}
-		if(glDrawElementsBaseVertexEXT) {
-			glDrawElementsBaseVertexEXT(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, indexPointer, glBaseVertex);
-			return;
-		}
-	}
-
-	// Devices without a working base-vertex extension use the offset vertex
-	// attribute pointers configured by BaseGLVertexBuffer::drawIndexed().
-	glDrawElements(mode, GLsizei(nindices), GL_UNSIGNED_SHORT, indexPointer);
 #else
 	ARX_UNUSED(primitive);
 	ARX_UNUSED(indices);
@@ -1223,7 +1153,16 @@ void OpenGLRenderer::flushState() {
 		   || m_glstate.getAlphaCutout() != m_state.getAlphaCutout()) {
 			GLenum src = arxToGlBlendFactor[srcFactor];
 			GLenum dst = arxToGlBlendFactor[dstFactor];
-			if(m_glblendSrc != src || m_glblendDst != dst) {
+			// ONE/ZERO writes the fragment unchanged, so disable blending for it:
+			// tiled GPUs (Mali forward pixel kill, Adreno LRZ) only treat draws with
+			// blending turned off as opaque.
+			const bool blend = !(src == GL_ONE && dst == GL_ZERO);
+			if(blend != m_glesBlendEnabled) {
+				if(blend) glEnable(GL_BLEND);
+				else glDisable(GL_BLEND);
+				m_glesBlendEnabled = blend;
+			}
+			if(blend && (m_glblendSrc != src || m_glblendDst != dst)) {
 				glBlendFunc(src, dst);
 				m_glblendSrc = src;
 				m_glblendDst = dst;
@@ -1377,13 +1316,14 @@ void OpenGLRenderer::flushState() {
 #ifdef ANDROID
 namespace {
 
-static GLuint compileGLESShader(GLenum type, const char * source) {
+GLuint compileGLESShader(GLenum type, const std::string & source) {
 	GLuint shader = glCreateShader(type);
 	if(!shader) {
 		LogError << "Could not create GLES shader";
 		return 0;
 	}
-	glShaderSource(shader, 1, &source, nullptr);
+	const char * text = source.c_str();
+	glShaderSource(shader, 1, &text, nullptr);
 	glCompileShader(shader);
 	GLint compiled = GL_FALSE;
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
@@ -1399,203 +1339,11 @@ static GLuint compileGLESShader(GLenum type, const char * source) {
 	return shader;
 }
 
-static const char * gles2VertexShader = R"(
-precision highp float;
-attribute vec4 aPosition;
-attribute vec4 aColor;
-attribute vec2 aTexCoord0;
-attribute vec2 aTexCoord1;
-attribute vec2 aTexCoord2;
-uniform mat4 uProjection;
-uniform mat4 uView;
-uniform int uTransform;
-varying mediump vec4 vColor;
-varying mediump vec2 vTexCoord0;
-varying mediump vec2 vTexCoord1;
-varying mediump vec2 vTexCoord2;
-varying mediump float vFogDistance;
-void main() {
-    if(uTransform != 0) {
-        vec4 viewPosition = uView * aPosition;
-        gl_Position = uProjection * viewPosition;
-        vFogDistance = max(-viewPosition.z, 0.0);
-    } else {
-        gl_Position = uProjection * aPosition;
-        vFogDistance = abs(aPosition.w);
-    }
-    vColor = aColor;
-    vTexCoord0 = aTexCoord0;
-    vTexCoord1 = aTexCoord1;
-    vTexCoord2 = aTexCoord2;
-}
-)";
-
-static const char * gles2FragmentShader = R"(
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-uniform sampler2D uTexture0;
-uniform sampler2D uTexture1;
-uniform sampler2D uTexture2;
-uniform float uLodBias0;
-uniform float uLodBias1;
-uniform float uLodBias2;
-uniform int uUseTexture0;
-uniform int uUseTexture1;
-uniform int uUseTexture2;
-uniform int uColorOp0;
-uniform int uColorOp1;
-uniform int uColorOp2;
-uniform int uAlphaOp0;
-uniform int uAlphaOp1;
-uniform int uAlphaOp2;
-uniform int uFogEnabled;
-uniform vec4 uFogColor;
-uniform vec2 uFogRange;
-uniform int uAlphaCutout;
-uniform float uAlphaThreshold;
-uniform float uGamma;
-varying mediump vec4 vColor;
-varying mediump vec2 vTexCoord0;
-varying mediump vec2 vTexCoord1;
-varying mediump vec2 vTexCoord2;
-varying mediump float vFogDistance;
-float opScale(int op) {
-    if(op == 3) return 2.0;
-    if(op == 4) return 4.0;
-    return 1.0;
-}
-vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
-    if(colorOp == 1) previous.rgb = texel.rgb;
-    else if(colorOp >= 2) previous.rgb *= texel.rgb * opScale(colorOp);
-    if(alphaOp == 1) previous.a = texel.a;
-    else if(alphaOp >= 2) previous.a *= texel.a * opScale(alphaOp);
-    return clamp(previous, 0.0, 1.0);
-}
-void main() {
-    vec4 color = vColor;
-    if(uUseTexture0 != 0) color = applyStage(color, texture2D(uTexture0, vTexCoord0, uLodBias0), uColorOp0, uAlphaOp0);
-    if(uUseTexture1 != 0) color = applyStage(color, texture2D(uTexture1, vTexCoord1, uLodBias1), uColorOp1, uAlphaOp1);
-    if(uUseTexture2 != 0) color = applyStage(color, texture2D(uTexture2, vTexCoord2, uLodBias2), uColorOp2, uAlphaOp2);
-    if(uAlphaCutout != 0 && color.a <= uAlphaThreshold) discard;
-    if(uFogEnabled != 0) {
-        float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
-        color.rgb = mix(uFogColor.rgb, color.rgb, fog);
-    }
-    color.rgb = clamp(color.rgb * uGamma, 0.0, 1.0);
-    gl_FragColor = color;
-}
-)";
-
-static const char * gles3VertexShader = R"(#version 300 es
-precision highp float;
-in vec4 aPosition;
-in vec4 aColor;
-in vec2 aTexCoord0;
-in vec2 aTexCoord1;
-in vec2 aTexCoord2;
-uniform mat4 uProjection;
-uniform mat4 uView;
-uniform int uTransform;
-out mediump vec4 vColor;
-out mediump vec2 vTexCoord0;
-out mediump vec2 vTexCoord1;
-out mediump vec2 vTexCoord2;
-out mediump float vFogDistance;
-void main() {
-    if(uTransform != 0) {
-        vec4 viewPosition = uView * aPosition;
-        gl_Position = uProjection * viewPosition;
-        vFogDistance = max(-viewPosition.z, 0.0);
-    } else {
-        gl_Position = uProjection * aPosition;
-        vFogDistance = abs(aPosition.w);
-    }
-    vColor = aColor;
-    vTexCoord0 = aTexCoord0;
-    vTexCoord1 = aTexCoord1;
-    vTexCoord2 = aTexCoord2;
-}
-)";
-
-static const char * gles3FragmentShader = R"(#version 300 es
-#ifdef GL_FRAGMENT_PRECISION_HIGH
-precision highp float;
-#else
-precision mediump float;
-#endif
-uniform sampler2D uTexture0;
-uniform sampler2D uTexture1;
-uniform sampler2D uTexture2;
-uniform float uLodBias0;
-uniform float uLodBias1;
-uniform float uLodBias2;
-uniform int uUseTexture0;
-uniform int uUseTexture1;
-uniform int uUseTexture2;
-uniform int uColorOp0;
-uniform int uColorOp1;
-uniform int uColorOp2;
-uniform int uAlphaOp0;
-uniform int uAlphaOp1;
-uniform int uAlphaOp2;
-uniform int uFogEnabled;
-uniform vec4 uFogColor;
-uniform vec2 uFogRange;
-uniform int uAlphaCutout;
-uniform float uAlphaThreshold;
-uniform float uGamma;
-in mediump vec4 vColor;
-in mediump vec2 vTexCoord0;
-in mediump vec2 vTexCoord1;
-in mediump vec2 vTexCoord2;
-in mediump float vFogDistance;
-out vec4 fragColor;
-float opScale(int op) {
-    if(op == 3) return 2.0;
-    if(op == 4) return 4.0;
-    return 1.0;
-}
-vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
-    if(colorOp == 1) previous.rgb = texel.rgb;
-    else if(colorOp >= 2) previous.rgb *= texel.rgb * opScale(colorOp);
-    if(alphaOp == 1) previous.a = texel.a;
-    else if(alphaOp >= 2) previous.a *= texel.a * opScale(alphaOp);
-    return clamp(previous, 0.0, 1.0);
-}
-void main() {
-    vec4 color = vColor;
-    if(uUseTexture0 != 0) color = applyStage(color, texture(uTexture0, vTexCoord0, uLodBias0), uColorOp0, uAlphaOp0);
-    if(uUseTexture1 != 0) color = applyStage(color, texture(uTexture1, vTexCoord1, uLodBias1), uColorOp1, uAlphaOp1);
-    if(uUseTexture2 != 0) color = applyStage(color, texture(uTexture2, vTexCoord2, uLodBias2), uColorOp2, uAlphaOp2);
-    if(uAlphaCutout != 0 && color.a <= uAlphaThreshold) discard;
-    if(uFogEnabled != 0) {
-        float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
-        color.rgb = mix(uFogColor.rgb, color.rgb, fog);
-    }
-    color.rgb = clamp(color.rgb * uGamma, 0.0, 1.0);
-    fragColor = color;
-}
-)";
-
-} // namespace
-
-bool OpenGLRenderer::initializeGLESProgram() {
-	GLuint vertex = compileGLESShader(GL_VERTEX_SHADER, g_useGLES2_0 ? gles2VertexShader : gles3VertexShader);
-	GLuint fragment = compileGLESShader(GL_FRAGMENT_SHADER, g_useGLES2_0 ? gles2FragmentShader : gles3FragmentShader);
-	if(!vertex || !fragment) {
-		if(vertex) glDeleteShader(vertex);
-		if(fragment) glDeleteShader(fragment);
-		return false;
-	}
+GLuint linkGLESProgram(GLuint vertex, GLuint fragment) {
 	GLuint program = glCreateProgram();
 	if(!program) {
 		LogError << "Could not create GLES shader program";
-		glDeleteShader(vertex);
-		glDeleteShader(fragment);
-		return false;
+		return 0;
 	}
 	glAttachShader(program, vertex);
 	glAttachShader(program, fragment);
@@ -1605,8 +1353,6 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	glBindAttribLocation(program, 3, "aTexCoord1");
 	glBindAttribLocation(program, 4, "aTexCoord2");
 	glLinkProgram(program);
-	glDeleteShader(vertex);
-	glDeleteShader(fragment);
 	GLint linked = GL_FALSE;
 	glGetProgramiv(program, GL_LINK_STATUS, &linked);
 	if(linked != GL_TRUE) {
@@ -1616,72 +1362,253 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		glGetProgramInfoLog(program, GLsizei(log.size()), nullptr, log.data());
 		LogError << "GLES program link failed: " << log;
 		glDeleteProgram(program);
+		return 0;
+	}
+	return program;
+}
+
+/*
+ * Shader sources are assembled as <prefix><variant defines><body>.
+ * The prefix maps the few keywords that differ between GLSL ES 1.00 and 3.00,
+ * so both language versions share one body and cannot drift apart.
+ * "#version" has to stay on the very first line for GLSL ES 3.00.
+ */
+const char * const glesShaderPrefix100 =
+	"#define ARX_VS_IN attribute\n"
+	"#define ARX_VARYING_OUT varying\n"
+	"#define ARX_VARYING_IN varying\n"
+	"#define ARX_TEXTURE texture2D\n"
+	"#define ARX_FRAG_COLOR gl_FragColor\n";
+
+const char * const glesShaderPrefix300 =
+	"#version 300 es\n"
+	"#define ARX_GLSL_300 1\n"
+	"#define ARX_VS_IN in\n"
+	"#define ARX_VARYING_OUT out\n"
+	"#define ARX_VARYING_IN in\n"
+	"#define ARX_TEXTURE texture\n"
+	"#define ARX_FRAG_COLOR arxFragColor\n";
+
+const char * const glesVertexShader = R"(
+precision highp float;
+ARX_VS_IN vec4 aPosition;
+ARX_VS_IN vec4 aColor;
+ARX_VS_IN vec2 aTexCoord0;
+ARX_VS_IN vec2 aTexCoord1;
+ARX_VS_IN vec2 aTexCoord2;
+uniform mat4 uProjection;
+uniform mat4 uView;
+uniform int uTransform;
+ARX_VARYING_OUT mediump vec4 vColor;
+ARX_VARYING_OUT mediump vec2 vTexCoord0;
+ARX_VARYING_OUT mediump vec2 vTexCoord1;
+ARX_VARYING_OUT mediump vec2 vTexCoord2;
+ARX_VARYING_OUT mediump float vFogDistance;
+void main() {
+    if(uTransform != 0) {
+        vec4 viewPosition = uView * aPosition;
+        gl_Position = uProjection * viewPosition;
+        vFogDistance = max(-viewPosition.z, 0.0);
+    } else {
+        gl_Position = uProjection * aPosition;
+        vFogDistance = abs(aPosition.w);
+    }
+    vColor = aColor;
+    vTexCoord0 = aTexCoord0;
+    vTexCoord1 = aTexCoord1;
+    vTexCoord2 = aTexCoord2;
+}
+)";
+
+/*
+ * ARX_ALPHA_CUTOUT and ARX_FOG select the fragment shader variant. Keeping
+ * "discard" out of the programs used for opaque geometry matters on Mali:
+ * a shader that may discard disables forward pixel kill and early depth
+ * updates for every draw that uses it.
+ */
+const char * const glesFragmentShader = R"(
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+#ifdef ARX_GLSL_300
+out vec4 arxFragColor;
+#endif
+uniform sampler2D uTexture0;
+uniform sampler2D uTexture1;
+uniform sampler2D uTexture2;
+uniform float uLodBias0;
+uniform float uLodBias1;
+uniform float uLodBias2;
+uniform int uUseTexture0;
+uniform int uUseTexture1;
+uniform int uUseTexture2;
+uniform int uColorOp0;
+uniform int uColorOp1;
+uniform int uColorOp2;
+uniform int uAlphaOp0;
+uniform int uAlphaOp1;
+uniform int uAlphaOp2;
+#ifdef ARX_ALPHA_CUTOUT
+uniform float uAlphaThreshold;
+#endif
+#ifdef ARX_FOG
+uniform vec4 uFogColor;
+uniform vec2 uFogRange;
+ARX_VARYING_IN mediump float vFogDistance;
+#endif
+uniform float uGamma;
+ARX_VARYING_IN mediump vec4 vColor;
+ARX_VARYING_IN mediump vec2 vTexCoord0;
+ARX_VARYING_IN mediump vec2 vTexCoord1;
+ARX_VARYING_IN mediump vec2 vTexCoord2;
+float opScale(int op) {
+    if(op == 3) return 2.0;
+    if(op == 4) return 4.0;
+    return 1.0;
+}
+vec4 applyStage(vec4 previous, vec4 texel, int colorOp, int alphaOp) {
+    if(colorOp == 1) previous.rgb = texel.rgb;
+    else if(colorOp >= 2) previous.rgb *= texel.rgb * opScale(colorOp);
+    if(alphaOp == 1) previous.a = texel.a;
+    else if(alphaOp >= 2) previous.a *= texel.a * opScale(alphaOp);
+    return clamp(previous, 0.0, 1.0);
+}
+void main() {
+    vec4 color = vColor;
+    if(uUseTexture0 != 0) color = applyStage(color, ARX_TEXTURE(uTexture0, vTexCoord0, uLodBias0), uColorOp0, uAlphaOp0);
+    if(uUseTexture1 != 0) color = applyStage(color, ARX_TEXTURE(uTexture1, vTexCoord1, uLodBias1), uColorOp1, uAlphaOp1);
+    if(uUseTexture2 != 0) color = applyStage(color, ARX_TEXTURE(uTexture2, vTexCoord2, uLodBias2), uColorOp2, uAlphaOp2);
+#ifdef ARX_ALPHA_CUTOUT
+    if(color.a <= uAlphaThreshold) discard;
+#endif
+#ifdef ARX_FOG
+    float fog = clamp((uFogRange.y - vFogDistance) / max(uFogRange.y - uFogRange.x, 0.0001), 0.0, 1.0);
+    color.rgb = mix(uFogColor.rgb, color.rgb, fog);
+#endif
+    color.rgb = clamp(color.rgb * uGamma, 0.0, 1.0);
+    ARX_FRAG_COLOR = color;
+}
+)";
+
+} // namespace
+
+bool OpenGLRenderer::initializeGLESProgram() {
+
+	shutdownGLESProgram();
+
+	const std::string prefix = g_useGLES2_0 ? glesShaderPrefix100 : glesShaderPrefix300;
+
+	GLuint vertex = compileGLESShader(GL_VERTEX_SHADER, prefix + glesVertexShader);
+	if(!vertex) {
 		return false;
 	}
-	shutdownGLESProgram();
-	m_glesProgram = program;
-	m_glesUniformProjection = glGetUniformLocation(program, "uProjection");
-	m_glesUniformView = glGetUniformLocation(program, "uView");
-	m_glesUniformTransform = glGetUniformLocation(program, "uTransform");
-	m_glesUniformFogEnabled = glGetUniformLocation(program, "uFogEnabled");
-	m_glesUniformFogColor = glGetUniformLocation(program, "uFogColor");
-	m_glesUniformFogRange = glGetUniformLocation(program, "uFogRange");
-	m_glesUniformAlphaCutout = glGetUniformLocation(program, "uAlphaCutout");
-	m_glesUniformAlphaThreshold = glGetUniformLocation(program, "uAlphaThreshold");
-	m_glesUniformGamma = glGetUniformLocation(program, "uGamma");
-	glUseProgram(program);
-	const char * samplerNames[3] = {"uTexture0", "uTexture1", "uTexture2"};
-	const char * useNames[3] = {"uUseTexture0", "uUseTexture1", "uUseTexture2"};
-	const char * colorNames[3] = {"uColorOp0", "uColorOp1", "uColorOp2"};
-	const char * alphaNames[3] = {"uAlphaOp0", "uAlphaOp1", "uAlphaOp2"};
-	const char * lodBiasNames[3] = {"uLodBias0", "uLodBias1", "uLodBias2"};
-	for(GLint i = 0; i < 3; ++i) {
-		GLint sampler = glGetUniformLocation(program, samplerNames[i]);
-		if(sampler >= 0) glUniform1i(sampler, i);
-		m_glesUniformUseTexture[i] = glGetUniformLocation(program, useNames[i]);
-		m_glesUniformColorOp[i] = glGetUniformLocation(program, colorNames[i]);
-		m_glesUniformAlphaOp[i] = glGetUniformLocation(program, alphaNames[i]);
-		m_glesUniformLodBias[i] = glGetUniformLocation(program, lodBiasNames[i]);
+
+	const char * samplerNames[3] = { "uTexture0", "uTexture1", "uTexture2" };
+	const char * useNames[3] = { "uUseTexture0", "uUseTexture1", "uUseTexture2" };
+	const char * colorNames[3] = { "uColorOp0", "uColorOp1", "uColorOp2" };
+	const char * alphaNames[3] = { "uAlphaOp0", "uAlphaOp1", "uAlphaOp2" };
+	const char * lodBiasNames[3] = { "uLodBias0", "uLodBias1", "uLodBias2" };
+
+	bool success = true;
+	for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
+
+		std::string source = prefix;
+		if(variant & GLESProgramAlphaCutout) {
+			source += "#define ARX_ALPHA_CUTOUT 1\n";
+		}
+		if(variant & GLESProgramFog) {
+			source += "#define ARX_FOG 1\n";
+		}
+		source += glesFragmentShader;
+
+		GLuint fragment = compileGLESShader(GL_FRAGMENT_SHADER, source);
+		if(!fragment) {
+			success = false;
+			break;
+		}
+		GLuint id = linkGLESProgram(vertex, fragment);
+		glDeleteShader(fragment);
+		if(!id) {
+			success = false;
+			break;
+		}
+
+		GLESProgram & program = m_glesPrograms[variant];
+		program.id = id;
+		program.cacheValid = false;
+		program.uniformProjection = glGetUniformLocation(id, "uProjection");
+		program.uniformView = glGetUniformLocation(id, "uView");
+		program.uniformTransform = glGetUniformLocation(id, "uTransform");
+		program.uniformFogColor = glGetUniformLocation(id, "uFogColor");
+		program.uniformFogRange = glGetUniformLocation(id, "uFogRange");
+		program.uniformAlphaThreshold = glGetUniformLocation(id, "uAlphaThreshold");
+		program.uniformGamma = glGetUniformLocation(id, "uGamma");
+		glUseProgram(id);
+		m_glesBoundProgram = id;
+		for(GLint i = 0; i < 3; ++i) {
+			GLint sampler = glGetUniformLocation(id, samplerNames[i]);
+			if(sampler >= 0) {
+				glUniform1i(sampler, i);
+			}
+			program.uniformUseTexture[i] = glGetUniformLocation(id, useNames[i]);
+			program.uniformColorOp[i] = glGetUniformLocation(id, colorNames[i]);
+			program.uniformAlphaOp[i] = glGetUniformLocation(id, alphaNames[i]);
+			program.uniformLodBias[i] = glGetUniformLocation(id, lodBiasNames[i]);
+		}
+
 	}
+
+	glDeleteShader(vertex);
+
+	if(!success) {
+		shutdownGLESProgram();
+		return false;
+	}
+
 	glUseProgram(0);
-	m_glesProgramBound = false;
-	m_glesUniformCacheValid = false;
+	m_glesBoundProgram = 0;
+
 	return true;
 }
 
 void OpenGLRenderer::shutdownGLESProgram() {
-	if(m_glesProgram) {
-		if(m_glesProgramBound) {
-			glUseProgram(0);
+
+	if(m_glesBoundProgram) {
+		glUseProgram(0);
+		m_glesBoundProgram = 0;
+	}
+
+	for(GLESProgram & program : m_glesPrograms) {
+		if(program.id) {
+			glDeleteProgram(program.id);
 		}
-		glDeleteProgram(m_glesProgram);
-		m_glesProgram = 0;
+		program = GLESProgram();
 	}
-	m_glesProgramBound = false;
-	m_glesUniformCacheValid = false;
-	m_glesUniformProjection = -1;
-	m_glesUniformView = -1;
-	m_glesUniformTransform = -1;
-	m_glesUniformFogEnabled = -1;
-	m_glesUniformFogColor = -1;
-	m_glesUniformFogRange = -1;
-	m_glesUniformAlphaCutout = -1;
-	m_glesUniformAlphaThreshold = -1;
-	m_glesUniformGamma = -1;
-	for(size_t i = 0; i < 3; ++i) {
-		m_glesUniformUseTexture[i] = -1;
-		m_glesUniformColorOp[i] = -1;
-		m_glesUniformAlphaOp[i] = -1;
-		m_glesUniformLodBias[i] = -1;
-	}
+
 }
 
 void OpenGLRenderer::prepareGLESProgram(bool transformed) {
-	if(!m_glesProgram) return;
-	if(!m_glesProgramBound) {
-		glUseProgram(m_glesProgram);
-		m_glesProgramBound = true;
+
+	size_t variant = 0;
+	if(m_glesAlphaCutout) {
+		variant |= GLESProgramAlphaCutout;
 	}
+	if(m_state.getFog()) {
+		variant |= GLESProgramFog;
+	}
+
+	GLESProgram & program = m_glesPrograms[variant];
+	if(!program.id) {
+		return;
+	}
+
+	if(m_glesBoundProgram != program.id) {
+		glUseProgram(program.id);
+		m_glesBoundProgram = program.id;
+	}
+
 	glm::mat4 projection = m_projection;
 	glm::mat4 view = m_view;
 	if(!transformed) {
@@ -1693,83 +1620,84 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		projection = glm::translate(projection, glm::vec3(0.5f, 0.5f, 0.f));
 		view = glm::mat4(1.f);
 	}
-	const bool cacheValid = m_glesUniformCacheValid;
-	if(m_glesUniformProjection >= 0 &&
-	   (!cacheValid || std::memcmp(glm::value_ptr(m_glesCachedProjection),
-	                               glm::value_ptr(projection), sizeof(glm::mat4)) != 0)) {
-		glUniformMatrix4fv(m_glesUniformProjection, 1, GL_FALSE, glm::value_ptr(projection));
-		m_glesCachedProjection = projection;
+
+	const bool cacheValid = program.cacheValid;
+
+	if(program.uniformProjection >= 0
+	   && (!cacheValid || std::memcmp(glm::value_ptr(program.projection), glm::value_ptr(projection),
+	                                  sizeof(glm::mat4)) != 0)) {
+		glUniformMatrix4fv(program.uniformProjection, 1, GL_FALSE, glm::value_ptr(projection));
+		program.projection = projection;
 	}
-	if(m_glesUniformView >= 0 &&
-	   (!cacheValid || std::memcmp(glm::value_ptr(m_glesCachedView),
-	                               glm::value_ptr(view), sizeof(glm::mat4)) != 0)) {
-		glUniformMatrix4fv(m_glesUniformView, 1, GL_FALSE, glm::value_ptr(view));
-		m_glesCachedView = view;
+
+	if(program.uniformView >= 0
+	   && (!cacheValid || std::memcmp(glm::value_ptr(program.view), glm::value_ptr(view),
+	                                  sizeof(glm::mat4)) != 0)) {
+		glUniformMatrix4fv(program.uniformView, 1, GL_FALSE, glm::value_ptr(view));
+		program.view = view;
 	}
-	const GLint transformValue = transformed ? 1 : 0;
-	if(m_glesUniformTransform >= 0 && (!cacheValid || m_glesCachedTransform != transformValue)) {
-		glUniform1i(m_glesUniformTransform, transformValue);
-		m_glesCachedTransform = transformValue;
+
+	const GLint transform = transformed ? 1 : 0;
+	if(program.uniformTransform >= 0 && (!cacheValid || program.transform != transform)) {
+		glUniform1i(program.uniformTransform, transform);
+		program.transform = transform;
 	}
-	const GLint fogEnabled = m_state.getFog() ? 1 : 0;
-	if(m_glesUniformFogEnabled >= 0 && (!cacheValid || m_glesCachedFogEnabled != fogEnabled)) {
-		glUniform1i(m_glesUniformFogEnabled, fogEnabled);
-		m_glesCachedFogEnabled = fogEnabled;
+
+	if(program.uniformFogColor >= 0) {
+		Color4f fog(m_glesFogColor);
+		if(!cacheValid || program.fogColor[0] != fog.r || program.fogColor[1] != fog.g
+		   || program.fogColor[2] != fog.b || program.fogColor[3] != fog.a) {
+			glUniform4f(program.uniformFogColor, fog.r, fog.g, fog.b, fog.a);
+			program.fogColor[0] = fog.r;
+			program.fogColor[1] = fog.g;
+			program.fogColor[2] = fog.b;
+			program.fogColor[3] = fog.a;
+		}
 	}
-	Color4f fog(m_glesFogColor);
-	if(m_glesUniformFogColor >= 0 &&
-	   (!cacheValid || m_glesCachedFogColor[0] != fog.r || m_glesCachedFogColor[1] != fog.g ||
-	    m_glesCachedFogColor[2] != fog.b || m_glesCachedFogColor[3] != fog.a)) {
-		glUniform4f(m_glesUniformFogColor, fog.r, fog.g, fog.b, fog.a);
-		m_glesCachedFogColor[0] = fog.r;
-		m_glesCachedFogColor[1] = fog.g;
-		m_glesCachedFogColor[2] = fog.b;
-		m_glesCachedFogColor[3] = fog.a;
+
+	if(program.uniformFogRange >= 0
+	   && (!cacheValid || program.fogStart != m_glesFogStart || program.fogEnd != m_glesFogEnd)) {
+		glUniform2f(program.uniformFogRange, m_glesFogStart, m_glesFogEnd);
+		program.fogStart = m_glesFogStart;
+		program.fogEnd = m_glesFogEnd;
 	}
-	if(m_glesUniformFogRange >= 0 &&
-	   (!cacheValid || m_glesCachedFogStart != m_glesFogStart || m_glesCachedFogEnd != m_glesFogEnd)) {
-		glUniform2f(m_glesUniformFogRange, m_glesFogStart, m_glesFogEnd);
-		m_glesCachedFogStart = m_glesFogStart;
-		m_glesCachedFogEnd = m_glesFogEnd;
+
+	if(program.uniformAlphaThreshold >= 0
+	   && (!cacheValid || program.alphaThreshold != m_glesAlphaThreshold)) {
+		glUniform1f(program.uniformAlphaThreshold, m_glesAlphaThreshold);
+		program.alphaThreshold = m_glesAlphaThreshold;
 	}
-	const GLint alphaCutout = m_glesAlphaCutout ? 1 : 0;
-	if(m_glesUniformAlphaCutout >= 0 && (!cacheValid || m_glesCachedAlphaCutout != alphaCutout)) {
-		glUniform1i(m_glesUniformAlphaCutout, alphaCutout);
-		m_glesCachedAlphaCutout = alphaCutout;
+
+	if(program.uniformGamma >= 0 && (!cacheValid || program.gamma != m_glesGamma)) {
+		glUniform1f(program.uniformGamma, m_glesGamma);
+		program.gamma = m_glesGamma;
 	}
-	if(m_glesUniformAlphaThreshold >= 0 &&
-	   (!cacheValid || m_glesCachedAlphaThreshold != m_glesAlphaThreshold)) {
-		glUniform1f(m_glesUniformAlphaThreshold, m_glesAlphaThreshold);
-		m_glesCachedAlphaThreshold = m_glesAlphaThreshold;
-	}
-	if(m_glesUniformGamma >= 0 && (!cacheValid || m_glesCachedGamma != m_glesGamma)) {
-		glUniform1f(m_glesUniformGamma, m_glesGamma);
-		m_glesCachedGamma = m_glesGamma;
-	}
+
 	for(size_t i = 0; i < 3; ++i) {
 		GLTextureStage * stage = i < m_TextureStages.size() ? GetTextureStage(i) : nullptr;
 		const GLint useTexture = stage && i <= maxTextureStage && stage->getTexture() && stage->isEnabled() ? 1 : 0;
 		const GLint colorOp = stage ? GLint(stage->getColorOp()) : GLint(TextureStage::OpDisable);
 		const GLint alphaOp = stage ? GLint(stage->getAlphaOp()) : GLint(TextureStage::OpDisable);
 		const float lodBias = stage ? stage->getMipMapLODBias() : 0.f;
-		if(m_glesUniformUseTexture[i] >= 0 && (!cacheValid || m_glesCachedUseTexture[i] != useTexture)) {
-			glUniform1i(m_glesUniformUseTexture[i], useTexture);
-			m_glesCachedUseTexture[i] = useTexture;
+		if(program.uniformUseTexture[i] >= 0 && (!cacheValid || program.useTexture[i] != useTexture)) {
+			glUniform1i(program.uniformUseTexture[i], useTexture);
+			program.useTexture[i] = useTexture;
 		}
-		if(m_glesUniformColorOp[i] >= 0 && (!cacheValid || m_glesCachedColorOp[i] != colorOp)) {
-			glUniform1i(m_glesUniformColorOp[i], colorOp);
-			m_glesCachedColorOp[i] = colorOp;
+		if(program.uniformColorOp[i] >= 0 && (!cacheValid || program.colorOp[i] != colorOp)) {
+			glUniform1i(program.uniformColorOp[i], colorOp);
+			program.colorOp[i] = colorOp;
 		}
-		if(m_glesUniformAlphaOp[i] >= 0 && (!cacheValid || m_glesCachedAlphaOp[i] != alphaOp)) {
-			glUniform1i(m_glesUniformAlphaOp[i], alphaOp);
-			m_glesCachedAlphaOp[i] = alphaOp;
+		if(program.uniformAlphaOp[i] >= 0 && (!cacheValid || program.alphaOp[i] != alphaOp)) {
+			glUniform1i(program.uniformAlphaOp[i], alphaOp);
+			program.alphaOp[i] = alphaOp;
 		}
-		if(m_glesUniformLodBias[i] >= 0 && (!cacheValid || m_glesCachedLodBias[i] != lodBias)) {
-			glUniform1f(m_glesUniformLodBias[i], lodBias);
-			m_glesCachedLodBias[i] = lodBias;
+		if(program.uniformLodBias[i] >= 0 && (!cacheValid || program.lodBias[i] != lodBias)) {
+			glUniform1f(program.uniformLodBias[i], lodBias);
+			program.lodBias[i] = lodBias;
 		}
 	}
-	m_glesUniformCacheValid = true;
+
+	program.cacheValid = true;
 }
 #endif
 
