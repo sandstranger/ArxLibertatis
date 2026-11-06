@@ -68,6 +68,7 @@ public:
 	// Fog
 	void SetFogColor(Color color) override;
 	void SetFogParams(float fogStart, float fogEnd) override;
+	void setGamma(float gamma) override;
 	
 	// Rasterizer
 	void SetAntialiasing(bool enable) override;
@@ -202,11 +203,13 @@ private:
 	GLint m_glesUniformFogRange = -1;
 	GLint m_glesUniformAlphaCutout = -1;
 	GLint m_glesUniformAlphaThreshold = -1;
+	GLint m_glesUniformGamma = -1;
 	GLint m_glesUniformLodBias[3] = {-1, -1, -1};
 	GLint m_glesUniformUseTexture[3] = {-1, -1, -1};
 	GLint m_glesUniformColorOp[3] = {-1, -1, -1};
 	GLint m_glesUniformAlphaOp[3] = {-1, -1, -1};
 	Color m_glesFogColor;
+	float m_glesGamma = 1.f;
 	float m_glesFogStart = 0.f;
 	float m_glesFogEnd = 1.f;
 	bool m_glesAlphaCutout = false;
