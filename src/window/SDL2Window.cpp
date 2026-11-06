@@ -62,6 +62,10 @@
 #include "window/SDL2X11Util.h"
 
 #ifdef ANDROID
+#include "glad.h"
+#endif
+
+#ifdef ANDROID
 #include "AngleShaderCache.h"
 #include "SwappyController.h"
 
@@ -353,11 +357,24 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 		}
 
 #ifdef ANDROID
-        if (m_glcontext) {
-            SDL_GL_MakeCurrent(m_window, m_glcontext);
-            angle_blobcache_install("arx_libertatis");
+        if(SDL_GL_MakeCurrent(m_window, m_glcontext) != 0) {
+            if(lastTry) {
+                LogError << "Could not make the OpenGL ES context current: " << SDL_GetError();
+            }
+            continue;
         }
-        
+
+        angle_blobcache_install("arx_libertatis");
+
+        // Resolve GLES entry points from the active EGL implementation. This is
+        // required when Android routes the context through ANGLE instead of the
+        // platform driver's directly linked GLES symbols.
+        if(!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
+            if(lastTry) {
+                LogError << "Could not load OpenGL ES entry points through SDL";
+            }
+            continue;
+        }
 #endif
         
 		// Verify that the MSAA setting matches what was requested
