@@ -515,7 +515,7 @@ bool SDL2Window::initialize() {
         }
 #endif
 
-		#if ARX_HAVE_EPOXY
+		#if ARX_HAVE_EPOXY && !defined(ANDROID)
 		if(samples == 0 && first == (autoRenderer || config.video.renderer == "OpenGL ES")) {
 			matched = true;
 			
