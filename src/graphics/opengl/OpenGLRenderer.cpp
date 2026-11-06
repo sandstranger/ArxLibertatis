@@ -1042,8 +1042,9 @@ void OpenGLRenderer::drawIndexedElements(Primitive primitive, const unsigned sho
 	if(nindices == 0) {
 		return;
 	}
-	if(nindices > size_t(std::numeric_limits<GLsizeiptr>::max()) / sizeof(unsigned short)) {
-		LogError << "Indexed GLES draw exceeds GLsizeiptr range";
+	if(nindices > size_t(std::numeric_limits<GLsizeiptr>::max()) / sizeof(unsigned short)
+	   || nindices > size_t(std::numeric_limits<GLsizei>::max())) {
+		LogError << "Indexed GLES draw exceeds GLsizeiptr/GLsizei range";
 		return;
 	}
 
