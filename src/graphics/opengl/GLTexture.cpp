@@ -1487,11 +1487,68 @@ void GLTexture::upload() {
     // GLES 3 removed the legacy LUMINANCE/ALPHA/INTENSITY and BGR formats.
     // Normalize every decoded source image to RGBA so both ES 2 and ES 3 use
     // the same well-defined upload path.
-    Image glesImage = m_image;
-    if(!glesImage.convertTo(Image::Format_R8G8B8A8)) {
-        LogError << "Could not convert texture to RGBA for OpenGL ES";
-        return;
+    Image glesImage;
+    glesImage.create(m_image.getWidth(), m_image.getHeight(), Image::Format_R8G8B8A8);
+    const unsigned char * source = m_image.getData();
+    unsigned char * destination = glesImage.getData();
+    const size_t pixelCount = m_image.getWidth() * m_image.getHeight();
+
+    for(size_t i = 0; i < pixelCount; ++i) {
+        const unsigned char * src = source;
+        unsigned char * dst = destination;
+        switch(m_image.getFormat()) {
+            case Image::Format_L8: {
+                const unsigned char luminance = src[0];
+                dst[0] = luminance;
+                dst[1] = luminance;
+                dst[2] = luminance;
+                dst[3] = isIntensity() ? luminance : 255;
+                break;
+            }
+            case Image::Format_A8:
+                dst[0] = dst[1] = dst[2] = 255;
+                dst[3] = src[0];
+                break;
+            case Image::Format_L8A8: {
+                const unsigned char luminance = src[0];
+                dst[0] = luminance;
+                dst[1] = luminance;
+                dst[2] = luminance;
+                dst[3] = isIntensity() ? luminance : src[1];
+                break;
+            }
+            case Image::Format_R8G8B8:
+                dst[0] = src[0];
+                dst[1] = src[1];
+                dst[2] = src[2];
+                dst[3] = 255;
+                break;
+            case Image::Format_B8G8R8:
+                dst[0] = src[2];
+                dst[1] = src[1];
+                dst[2] = src[0];
+                dst[3] = 255;
+                break;
+            case Image::Format_R8G8B8A8:
+                dst[0] = src[0];
+                dst[1] = src[1];
+                dst[2] = src[2];
+                dst[3] = src[3];
+                break;
+            case Image::Format_B8G8R8A8:
+                dst[0] = src[2];
+                dst[1] = src[1];
+                dst[2] = src[0];
+                dst[3] = src[3];
+                break;
+            default:
+                LogError << "Unsupported source texture format for OpenGL ES";
+                return;
+        }
+        source += m_image.getNumChannels();
+        destination += 4;
     }
+
     const Image &textureImage = glesImage;
     GLint internal = g_useGLES2_0 ? GL_RGBA : GL_RGBA8;
     GLenum format = GL_RGBA;
