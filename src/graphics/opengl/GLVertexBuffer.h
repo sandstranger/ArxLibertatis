@@ -21,6 +21,8 @@
 #define ARX_GRAPHICS_OPENGL_GLVERTEXBUFFER_H
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 #include <limits>
@@ -44,6 +46,12 @@ enum GLArrayClientState {
 	GL_SMY_VERTEX3
 };
 
+#ifdef ANDROID
+static inline const void * vertexAttributeOffset(const void * base, size_t offset) {
+	return reinterpret_cast<const void *>(reinterpret_cast<std::uintptr_t>(base) + offset);
+}
+#endif
+
 void bindBuffer(GLuint buffer);
 void unbindBuffer(GLuint buffer);
 #ifdef ANDROID
@@ -64,10 +72,10 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 	
 	#ifdef ANDROID
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(*vertices), &vertices->p);
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(TexturedVertex, p)));
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), &vertices->color);
-	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(TexturedVertex, color)));
+	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(TexturedVertex, uv)), sizeof(*vertices));
 #else
 	glVertexPointer(4, GL_FLOAT, sizeof(*vertices), &vertices->p);
 	if(renderer->hasVertexFogCoordinate()) {
@@ -75,7 +83,7 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 		glFogCoordPointer(GL_FLOAT, sizeof(*vertices), &vertices->w);
 	}
 	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, uv)), sizeof(*vertices));
 #endif
 }
 
@@ -88,9 +96,9 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertice
 	
 	#ifdef ANDROID
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), &vertices->p.x);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, p)));
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), &vertices->color);
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, color)));
 	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
 #else
 	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
@@ -109,12 +117,12 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX3 * vertic
 	
 	#ifdef ANDROID
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), &vertices->p.x);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, p)));
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), &vertices->color);
-	setVertexArrayTexCoord(0, &vertices->uv[0], sizeof(*vertices));
-	setVertexArrayTexCoord(1, &vertices->uv[1], sizeof(*vertices));
-	setVertexArrayTexCoord(2, &vertices->uv[2], sizeof(*vertices));
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, color)));
+	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv)), sizeof(*vertices));
+	setVertexArrayTexCoord(1, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + sizeof(Vec2f)), sizeof(*vertices));
+	setVertexArrayTexCoord(2, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + 2 * sizeof(Vec2f)), sizeof(*vertices));
 #else
 	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
 	if(renderer->hasVertexFogCoordinate()) glDisableClientState(GL_FOG_COORDINATE_ARRAY);
@@ -182,12 +190,11 @@ public:
 		bindBuffer(m_buffer);
 		
 #ifdef ANDROID
-		// GLES 2.0 has no base-vertex draw call and does not guarantee 32-bit
-		// element indices. Shift the attribute base instead, then keep indices
-		// relative to this draw's vertex range.
+		// GLES has no base-vertex draw call. Shift attribute base and submit
+		// indices through the renderer's temporary element buffer.
 		const Vertex * baseVertices = reinterpret_cast<const Vertex *>(offset * sizeof(Vertex));
 		setVertexArray<Vertex>(m_renderer, baseVertices, this);
-		glDrawElements(arxToGlPrimitiveType[primitive], GLsizei(nbindices), GL_UNSIGNED_SHORT, indices);
+		m_renderer->drawIndexedElements(primitive, indices, nbindices);
 #else
 		setVertexArray<Vertex>(m_renderer, nullptr, this);
 		GLenum mode = arxToGlPrimitiveType[primitive];
