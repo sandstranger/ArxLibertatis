@@ -435,7 +435,12 @@ void OpenGLRenderer::reinit() {
 	}
 	Clear(ColorBuffer | DepthBuffer);
 	m_currentTransform = GL_UnsetTransform;
-	initializeGLESProgram();
+	if(!initializeGLESProgram()) {
+		LogError << "Android GLES renderer initialization failed";
+		m_TextureStages.clear();
+		resetVertexArrayState();
+		return;
+	}
 #else
 	m_MSAALevel = 0;
 	{
@@ -1385,15 +1390,21 @@ void main() {
 
 } // namespace
 
-void OpenGLRenderer::initializeGLESProgram() {
+bool OpenGLRenderer::initializeGLESProgram() {
 	GLuint vertex = compileGLESShader(GL_VERTEX_SHADER, g_useGLES2_0 ? gles2VertexShader : gles3VertexShader);
 	GLuint fragment = compileGLESShader(GL_FRAGMENT_SHADER, g_useGLES2_0 ? gles2FragmentShader : gles3FragmentShader);
 	if(!vertex || !fragment) {
 		if(vertex) glDeleteShader(vertex);
 		if(fragment) glDeleteShader(fragment);
-		return;
+		return false;
 	}
 	GLuint program = glCreateProgram();
+	if(!program) {
+		LogError << "Could not create GLES shader program";
+		glDeleteShader(vertex);
+		glDeleteShader(fragment);
+		return false;
+	}
 	glAttachShader(program, vertex);
 	glAttachShader(program, fragment);
 	glBindAttribLocation(program, 0, "aPosition");
@@ -1413,7 +1424,7 @@ void OpenGLRenderer::initializeGLESProgram() {
 		glGetProgramInfoLog(program, GLsizei(log.size()), nullptr, log.data());
 		LogError << "GLES program link failed: " << log;
 		glDeleteProgram(program);
-		return;
+		return false;
 	}
 	shutdownGLESProgram();
 	m_glesProgram = program;
@@ -1440,12 +1451,28 @@ void OpenGLRenderer::initializeGLESProgram() {
 		m_glesUniformLodBias[i] = glGetUniformLocation(program, lodBiasNames[i]);
 	}
 	glUseProgram(0);
+	return true;
 }
 
 void OpenGLRenderer::shutdownGLESProgram() {
 	if(m_glesProgram) {
+		glUseProgram(0);
 		glDeleteProgram(m_glesProgram);
 		m_glesProgram = 0;
+	}
+	m_glesUniformProjection = -1;
+	m_glesUniformView = -1;
+	m_glesUniformTransform = -1;
+	m_glesUniformFogEnabled = -1;
+	m_glesUniformFogColor = -1;
+	m_glesUniformFogRange = -1;
+	m_glesUniformAlphaCutout = -1;
+	m_glesUniformAlphaThreshold = -1;
+	for(size_t i = 0; i < 3; ++i) {
+		m_glesUniformUseTexture[i] = -1;
+		m_glesUniformColorOp[i] = -1;
+		m_glesUniformAlphaOp[i] = -1;
+		m_glesUniformLodBias[i] = -1;
 	}
 }
 
