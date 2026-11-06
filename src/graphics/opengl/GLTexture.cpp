@@ -791,6 +791,14 @@ static bool UploadAsEtc2(
                     &cachedSize
             );
 
+    // The image hash intentionally does not include the mipmap flag. A
+    // previous request for the same image may therefore have cached only
+    // the base level. Do not read beyond that RAM-cache entry when this
+    // upload needs a longer mip chain.
+    if (cacheHit && cachedSize < totalCompressedSize) {
+        cacheHit = false;
+    }
+
     if (!cacheHit) {
 
         cacheHit =
