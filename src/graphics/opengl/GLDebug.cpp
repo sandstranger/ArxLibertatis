@@ -34,7 +34,7 @@
 
 namespace gldebug {
 
-#ifdef GL_KHR_debug
+#if defined(GL_KHR_debug) && !defined(ANDROID)
 
 static const char * sourceToString(GLenum source) {
 	
