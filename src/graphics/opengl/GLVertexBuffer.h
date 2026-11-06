@@ -63,18 +63,19 @@ void clearVertexArray(const void * ref);
 
 template <>
 inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * vertices, const void * ref) {
-	
 	ARX_UNUSED(vertices);
 
 	if(!switchVertexArray(GL_TexturedVertex, ref, 1)) {
 		return;
 	}
-	
-	#ifdef ANDROID
+
+#ifdef ANDROID
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(TexturedVertex, p)));
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+	                      vertexAttributeOffset(vertices, offsetof(TexturedVertex, p)));
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(TexturedVertex, color)));
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
+	                      vertexAttributeOffset(vertices, offsetof(TexturedVertex, color)));
 	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(TexturedVertex, uv)), sizeof(*vertices));
 #else
 	glVertexPointer(4, GL_FLOAT, sizeof(*vertices), &vertices->p);
@@ -83,23 +84,24 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 		glFogCoordPointer(GL_FLOAT, sizeof(*vertices), &vertices->w);
 	}
 	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, uv)), sizeof(*vertices));
+	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
 #endif
 }
 
 template <>
 inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertices, const void * ref) {
-	
 	if(!switchVertexArray(GL_SMY_VERTEX, ref, 1)) {
 		return;
 	}
-	
-	#ifdef ANDROID
+
+#ifdef ANDROID
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, p)));
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, p)));
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, color)));
-	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
+	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, color)));
+	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, uv)), sizeof(*vertices));
 #else
 	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
 	if(renderer->hasVertexFogCoordinate()) glDisableClientState(GL_FOG_COORDINATE_ARRAY);
@@ -110,16 +112,17 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertice
 
 template <>
 inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX3 * vertices, const void * ref) {
-	
 	if(!switchVertexArray(GL_SMY_VERTEX3, ref, 3)) {
 		return;
 	}
-	
-	#ifdef ANDROID
+
+#ifdef ANDROID
 	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, p)));
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, p)));
 	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, color)));
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
+	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, color)));
 	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv)), sizeof(*vertices));
 	setVertexArrayTexCoord(1, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + sizeof(Vec2f)), sizeof(*vertices));
 	setVertexArrayTexCoord(2, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + 2 * sizeof(Vec2f)), sizeof(*vertices));
