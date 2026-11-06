@@ -1611,8 +1611,11 @@ endif()
 # Add executables
 
 if (ANDROID)
-    find_library(ANDROID_GLESV2_LIBRARY GLESv2 REQUIRED)
-    find_library(ANDROID_GLESV3_LIBRARY GLESv3 REQUIRED)
+    find_library(ANDROID_GLESV2_LIBRARY GLESv2)
+    find_library(ANDROID_GLESV3_LIBRARY GLESv3)
+    if(NOT ANDROID_GLESV2_LIBRARY OR NOT ANDROID_GLESV3_LIBRARY)
+        message(SEND_ERROR "Android GLESv2/GLESv3 libraries are required")
+    endif()
 	add_library (arx SHARED "${ARX_SOURCES}" "${ALL_INCLUDES}")
     target_link_libraries(arx "${ARX_LIBRARIES}" AndroidGraphicsLayer etcpak ${ENET_LIBRARY} ${ANDROID_GLESV2_LIBRARY} ${ANDROID_GLESV3_LIBRARY})
     target_compile_definitions(arx PRIVATE GL_GLEXT_PROTOTYPES=1)
