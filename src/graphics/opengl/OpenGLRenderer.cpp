@@ -291,6 +291,15 @@ void OpenGLRenderer::initialize() {
 		m_hasDrawElementsBaseVertex = hasBaseVertexExtension;
 #endif
 		m_hasDrawRangeElements = gl.is(3, 0);
+#ifdef ANDROID
+		if(m_hasDrawElementsBaseVertex) {
+			LogInfo << "GLES indexed draws: "
+			        << (glDrawElementsBaseVertexOES ? "GL_OES_draw_elements_base_vertex" :
+			                                            "GL_EXT_draw_elements_base_vertex");
+		} else {
+			LogInfo << "GLES indexed draws: shifted-attribute fallback (no usable base-vertex entry point)";
+		}
+#endif
 	} else {
 #ifndef ANDROID       
 		m_hasDrawElementsBaseVertex = gl.has("GL_ARB_draw_elements_base_vertex", 3, 2);
