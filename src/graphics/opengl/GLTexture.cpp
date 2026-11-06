@@ -51,7 +51,7 @@ static std::vector<uint8_t> s_decodeBuffer;
 static std::vector<uint8_t> s_etc2Buffer;
 static std::vector<uint8_t> s_etc2CacheBuffer;
 static std::mutex s_textureBuffersMutex;
-static bool s_textureBuffersInited = false;
+static std::once_flag s_textureBuffersInitFlag;
 static bool s_enableETC2TextureSupport = true;
 
 static std::vector<uint8_t> s_mipRgbaBuffer;
@@ -77,33 +77,25 @@ void setTextureData(
 
 static inline void EnsureTextureBuffersInited() {
 
-    if (!s_textureBuffersInited) {
+    std::call_once(s_textureBuffersInitFlag, [] {
 
-        std::lock_guard<std::mutex> lock(
-                s_textureBuffersMutex
+        s_decodeBuffer.reserve(
+                32 * 1024 * 1024
         );
 
-        if (!s_textureBuffersInited) {
+        s_etc2Buffer.reserve(
+                16 * 1024 * 1024
+        );
 
-            s_decodeBuffer.reserve(
-                    32 * 1024 * 1024
-            );
+        s_etc2CacheBuffer.reserve(
+                16 * 1024 * 1024
+        );
 
-            s_etc2Buffer.reserve(
-                    16 * 1024 * 1024
-            );
+        s_mipRgbaBuffer.reserve(
+                16 * 1024 * 1024
+        );
 
-            s_etc2CacheBuffer.reserve(
-                    16 * 1024 * 1024
-            );
-
-            s_mipRgbaBuffer.reserve(
-                    16 * 1024 * 1024
-            );
-
-            s_textureBuffersInited = true;
-        }
-    }
+    });
 }
 
 static inline void SwapRB_NEON(
@@ -1300,15 +1292,11 @@ void GLTexture::upload() {
 
         Image converted;
 
+        // Convert only the decoded image dimensions here. The upload paths
+        // extend it to the stored size later when NPOT padding is required.
         converted.create(
-                size_t(
-                        getStoredSize().x
-                ),
-
-                size_t(
-                        getStoredSize().y
-                ),
-
+                m_image.getWidth(),
+                m_image.getHeight(),
                 Image::Format_L8A8
         );
 
@@ -1317,8 +1305,8 @@ void GLTexture::upload() {
 
         unsigned char *end =
                 input +
-                getStoredSize().x *
-                getStoredSize().y;
+                m_image.getWidth() *
+                m_image.getHeight();
 
         unsigned char *output =
                 converted.getData();
@@ -1409,37 +1397,20 @@ void GLTexture::upload() {
                         getStoredSize().y
                 );
 
-        int finalW =
-                Align4(storedW);
-
-        int finalH =
-                Align4(storedH);
-
-        if (finalW < 4) {
-            finalW = 4;
-        }
-
-        if (finalH < 4) {
-            finalH = 4;
-        }
-
         const unsigned char *srcData =
-                nullptr;
+                m_image.getData();
 
         Image extended;
 
-        if (finalW != storedW ||
-            finalH != storedH) {
+        // Pad to the renderer's actual stored size only. UploadAsEtc2 pads
+        // each compressed block internally; passing block-aligned dimensions
+        // here would incorrectly change the texture's logical size on NPOT
+        // GLES 3 textures.
+        if (getStoredSize() != getSize()) {
 
             extended.create(
-                    static_cast<size_t>(
-                            finalW
-                    ),
-
-                    static_cast<size_t>(
-                            finalH
-                    ),
-
+                    static_cast<size_t>(storedW),
+                    static_cast<size_t>(storedH),
                     m_image.getFormat()
             );
 
@@ -1449,11 +1420,6 @@ void GLTexture::upload() {
 
             srcData =
                     extended.getData();
-
-        } else {
-
-            srcData =
-                    m_image.getData();
         }
 
         const bool wantsMip =
@@ -1462,8 +1428,8 @@ void GLTexture::upload() {
         if (UploadAsEtc2(
                 renderer,
                 tex,
-                finalW,
-                finalH,
+                storedW,
+                storedH,
                 srcData,
                 m_format,
                 nullptr,
