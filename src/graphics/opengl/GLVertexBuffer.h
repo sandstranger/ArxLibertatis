@@ -58,14 +58,14 @@ void unbindBuffer(GLuint buffer);
 void resetVertexArrayState();
 #endif
 void setVertexArrayTexCoord(int index, const void * coord, size_t stride);
-bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount);
+bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount, const void * vertexOffset);
 void clearVertexArray(const void * ref);
 
 template <>
 inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * vertices, const void * ref) {
 	ARX_UNUSED(vertices);
 
-	if(!switchVertexArray(GL_TexturedVertex, ref, 1)) {
+	if(!switchVertexArray(GL_TexturedVertex, ref, 1, vertices)) {
 		return;
 	}
 
@@ -90,7 +90,7 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 
 template <>
 inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertices, const void * ref) {
-	if(!switchVertexArray(GL_SMY_VERTEX, ref, 1)) {
+	if(!switchVertexArray(GL_SMY_VERTEX, ref, 1, vertices)) {
 		return;
 	}
 
@@ -112,7 +112,7 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertice
 
 template <>
 inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX3 * vertices, const void * ref) {
-	if(!switchVertexArray(GL_SMY_VERTEX3, ref, 3)) {
+	if(!switchVertexArray(GL_SMY_VERTEX3, ref, 3, vertices)) {
 		return;
 	}
 
