@@ -64,6 +64,22 @@ PlayerBook g_playerBook;
 float g_bookScale = 1.0f;
 Rectf g_bookRect = Rectf(Vec2f(97, 64), 513, 313);
 
+namespace {
+
+struct SkillPointHold {
+	const float * skill = nullptr;
+	PlatformInstant started = 0;
+
+	void reset() {
+		skill = nullptr;
+		started = 0;
+	}
+};
+
+SkillPointHold g_skillPointHold;
+constexpr auto SkillPointLongPressDuration = 500ms;
+
+} // namespace
 
 void PlayerBook::open() {
 	if((player.Interface & INTER_PLAYERBOOK))
@@ -637,6 +653,11 @@ void StatsPage::manageNewQuest() {
 
 void StatsPage::manageStats()
 {
+	// Do not keep a partially started gesture after leaving the book or changing pages.
+	if(!eeMousePressed1() && !eeMouseUp1()) {
+		g_skillPointHold.reset();
+	}
+
 	long FLYING_OVER = 0;
 	
 	ARX_PLAYER_ComputePlayerFullStats();
@@ -702,7 +723,19 @@ void StatsPage::manageStats()
 		
 	}
 	
-	if(player.Skill_Redistribute != 0 || ARXmenu.mode() == Mode_CharacterCreation) {
+	const bool hasAllocatedSkillPoints =
+	    player.m_skill.stealth > player.m_skillOld.stealth
+	    || player.m_skill.mecanism > player.m_skillOld.mecanism
+	    || player.m_skill.intuition > player.m_skillOld.intuition
+	    || player.m_skill.etheralLink > player.m_skillOld.etheralLink
+	    || player.m_skill.objectKnowledge > player.m_skillOld.objectKnowledge
+	    || player.m_skill.casting > player.m_skillOld.casting
+	    || player.m_skill.closeCombat > player.m_skillOld.closeCombat
+	    || player.m_skill.projectile > player.m_skillOld.projectile
+	    || player.m_skill.defense > player.m_skillOld.defense;
+
+	if(player.Skill_Redistribute != 0 || hasAllocatedSkillPoints
+	   || ARXmenu.mode() == Mode_CharacterCreation) {
 		
 		if(CheckSkillClick(bookPos + Vec2f(293, 113) * scale, &player.m_skill.stealth, g_bookResouces.ic_stealth, player.m_skillOld.stealth)) {
 			FLYING_OVER = BOOK_STEALTH;
@@ -788,6 +821,11 @@ void StatsPage::manageStats()
 	}
 	
 	
+	// A release outside the pressed skill cancels the gesture without changing points.
+	if(eeMouseUp1()) {
+		g_skillPointHold.reset();
+	}
+
 	if(!flyover[FLYING_OVER].empty()) {
 		
 		int t = Random::get(0, 2);
@@ -1348,16 +1386,41 @@ bool StatsPage::CheckSkillClick(Vec2f pos, float * val, TextureContainer * tc, f
 	float ot = oldval;
 
 	float scale = g_bookScale;
+	const bool mouseOver = MouseInBookRect(pos, Vec2f(32, 32) * scale);
+
+	// A long-press is valid only while the pointer stays on the same skill icon.
+	if(g_skillPointHold.skill == val && !mouseOver && eeMousePressed1()) {
+		g_skillPointHold.reset();
+	}
 	
-	if(MouseInBookRect(pos, Vec2f(32, 32) * scale)) {
+	if(mouseOver) {
 		
 		rval = true;
+		
+		if(eeMouseDown1()) {
+			g_skillPointHold.skill = val;
+			g_skillPointHold.started = g_platformTime.frameStart();
+		}
 		
 		if((eeMousePressed1() || eeMousePressed2()) && tc)
 			DrawBookInterfaceItem(tc, pos, Color::white, 0.000001f);
 		
-		if(eeMouseUp1()) {
-			if(player.Skill_Redistribute > 0) {
+		if(eeMouseUp1() && g_skillPointHold.skill == val) {
+			const bool longPress =
+			    g_platformTime.frameStart() - g_skillPointHold.started >= SkillPointLongPressDuration;
+			g_skillPointHold.reset();
+
+			if(longPress) {
+				// Only undo points invested since the last level-up (or character creation).
+				if(t > ot) {
+					player.Skill_Redistribute++;
+					t--;
+					*val = t;
+					playReleaseSound();
+				} else {
+					playErrorSound();
+				}
+			} else if(player.Skill_Redistribute > 0) {
 				player.Skill_Redistribute--;
 				t++;
 				*val = t;
