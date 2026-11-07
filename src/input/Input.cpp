@@ -807,6 +807,10 @@ bool Input::getMouseButtonDoubleClick(int buttonId) const {
 	return (iMouseTimeSet[buttonIdx] == 2 && iMouseTime[buttonIdx][1] - iMouseTime[buttonIdx][0] < 300ms);
 }
 
+bool Input::isTouchTap() const {
+	return backend && backend->isTouchTap();
+}
+
 int Input::getMouseButtonClicked() const {
 	
 	for(int i = Mouse::ButtonBase; i < Mouse::ButtonMax; i++) {

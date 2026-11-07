@@ -366,6 +366,9 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
     touchMovedCursor = false;
     std::fill_n(deferredClickCount, std::size(deferredClickCount), 0);
     std::fill_n(deferredUnclickCount, std::size(deferredUnclickCount), 0);
+    fingerDownInBatch = false;
+    fingerDownInLastBatch = false;
+    touchTap = false;
 #endif
 
     std::fill_n(currentAxis, std::size(currentAxis), 0.0f);
@@ -404,6 +407,16 @@ bool SDL2InputBackend::update() {
     std::fill_n(deferredClickCount, std::size(deferredClickCount), 0);
     std::fill_n(deferredUnclickCount, std::size(deferredUnclickCount), 0);
     touchMovedCursor = false;
+
+    /*
+     * A press counted now was received in the last batch of events or, held back
+     * by onEvent(), in the one before. SDL sends the finger event of a tap right
+     * after its mouse press, so a finger that went down in either batch makes the
+     * press a tap. On-screen mouse buttons send no finger events.
+     */
+    touchTap = fingerDownInBatch || fingerDownInLastBatch;
+    fingerDownInLastBatch = fingerDownInBatch;
+    fingerDownInBatch = false;
 #endif
 
     return true;
@@ -438,6 +451,12 @@ void SDL2InputBackend::getMouseButtonClickCount(int buttonId, int & numClick, in
     size_t i = buttonId - Mouse::ButtonBase;
     numClick = currentClickCount[i], numUnClick = currentUnclickCount[i];
 }
+
+#ifdef ANDROID
+bool SDL2InputBackend::isTouchTap() const {
+    return touchTap;
+}
+#endif
 
 bool SDL2InputBackend::isKeyboardKeyPressed(int keyId) const {
     arx_assert(keyId >= Keyboard::KeyBase && keyId < Keyboard::KeyMax);
@@ -670,6 +689,16 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
             wheel += event.wheel.y;
             break;
         }
+
+#ifdef ANDROID
+        case SDL_FINGERDOWN: {
+            // Fingers on the screen while the cursor is hidden only turn the view
+            if(event.tfinger.touchId != SDL_MOUSE_TOUCHID && !SDL_GetRelativeMouseMode()) {
+                fingerDownInBatch = true;
+            }
+            break;
+        }
+#endif
 
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP: {

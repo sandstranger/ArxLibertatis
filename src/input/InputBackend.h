@@ -43,6 +43,8 @@ public:
 	virtual void setAbsoluteMouseCoords(int absX, int absY) = 0;
 	virtual void getRelativeMouseCoords(int & relX, int & relY, int & wheelDir) const = 0;
 	virtual void getMouseButtonClickCount(int buttonId, int & _iNumClick, int & _iNumUnClick) const = 0;
+	//! true if the mouse button presses of this frame come from a finger tapping a touch screen
+	virtual bool isTouchTap() const { return false; }
 	
 	// Keyboard
 	virtual bool isKeyboardKeyPressed(int keyId) const = 0;

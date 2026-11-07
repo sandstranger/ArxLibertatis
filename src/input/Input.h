@@ -138,6 +138,8 @@ public:
 	bool getMouseButtonNowPressed(int buttonId) const;
 	bool getMouseButtonNowUnPressed(int buttonId) const;
 	bool getMouseButtonDoubleClick(int buttonId) const;
+	//! true if the mouse button presses of this frame come from a finger tapping the screen
+	bool isTouchTap() const;
 	
 	int getMouseWheelDir() const { return iWheelDir; }
 	

@@ -48,6 +48,9 @@ public:
 	void setAbsoluteMouseCoords(int absX, int absY) override;
 	void getRelativeMouseCoords(int & relX, int & relY, int & wheelDir) const override;
 	void getMouseButtonClickCount(int buttonId, int & numClick, int & numUnClick) const override;
+#ifdef ANDROID
+	bool isTouchTap() const override;
+#endif
 	
 	// Keyboard
 	bool isKeyboardKeyPressed(int keyId) const override;
@@ -87,6 +90,11 @@ private:
 	// Touch presses and releases held back until the next update(), see onEvent()
 	size_t deferredClickCount[Mouse::ButtonCount];
 	size_t deferredUnclickCount[Mouse::ButtonCount];
+	// A finger went down on the screen in the events since the last update() / before that
+	bool fingerDownInBatch;
+	bool fingerDownInLastBatch;
+	// What isTouchTap() reports for this frame
+	bool touchTap;
 #endif
 
     float currentAxis[SDL_CONTROLLER_AXIS_MAX];

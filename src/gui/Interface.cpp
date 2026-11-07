@@ -1928,6 +1928,14 @@ void ArxGame::manageEntityDescription() {
 
 EntityHandle LastSelectedIONum = EntityHandle();
 
+/*
+ * The left button went down for a finger tapping the screen, not for a mouse button.
+ * A tap only points at things: the cursor goes there and the item under it lights
+ * up. Items are moved by dragging them, taken with a mouse click (the on-screen
+ * mouse button) and used or read with the use button.
+ */
+static bool g_leftPressIsTouchTap = false;
+
 void ArxGame::manageEditorControls() {
 	
 	ARX_PROFILE_FUNC();
@@ -1947,11 +1955,21 @@ void ArxGame::manageEditorControls() {
 			g_dragStartPos = DANAEMouse;
 			DRAGGING = false;
 			s_dragDistance = 0.f;
+			g_leftPressIsTouchTap = GInput->isTouchTap();
 		} else if(!DRAGGING) {
             s_dragDistance += 5.f * glm::length(GInput->getRelativeMouseMovement());
-                if (s_dragDistance + glm::length(Vec2f(DANAEMouse - g_dragStartPos)) > 5.f) {
-                    DRAGGING = true;
-                }
+            /*
+             * A resting finger rolls a few pixels and jumps when it lifts, so five
+             * pixels made nearly every tap on an item a drag. A drag by touch starts
+             * once the finger has really moved, 3% of the screen height.
+             */
+            float dragThreshold = 5.f;
+            if(g_leftPressIsTouchTap) {
+                dragThreshold = std::max(dragThreshold, 0.03f * float(std::min(g_size.width(), g_size.height())));
+            }
+            if(s_dragDistance + glm::length(Vec2f(DANAEMouse - g_dragStartPos)) > dragThreshold) {
+                DRAGGING = true;
+            }
 		}
 	} else {
 		DRAGGING = false;
@@ -2004,6 +2022,7 @@ void ArxGame::manageEditorControls() {
  	   && !(FlyingOverIO->ioflags & IO_MOVABLE)
 		   && !g_playerInventoryHud.containsPos(DANAEMouse)
 		   && !ARX_INTERFACE_MouseInBook()
+		   && !g_leftPressIsTouchTap
 		) {
 			collectItem(FlyingOverIO);
 		}
