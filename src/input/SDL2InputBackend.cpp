@@ -362,6 +362,11 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
     std::fill_n(keyStates, std::size(keyStates), false);
     std::fill_n(clickCount, std::size(clickCount), 0);
     std::fill_n(unclickCount, std::size(unclickCount), 0);
+#ifdef ANDROID
+    touchMovedCursor = false;
+    std::fill_n(deferredClickCount, std::size(deferredClickCount), 0);
+    std::fill_n(deferredUnclickCount, std::size(deferredUnclickCount), 0);
+#endif
 
     std::fill_n(currentAxis, std::size(currentAxis), 0.0f);
     std::fill_n(axisScale, std::size(axisScale), 0.25f);
@@ -392,6 +397,14 @@ bool SDL2InputBackend::update() {
 
     std::fill_n(clickCount, std::size(clickCount), 0);
     std::fill_n(unclickCount, std::size(unclickCount), 0);
+#ifdef ANDROID
+    // What onEvent() held back is counted in the next frame
+    std::copy(deferredClickCount, deferredClickCount + std::size(deferredClickCount), clickCount);
+    std::copy(deferredUnclickCount, deferredUnclickCount + std::size(deferredUnclickCount), unclickCount);
+    std::fill_n(deferredClickCount, std::size(deferredClickCount), 0);
+    std::fill_n(deferredUnclickCount, std::size(deferredUnclickCount), 0);
+    touchMovedCursor = false;
+#endif
 
     return true;
 }
@@ -641,6 +654,12 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 #endif
 
         case SDL_MOUSEMOTION: {
+#ifdef ANDROID
+            if(event.motion.which == SDL_TOUCH_MOUSEID && !SDL_GetRelativeMouseMode()
+               && Vec2i(event.motion.x, event.motion.y) != cursorAbs) {
+                touchMovedCursor = true;
+            }
+#endif
             cursorAbs = Vec2i(event.motion.x, event.motion.y);
             cursorRelAccum += Vec2i(event.motion.xrel, event.motion.yrel);
             cursorInWindow = true;
@@ -657,7 +676,24 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
             Uint8 button = event.button.button;
             if(button < std::size(sdlToArxButton) && sdlToArxButton[button] != Mouse::Button_Invalid) {
                 size_t i = sdlToArxButton[button] - Mouse::ButtonBase;
+                size_t * clicks = clickCount;
+                size_t * unclicks = unclickCount;
 #ifdef ANDROID
+                /*
+                 * A tap moves the cursor and presses the button in the same batch of
+                 * events. Counted at once, the press is handled in a frame that still
+                 * looks for what is under the cursor (FlyingOverIO) at the old spot, so
+                 * an item picked with a double tap was not used on the object tapped in
+                 * the world - the selection was just cancelled. Such a press is counted
+                 * one frame later, the way a mouse hovers before it clicks; later events
+                 * of the same button wait behind it, so their order is kept.
+                 */
+                if(event.button.which == SDL_TOUCH_MOUSEID
+                   && (touchMovedCursor || deferredClickCount[i] != 0 || deferredUnclickCount[i] != 0)) {
+                    clicks = deferredClickCount;
+                    unclicks = deferredUnclickCount;
+                }
+
                 extern bool allowDrop;
                 int buttonCode = sdlToArxButton[button];
                 bool custActionKeyWasPressed = false;
@@ -677,10 +713,10 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
                     if (invokeDropEvent){
                         allowDrop = true;
                     }
-#endif                    
-                    clickCount[i]++;
+#endif
+                    clicks[i]++;
                 } else {
-                    unclickCount[i]++;
+                    unclicks[i]++;
                 }
             } else if(button != 0) {
                 LogWarning << "Unmapped SDL mouse button: " << int(button);

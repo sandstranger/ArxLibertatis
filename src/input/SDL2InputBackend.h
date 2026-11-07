@@ -81,6 +81,14 @@ private:
 	size_t currentClickCount[Mouse::ButtonCount];
 	size_t currentUnclickCount[Mouse::ButtonCount];
 
+#ifdef ANDROID
+	// A tap moved the visible cursor in the events since the last update()
+	bool touchMovedCursor;
+	// Touch presses and releases held back until the next update(), see onEvent()
+	size_t deferredClickCount[Mouse::ButtonCount];
+	size_t deferredUnclickCount[Mouse::ButtonCount];
+#endif
+
     float currentAxis[SDL_CONTROLLER_AXIS_MAX];
     float axisDeadzone[SDL_CONTROLLER_AXIS_MAX];
     float axisScale[SDL_CONTROLLER_AXIS_MAX];
