@@ -220,7 +220,7 @@ void ARX_Menu_Manage() {
 					ARX_MENU_Launch(true);
 					MenuFader_start(Fade_Out, -1); // TODO: does this fader even work ?
 
-					ARX_PLAYER_PutPlayerInNormalStance();
+					ARX_PLAYER_PutPlayerInNormalStance(true);
 				}
 			}
 			break;
