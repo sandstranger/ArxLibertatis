@@ -105,6 +105,9 @@ ARX_MENU_DATA ARXmenu;
 bool g_canResumeGame = true;
 bool g_ironman = false;
 
+static bool s_menuPlayerMouseLook = false;
+static bool s_hasMenuPlayerMouseLook = false;
+
 void ARX_Menu_Resources_Release() {
 
 #ifndef ANDROID   
@@ -123,6 +126,13 @@ void ARX_MENU_Clicked_QUIT() {
 	arx_assert(g_canResumeGame);
 	
 	ARX_Menu_Resources_Release();
+	
+	if(s_hasMenuPlayerMouseLook) {
+		TRUE_PLAYER_MOUSELOOK_ON = s_menuPlayerMouseLook;
+		ARX_INTERFACE_ResetPendingInventoryToggle();
+		s_hasMenuPlayerMouseLook = false;
+	}
+	
 	ARXmenu.requestMode(Mode_InGame);
 }
 
@@ -154,6 +164,13 @@ void ARX_MENU_Clicked_CREDITS() {
 void ARX_MENU_Launch(bool allowResume) {
 	
 	g_canResumeGame = allowResume;
+
+	if(allowResume) {
+		s_menuPlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
+		s_hasMenuPlayerMouseLook = true;
+		TRUE_PLAYER_MOUSELOOK_ON = false;
+		ARX_INTERFACE_ResetPendingInventoryToggle();
+	}
 
 	g_gameTime.pause(GameTime::PauseMenu);
 
@@ -202,7 +219,6 @@ void ARX_Menu_Manage() {
 					
 					ARX_MENU_Launch(true);
 					MenuFader_start(Fade_Out, -1); // TODO: does this fader even work ?
-					TRUE_PLAYER_MOUSELOOK_ON = false;
 
 					ARX_PLAYER_PutPlayerInNormalStance();
 				}

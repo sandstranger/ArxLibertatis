@@ -199,6 +199,9 @@ static fs::path g_saveToLoad;
 
 static const PlatformDuration runeDrawPointInterval = 16ms; // ~60fps
 
+static bool s_playerMouseLookBeforeFocusLoss = false;
+static bool s_hasPlayerMouseLookBeforeFocusLoss = false;
+
 extern CircularVertexBuffer<TexturedVertex> * pDynamicVertexBuffer_TLVERTEX; // VB using TLVERTEX format.
 extern CircularVertexBuffer<SMY_VERTEX3> * pDynamicVertexBuffer;
 
@@ -1073,6 +1076,14 @@ void ArxGame::onWindowGotFocus(const Window & /* window */) {
 		GInput->reset();
 	}
 	
+	if(s_hasPlayerMouseLookBeforeFocusLoss) {
+		if(ARXmenu.mode() == Mode_InGame) {
+			TRUE_PLAYER_MOUSELOOK_ON = s_playerMouseLookBeforeFocusLoss;
+			ARX_INTERFACE_ResetPendingInventoryToggle();
+		}
+		s_hasPlayerMouseLookBeforeFocusLoss = false;
+	}
+	
 	if(config.audio.muteOnFocusLost) {
 		ARXMenu_Options_Audio_SetMuted(false);
 	}
@@ -1081,10 +1092,16 @@ void ArxGame::onWindowGotFocus(const Window & /* window */) {
 
 void ArxGame::onWindowLostFocus(const Window & /* window */) {
 	
+	if(ARXmenu.mode() == Mode_InGame && !s_hasPlayerMouseLookBeforeFocusLoss) {
+		s_playerMouseLookBeforeFocusLoss = TRUE_PLAYER_MOUSELOOK_ON;
+		s_hasPlayerMouseLookBeforeFocusLoss = true;
+	}
+	
 	// TODO(option-control) add a config option for this
 	ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
 	TRUE_PLAYER_MOUSELOOK_ON = false;
 	PLAYER_MOUSELOOK_ON = false;
+	ARX_INTERFACE_ResetPendingInventoryToggle();
 	
 	// TODO(option-audio) add a config option to disable audio on focus loss
 	
