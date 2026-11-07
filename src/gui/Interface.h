@@ -193,6 +193,9 @@ void ARX_INTERFACE_DrawNumber(const Vec2f & pos, long num, Color color, float sc
 // 0 switch 1 forceopen 2 forceclose
 void InventoryOpenClose(unsigned long t);
 
+// Cancel a pending inventory toggle when leaving or restoring gameplay.
+void ARX_INTERFACE_ResetPendingInventoryToggle();
+
 float getInterfaceScale(float scaleFactor, bool roundToInteger);
 TextureStage::FilterMode getInterfaceTextureFilter();
 

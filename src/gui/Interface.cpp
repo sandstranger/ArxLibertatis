@@ -410,6 +410,12 @@ void InventoryOpenClose(unsigned long t) {
 	
 }
 
+void ARX_INTERFACE_ResetPendingInventoryToggle() {
+	bInverseInventory = false;
+	bForceEscapeFreeLook = false;
+	lOldTruePlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
+}
+
 void ARX_INTERFACE_NoteClear() {
 	g_note.clear();
 }
