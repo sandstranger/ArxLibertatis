@@ -520,9 +520,9 @@ void PlayerInventoryHud::dropEntity() {
 		return;
 	}
 	
-	Vec2s mouse = DANAEMouse + Vec2s(g_draggedIconOffset);
+	Vec2s mouse = DANAEMouse + Vec2s(getDraggedIconOffset());
 	
-	if(!g_playerInventoryHud.containsPos(mouse)) {
+	if(!g_playerInventoryHud.containsPos(g_draggedByTouch ? DANAEMouse : mouse)) {
 		return;
 	}
 	
@@ -536,6 +536,7 @@ void PlayerInventoryHud::dropEntity() {
 	
 	int bag = m_currentBag;
 	Vec2f pos = Vec2f(mouse - anchor) / float(itemPitch);
+	Vec2f gridAnchor = Vec2f(anchor) + m_slotSpacing * m_scale;
 	if(player.Interface & INTER_INVENTORYALL) {
 		s16 bagPitch = s16(121.f * m_scale);
 		s16 topAnchor = anchor.y - s16(entities.player()->inventory->bags() - 1) * bagPitch
@@ -543,6 +544,12 @@ void PlayerInventoryHud::dropEntity() {
 		bag = glm::clamp((mouse.y - topAnchor) / bagPitch, 0, int(entities.player()->inventory->bags() - 1));
 		pos = Vec2f(mouse - (anchor - Vec2s(0, (entities.player()->inventory->bags() - 1 - bag) * bagPitch)));
 		pos /= float(itemPitch);
+		gridAnchor.y -= float((entities.player()->inventory->bags() - 1 - bag) * bagPitch);
+	}
+	
+	if(g_draggedByTouch) {
+		Vec3s size = entities.player()->inventory->size();
+		pos = getTouchDropSlot(gridAnchor, float(itemPitch), Vec2s(size.x, size.y));
 	}
 	
 	insertIntoInventoryAt(g_draggedEntity, entities.player(), bag, pos, g_draggedItemPreviousPosition);

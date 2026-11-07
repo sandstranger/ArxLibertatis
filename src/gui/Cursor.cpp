@@ -438,7 +438,7 @@ void ARX_INTERFACE_RenderCursor(bool flag) {
 						pos = MemoMouse;
 					}
 					
-					pos += Vec2f(Vec2s(g_draggedIconOffset));
+					pos += Vec2f(Vec2s(getDraggedIconOffset()));
 					
 					{
 						Vec2f size = Vec2f(tc->m_size) * iconScale;

@@ -38,8 +38,22 @@ extern EntityDragStatus g_dragStatus;
 extern Entity * g_draggedEntity;
 extern InventoryPos g_draggedItemPreviousPosition;
 extern Vec2f g_draggedIconOffset;
+/*!
+ * The drag was started by a finger tapping the screen: the entity is kept centred under
+ * the finger, and the finger (not the corner of the icon) decides where it goes
+ */
+extern bool g_draggedByTouch;
 
 void setDraggedEntity(Entity * entity);
+
+//! Offset from the cursor to the top left corner of the dragged icon
+Vec2f getDraggedIconOffset();
+
+/*!
+ * Top left slot for the dragged item centred on the finger, in an inventory grid of
+ * gridSize slots that starts at gridAnchor on screen; the item is kept inside the grid
+ */
+Vec2f getTouchDropSlot(Vec2f gridAnchor, float pitch, Vec2s gridSize);
 
 void updateDraggedEntity();
 

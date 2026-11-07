@@ -162,6 +162,7 @@ extern bool TRUE_PLAYER_MOUSELOOK_ON;
 extern bool bForceEscapeFreeLook;
 extern bool COMBINEGOLD;
 extern bool DRAGGING;
+extern bool g_leftPressIsTouchTap;
 extern bool PLAYER_MOUSELOOK_ON;
 extern bool bRenderInCursorMode;
 extern bool MAGICMODE;

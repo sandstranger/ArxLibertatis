@@ -1934,7 +1934,7 @@ EntityHandle LastSelectedIONum = EntityHandle();
  * up. Items are moved by dragging them, taken with a mouse click (the on-screen
  * mouse button) and used or read with the use button.
  */
-static bool g_leftPressIsTouchTap = false;
+bool g_leftPressIsTouchTap = false;
 
 void ArxGame::manageEditorControls() {
 	

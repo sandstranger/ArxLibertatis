@@ -53,6 +53,7 @@ EntityDragStatus g_dragStatus = EntityDragStatus_Invalid;
 Entity * g_draggedEntity = nullptr;
 InventoryPos g_draggedItemPreviousPosition;
 Vec2f g_draggedIconOffset;
+bool g_draggedByTouch = false;
 static Vec2f g_draggedObjectOffset;
 static float g_dragStartAngle = 0;
 static Camera * g_dragStartCamera = nullptr;
@@ -68,6 +69,7 @@ void setDraggedEntity(Entity * entity) {
 	if(entity != g_draggedEntity) {
 		g_dragStartCamera = g_camera;
 		g_dragStartAngle = g_camera->angle.getYaw();
+		g_draggedByTouch = entity && g_leftPressIsTouchTap;
 	}
 	
 	if(entity) {
@@ -109,6 +111,31 @@ void setDraggedEntity(Entity * entity) {
 		entity->obj->pbox->active = 0;
 	}
 	
+}
+
+Vec2f getDraggedIconOffset() {
+	
+	if(g_draggedByTouch && g_draggedEntity) {
+		/*
+		 * A mouse keeps the icon where it was picked up, which is fine while the icon
+		 * can be seen. A finger hides it, and the drag only starts once the finger has
+		 * moved, so the icon trailed somewhere beside it and was dropped into another
+		 * slot. Centred on the finger it lands on the slots under the finger.
+		 */
+		return Vec2f(g_draggedEntity->m_inventorySize) * (-16.f * g_hudRoot.getScale());
+	}
+	
+	return g_draggedIconOffset;
+}
+
+Vec2f getTouchDropSlot(Vec2f gridAnchor, float pitch, Vec2s gridSize) {
+	
+	arx_assert(g_draggedEntity);
+	
+	Vec2f size = Vec2f(g_draggedEntity->m_inventorySize);
+	Vec2f slot = glm::floor((Vec2f(DANAEMouse) - gridAnchor) / pitch - size * 0.5f + Vec2f(0.5f));
+	
+	return glm::clamp(slot, Vec2f(0.f), glm::max(Vec2f(gridSize) - size, Vec2f(0.f)));
 }
 
 EntityDragResult findSpotForDraggedEntity(Vec3f origin, Vec3f dir, Entity * entity, Sphere limit) {
@@ -228,7 +255,13 @@ void updateDraggedEntity() {
         allowDrop = false;
     }
 #endif    
-    Vec2f mouse = Vec2f(DANAEMouse) + g_draggedIconOffset;
+    // Where the entity goes: the finger for touch, the top left corner of the icon for a mouse
+    Vec2f mouse = Vec2f(DANAEMouse);
+    Vec2f objectOffset(0.f);
+    if(!g_draggedByTouch) {
+        mouse += g_draggedIconOffset;
+        objectOffset = g_draggedObjectOffset;
+    }
 	
 	g_dragStatus = EntityDragStatus_OverHud;
 	entity->show = SHOW_FLAG_ON_PLAYER;
@@ -275,7 +308,7 @@ void updateDraggedEntity() {
 	g_dragStartAngle = g_camera->angle.getYaw();
 	
 	Vec3f origin = g_camera->m_pos;
-	Vec3f dest = screenToWorldSpace(mouse + g_draggedObjectOffset, 1000.f);
+	Vec3f dest = screenToWorldSpace(mouse + objectOffset, 1000.f);
 	
 	if(g_camera == &g_playerCamera) {
 		// Use stable camera position so the dragged entity does not move around with the player head animation

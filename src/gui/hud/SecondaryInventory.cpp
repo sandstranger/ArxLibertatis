@@ -327,9 +327,9 @@ Entity * SecondaryInventoryHud::getObj(Vec2s pos) const noexcept {
 
 void SecondaryInventoryHud::dropEntity() {
 	
-	Vec2s mouse = DANAEMouse + Vec2s(g_draggedIconOffset);
+	Vec2s mouse = DANAEMouse + Vec2s(getDraggedIconOffset());
 	
-	if(!isOpen() || !g_secondaryInventoryHud.containsPos(mouse)) {
+	if(!isOpen() || !g_secondaryInventoryHud.containsPos(g_draggedByTouch ? DANAEMouse : mouse)) {
 		return;
 	}
 	
@@ -356,7 +356,12 @@ void SecondaryInventoryHud::dropEntity() {
 	}
 	
 	s16 itemPitch = s16(32.f * m_scale);
-	Vec2f pos = Vec2f(mouse - Vec2s(2 * m_scale - m_fadePosition, 13 * m_scale)) / float(itemPitch);
+	Vec2s anchor = Vec2s(2 * m_scale - m_fadePosition, 13 * m_scale);
+	Vec2f pos = Vec2f(mouse - anchor) / float(itemPitch);
+	if(g_draggedByTouch) {
+		Vec3s size = m_container->inventory->size();
+		pos = getTouchDropSlot(Vec2f(anchor), float(itemPitch), Vec2s(size.x, size.y));
+	}
 	
 	insertIntoInventoryAt(g_draggedEntity, m_container, 0, pos, g_draggedItemPreviousPosition);
 	
