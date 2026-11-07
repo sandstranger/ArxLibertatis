@@ -463,7 +463,7 @@ void ARX_KEYRING_Add(std::string_view key);
 
 void ARX_PLAYER_Reset_Fall();
 void ARX_PLAYER_KillTorch();
-void ARX_PLAYER_PutPlayerInNormalStance();
+void ARX_PLAYER_PutPlayerInNormalStance(bool preserveCombatMode = false);
 void ARX_PLAYER_Start_New_Quest();
 void ARX_PLAYER_Rune_Add_All();
  

@@ -2701,7 +2701,7 @@ float GetPlayerStealth() {
 /*!
  * \brief Force Player to standard stance
  */
-void ARX_PLAYER_PutPlayerInNormalStance() {
+void ARX_PLAYER_PutPlayerInNormalStance(bool preserveCombatMode) {
 	
 	if(player.m_currentMovement & PLAYER_CROUCH) {
 		player.m_currentMovement &= ~PLAYER_CROUCH;
@@ -2719,7 +2719,9 @@ void ARX_PLAYER_PutPlayerInNormalStance() {
 		player.falling = false;
 	}
 	
-	if(player.Interface & INTER_COMBATMODE) {
+	// A pause menu must not lower a weapon that was already readied. The
+	// animation and combat flags stay intact while gameplay is suspended.
+	if((player.Interface & INTER_COMBATMODE) && !preserveCombatMode) {
 		player.Interface &= ~INTER_COMBATMODE;
 		ARX_EQUIPMENT_LaunchPlayerUnReadyWeapon();
 	}

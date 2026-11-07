@@ -1092,13 +1092,17 @@ void ArxGame::onWindowGotFocus(const Window & /* window */) {
 
 void ArxGame::onWindowLostFocus(const Window & /* window */) {
 	
+	if(GInput) {
+		GInput->reset();
+	}
+	
 	if(ARXmenu.mode() == Mode_InGame && !s_hasPlayerMouseLookBeforeFocusLoss) {
 		s_playerMouseLookBeforeFocusLoss = TRUE_PLAYER_MOUSELOOK_ON;
 		s_hasPlayerMouseLookBeforeFocusLoss = true;
 	}
 	
-	// TODO(option-control) add a config option for this
-	ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
+	// Keep the weapon ready across app suspension. Input is cleared above,
+	// so a held attack button cannot leak into the resumed game.
 	TRUE_PLAYER_MOUSELOOK_ON = false;
 	PLAYER_MOUSELOOK_ON = false;
 	ARX_INTERFACE_ResetPendingInventoryToggle();
