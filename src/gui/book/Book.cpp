@@ -739,27 +739,52 @@ void StatsPage::manageStats()
 		
 		if(CheckSkillClick(bookPos + Vec2f(293, 113) * scale, &player.m_skill.stealth, g_bookResouces.ic_stealth, player.m_skillOld.stealth)) {
 			FLYING_OVER = BOOK_STEALTH;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 		if(CheckSkillClick(bookPos + Vec2f(356, 113) * scale, &player.m_skill.mecanism, g_bookResouces.ic_mecanism, player.m_skillOld.mecanism)) {
 			FLYING_OVER = BOOK_MECANISM;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 		if(CheckSkillClick(bookPos + Vec2f(419, 113) * scale, &player.m_skill.intuition, g_bookResouces.ic_intuition, player.m_skillOld.intuition)) {
 			FLYING_OVER = BOOK_INTUITION;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 		if(CheckSkillClick(bookPos + Vec2f(293, 166) * scale, &player.m_skill.etheralLink, g_bookResouces.ic_etheral_link, player.m_skillOld.etheralLink)) {
 			FLYING_OVER = BOOK_ETHERAL_LINK;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 		if(CheckSkillClick(bookPos + Vec2f(356, 166) * scale, &player.m_skill.objectKnowledge, g_bookResouces.ic_object_knowledge, player.m_skillOld.objectKnowledge)) {
 			FLYING_OVER = BOOK_OBJECT_KNOWLEDGE;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 			if(eeMouseDown1()) {
 				ARX_INVENTORY_IdentifyAll();
 				ARX_EQUIPMENT_IdentifyAll();
@@ -769,22 +794,42 @@ void StatsPage::manageStats()
 		
 		if(CheckSkillClick(bookPos + Vec2f(419, 166) * scale, &player.m_skill.casting, g_bookResouces.ic_casting, player.m_skillOld.casting)) {
 			FLYING_OVER = BOOK_CASTING;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 		if(CheckSkillClick(bookPos + Vec2f(293, 220) * scale, &player.m_skill.closeCombat, g_bookResouces.ic_close_combat, player.m_skillOld.closeCombat)) {
 			FLYING_OVER = BOOK_CLOSE_COMBAT;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 		if(CheckSkillClick(bookPos + Vec2f(356, 220) * scale, &player.m_skill.projectile, g_bookResouces.ic_projectile, player.m_skillOld.projectile)) {
 			FLYING_OVER = BOOK_PROJECTILE;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 		if(CheckSkillClick(bookPos + Vec2f(419, 220) * scale, &player.m_skill.defense, g_bookResouces.ic_defense, player.m_skillOld.defense)) {
 			FLYING_OVER = BOOK_DEFENSE;
-			cursorSetRedistribute(player.Skill_Redistribute);
+			if(player.Skill_Redistribute > 0) {
+				cursorSetRedistribute(player.Skill_Redistribute);
+			} else {
+				// A refundable skill point is still an interaction, not an add-points cursor.
+				cursorSetInteraction();
+			}
 		}
 		
 	} else {
@@ -1388,16 +1433,13 @@ bool StatsPage::CheckSkillClick(Vec2f pos, float * val, TextureContainer * tc, f
 	float scale = g_bookScale;
 	const bool mouseOver = MouseInBookRect(pos, Vec2f(32, 32) * scale);
 
-	// A long-press is valid only while the pointer stays on the same skill icon.
-	if(g_skillPointHold.skill == val && !mouseOver && eeMousePressed1()) {
-		g_skillPointHold.reset();
-	}
-	
 	if(mouseOver) {
 		
 		rval = true;
 		
 		if(eeMouseDown1()) {
+			// Remember the skill selected on press. The pointer may jitter outside
+			// its bounds while held; the release must still land on this same skill.
 			g_skillPointHold.skill = val;
 			g_skillPointHold.started = g_platformTime.frameStart();
 		}
