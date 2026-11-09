@@ -165,6 +165,8 @@ extern PlatformInstant SLID_START;
 bool PLAYER_MOUSELOOK_ON = false;
 bool TRUE_PLAYER_MOUSELOOK_ON = false;
 static bool MEMO_PLAYER_MOUSELOOK_ON = false;
+// Tracks the engine mouse-grab state across gameplay frames.
+static bool LAST_PLAYER_MOUSELOOK_ON = false;
 
 bool COMBINEGOLD = false;
 
@@ -414,6 +416,18 @@ void ARX_INTERFACE_ResetPendingInventoryToggle() {
 	bInverseInventory = false;
 	bForceEscapeFreeLook = false;
 	lOldTruePlayerMouseLook = TRUE_PLAYER_MOUSELOOK_ON;
+}
+
+void ARX_INTERFACE_ResetMouseLook() {
+	// A new character must start with a visible, absolute-position pointer.
+	// Do not inherit a relative SDL mouse grab from the previous game session.
+	TRUE_PLAYER_MOUSELOOK_ON = false;
+	PLAYER_MOUSELOOK_ON = false;
+	LAST_PLAYER_MOUSELOOK_ON = false;
+	ARX_INTERFACE_ResetPendingInventoryToggle();
+	if(GInput) {
+		GInput->setMouseMode(Mouse::Absolute);
+	}
 }
 
 void ARX_INTERFACE_NoteClear() {
@@ -1626,7 +1640,6 @@ void ArxGame::manageKeyMouse() {
 	// Checks For MouseGrabbing/Restoration after Grab
 	bool bRestoreCoordMouse = true;
 	
-	static bool LAST_PLAYER_MOUSELOOK_ON = false;
 	bool mouselook = PLAYER_MOUSELOOK_ON && !BLOCK_PLAYER_CONTROLS && !isInCinematic() && ARXmenu.mode() == Mode_InGame;
 	if(mouselook && !LAST_PLAYER_MOUSELOOK_ON) {
 		

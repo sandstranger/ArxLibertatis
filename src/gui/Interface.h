@@ -196,6 +196,9 @@ void InventoryOpenClose(unsigned long t);
 // Cancel a pending inventory toggle when leaving or restoring gameplay.
 void ARX_INTERFACE_ResetPendingInventoryToggle();
 
+// Return SDL to absolute pointer mode when entering character creation.
+void ARX_INTERFACE_ResetMouseLook();
+
 float getInterfaceScale(float scaleFactor, bool roundToInteger);
 TextureStage::FilterMode getInterfaceTextureFilter();
 
