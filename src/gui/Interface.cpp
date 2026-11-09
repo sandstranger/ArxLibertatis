@@ -419,9 +419,10 @@ void ARX_INTERFACE_ResetPendingInventoryToggle() {
 }
 
 void ARX_INTERFACE_ResetMouseLook() {
-	// A new character must start with a visible, absolute-position pointer.
-	// Do not inherit a relative SDL mouse grab from the previous game session.
-	TRUE_PLAYER_MOUSELOOK_ON = false;
+	// Preserve the fresh-game mouse-look state. Disabling it makes
+	// manageKeyMouse() treat the first gameplay frame as cursor mode and open
+	// the inventory. Character creation still uses an absolute SDL pointer.
+	TRUE_PLAYER_MOUSELOOK_ON = true;
 	PLAYER_MOUSELOOK_ON = false;
 	LAST_PLAYER_MOUSELOOK_ON = false;
 	ARX_INTERFACE_ResetPendingInventoryToggle();
