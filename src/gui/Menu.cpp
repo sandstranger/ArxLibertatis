@@ -143,6 +143,13 @@ void ARX_MENU_Clicked_NEWQUEST() {
 	g_characterCreation.loadData();
 	
 	ARX_PLAYER_Start_New_Quest();
+
+	// Do not carry the previous gameplay session's relative mouse grab into
+	// character creation. The new game reset enables mouselook by default.
+	s_hasMenuPlayerMouseLook = false;
+	s_menuPlayerMouseLook = false;
+	ARX_INTERFACE_ResetMouseLook();
+
 	g_playerBook.forcePage(BOOKMODE_STATS);
 	player.skin = 0;
 	player.bodyKind = BodyHuman;
