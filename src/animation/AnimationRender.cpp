@@ -109,11 +109,27 @@ static TexturedVertex * PushVertexInTable(std::vector<TexturedVertex> & bucket) 
 	return &bucket[bucket.size() - 3];
 }
 
+//! Opaque models are lit by the GPU (see setGPUModelLighting())
+static bool g_gpuModelLighting = false;
+
+void setGPUModelLighting(bool enable) {
+	g_gpuModelLighting = enable && GRenderer->getMaxGPULightSetSize() > 0;
+}
+
+//! Add a triangle lit by the GPU, its colors are ignored
+static TexturedVertex * PushLitVertexInTable(TextureContainer & material, TexturedVertexLighting * & lighting) {
+	std::vector<TexturedVertexLighting> & inputs = material.m_modelBatchLighting;
+	inputs.resize(inputs.size() + 3);
+	lighting = &inputs[inputs.size() - 3];
+	return PushVertexInTable(material.m_modelBatchLit);
+}
+
 static void PopOneTriangleList(RenderState baseState, TextureContainer * material, bool clear) {
 	
 	std::vector<TexturedVertex> & bucket = material->m_modelBatch[BatchBucket_Opaque];
+	std::vector<TexturedVertex> & litBucket = material->m_modelBatchLit;
 	
-	if(bucket.empty()) {
+	if(bucket.empty() && litBucket.empty()) {
 		return;
 	}
 	
@@ -128,10 +144,25 @@ static void PopOneTriangleList(RenderState baseState, TextureContainer * materia
 		GRenderer->GetTextureStage(0)->setMipMapLODBias(GLOBAL_NPC_MIPMAP_BIAS);
 	}
 	
-	EERIEDRAWPRIM(Renderer::TriangleList, bucket.data(), bucket.size());
+	/*
+	 * The order only matters without depth test (the first-person player): a model's own
+	 * triangles are lit by the GPU and come before linked objects whose faces may stay on
+	 * the CPU (glowing faces, halos, infravision).
+	 */
+	if(!litBucket.empty()) {
+		arx_assert(material->m_modelBatchLighting.size() == litBucket.size());
+		EERIEDrawnPolys++;
+		GRenderer->drawLitTriangles(litBucket.data(), material->m_modelBatchLighting.data(), litBucket.size());
+	}
+	
+	if(!bucket.empty()) {
+		EERIEDRAWPRIM(Renderer::TriangleList, bucket.data(), bucket.size());
+	}
 	
 	if(clear) {
 		bucket.clear();
+		litBucket.clear();
+		material->m_modelBatchLighting.clear();
 	}
 	
 	if(material->userflags & POLY_LATE_MIP) {
@@ -493,6 +524,26 @@ static void Cedric_ApplyLighting(ShaderLight lights[], size_t lightsCount, EERIE
 	
 }
 
+//! Vertex normals for lighting on the GPU, the ones Cedric_ApplyLighting() uses
+static util::HandleVector<VertexId, Vec3f> g_gpuLightingNormals;
+
+static void Cedric_PrepareGPULighting(EERIE_3DOBJ * eobj, Skeleton * obj) {
+	
+	ARX_PROFILE_FUNC();
+	
+	arx_assert(eobj->m_boneVertices.size() == obj->bones.size());
+	
+	g_gpuLightingNormals.assign(eobj->vertexlist.size(), Vec3f(0.f));
+	
+	for(VertexGroupId group : obj->bones.handles()) {
+		const glm::quat & quat = obj->bones[group].anim.quat;
+		for(VertexId vertex : eobj->m_boneVertices[group]) {
+			g_gpuLightingNormals[vertex] = quat * eobj->vertexlist[vertex].norm;
+		}
+	}
+	
+}
+
 static EERIE_3D_BBOX UpdateBbox3d(EERIE_3DOBJ * eobj) {
 	
 	EERIE_3D_BBOX box3D;
@@ -678,6 +729,17 @@ void DrawEERIEInter_Render(EERIE_3DOBJ * eobj, const TransformInfo & t, Entity *
 	size_t lightsCount;
 	UpdateLlights(lights, lightsCount, tv, false);
 	
+	/*
+	 * Opaque faces can be lit by the GPU. Infravision derives its colors from the lit ones
+	 * and halos replace them (AddFixedObjectHalo()), those stay on the CPU. Faces of invisible
+	 * models are transparent and do not use the light.
+	 */
+	u32 lightSet = InvalidGPULightSet;
+	if(g_gpuModelLighting && invisibility <= 0.f
+	   && !(io && player.m_improve) && !(io && (io->halo.flags & HALO_ACTIVE))) {
+		lightSet = AddGPULightSet(lights, lightsCount, colorMod, useFaceNormal ? 0.5f : 1.f);
+	}
+	
 	arx_assert(eobj->vertexColors.size() == eobj->vertexWorldPositions.size());
 		
 	for(size_t i = 0; i < eobj->facelist.size(); i++) {
@@ -693,7 +755,13 @@ void DrawEERIEInter_Render(EERIE_3DOBJ * eobj, const TransformInfo & t, Entity *
 		}
 		
 		float fTransp = 0.f;
-		TexturedVertex * tvList = GetNewVertexList(pTex->m_modelBatch, face, invisibility, fTransp);
+		TexturedVertex * tvList;
+		TexturedVertexLighting * lighting = nullptr;
+		if(lightSet != InvalidGPULightSet && !(face.facetype & (POLY_TRANS | POLY_GLOW))) {
+			tvList = PushLitVertexInTable(*pTex, lighting);
+		} else {
+			tvList = GetNewVertexList(pTex->m_modelBatch, face, invisibility, fTransp);
+		}
 		
 		for(size_t n = 0; n < 3; n++) {
 			
@@ -701,7 +769,9 @@ void DrawEERIEInter_Render(EERIE_3DOBJ * eobj, const TransformInfo & t, Entity *
 			Vec3f normal = t.rotation * (useFaceNormal ? face.norm : eobj->vertexlist[face.vid[n]].norm);
 			float diffuse = useFaceNormal ? 0.5f : 1.f;
 			
-			eobj->vertexColors[face.vid[n]] = ApplyLight(lights, lightsCount, position, normal, colorMod, diffuse);
+			if(lightSet == InvalidGPULightSet) {
+				eobj->vertexColors[face.vid[n]] = ApplyLight(lights, lightsCount, position, normal, colorMod, diffuse);
+			}
 			
 			tvList[n].p = Vec3f(eobj->vertexClipPositions[face.vid[n]]);
 			tvList[n].w = eobj->vertexClipPositions[face.vid[n]].w;
@@ -713,7 +783,13 @@ void DrawEERIEInter_Render(EERIE_3DOBJ * eobj, const TransformInfo & t, Entity *
 				tvList[n].uv += getWaterFxUvOffset(WATEREFFECT, eobj->vertexlist[face.vid[n]].v) * (0.3f * 0.05f);
 			}
 			
-			if(face.facetype & POLY_GLOW) {
+			if(lighting) {
+				// The diffuse factor is part of the light set
+				tvList[n].color = Color::white.toRGBA();
+				lighting[n].position = position;
+				lighting[n].normal = normal;
+				lighting[n].lightSet = lightSet;
+			} else if(face.facetype & POLY_GLOW) {
 				// unaffected by light
 				tvList[n].color = Color::white.toRGB();
 			} else {
@@ -983,8 +1059,12 @@ static void AddAnimatedObjectHalo(const HaloInfo & haloInfo, const VertexId * pa
 	}
 }
 
+/*!
+ * \param lightSet InvalidGPULightSet if eobj->vertexColors hold the lit colors, or the set
+ *                 the GPU lights opaque faces with, using g_gpuLightingNormals
+ */
 static void Cedric_RenderObject(EERIE_3DOBJ * eobj, Skeleton * obj, Entity * io,
-                                const Vec3f & pos, float invisibility) {
+                                const Vec3f & pos, float invisibility, u32 lightSet) {
 	
 	ARX_PROFILE_FUNC();
 	
@@ -1043,13 +1123,26 @@ static void Cedric_RenderObject(EERIE_3DOBJ * eobj, Skeleton * obj, Entity * io,
 		
 		float fTransp = 0.f;
 		
-		TexturedVertex * tvList = GetNewVertexList(pTex->m_modelBatch, face, invisibility, fTransp);
+		TexturedVertex * tvList;
+		TexturedVertexLighting * lighting = nullptr;
+		if(lightSet != InvalidGPULightSet && !(face.facetype & POLY_TRANS) && invisibility <= 0.f) {
+			tvList = PushLitVertexInTable(*pTex, lighting);
+		} else {
+			tvList = GetNewVertexList(pTex->m_modelBatch, face, invisibility, fTransp);
+		}
 		
 		for(size_t n = 0; n < 3; n++) {
 			tvList[n].p = Vec3f(eobj->vertexClipPositions[face.vid[n]]);
 			tvList[n].w = eobj->vertexClipPositions[face.vid[n]].w;
 			tvList[n].uv = Vec2f(face.u[n], face.v[n]);
-			tvList[n].color = eobj->vertexColors[face.vid[n]];
+			if(lighting) {
+				tvList[n].color = Color::white.toRGBA();
+				lighting[n].position = eobj->vertexWorldPositions[face.vid[n]].v;
+				lighting[n].normal = g_gpuLightingNormals[face.vid[n]];
+				lighting[n].lightSet = lightSet;
+			} else {
+				tvList[n].color = eobj->vertexColors[face.vid[n]];
+			}
 		}
 		
 		if((face.facetype & POLY_TRANS) || invisibility > 0.f) {
@@ -1093,9 +1186,19 @@ static void Cedric_AnimateDrawEntityRender(EERIE_3DOBJ * eobj, const Vec3f & pos
 	size_t lightsCount;
 	UpdateLlights(lights, lightsCount, tv, false);
 	
-	Cedric_ApplyLighting(lights, lightsCount, eobj, obj, colorMod);
+	// All faces of invisible models are transparent, their color does not depend on the light
+	u32 lightSet = InvalidGPULightSet;
+	if(g_gpuModelLighting && invisibility <= 0.f) {
+		lightSet = AddGPULightSet(lights, lightsCount, colorMod, 1.f);
+	}
 	
-	Cedric_RenderObject(eobj, obj, io, pos, invisibility);
+	if(lightSet != InvalidGPULightSet) {
+		Cedric_PrepareGPULighting(eobj, obj);
+	} else {
+		Cedric_ApplyLighting(lights, lightsCount, eobj, obj, colorMod);
+	}
+	
+	Cedric_RenderObject(eobj, obj, io, pos, invisibility, lightSet);
 	
 	// Now we can render Linked Objects
 	for(const EERIE_LINKED & link : eobj->linked) {

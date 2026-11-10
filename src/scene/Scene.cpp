@@ -1195,6 +1195,39 @@ static void RenderLava() {
 	vPolyLava.clear();
 }
 
+/*!
+ * Write the colors the GPU adds dynamic lights to into a room vertex buffer
+ *
+ * These are the colors ARX_PORTALS_Frustrum_RenderRoomTCullSoft() writes without
+ * infravision and without dynamic lights: white for glowing polygons, the static
+ * lighting for other opaque polygons. Transparent polygons are never changed.
+ */
+static void RestoreStaticVertexColors(RoomHandle roomIndex, SMY_VERTEX * vertices) {
+	
+	ARX_PROFILE_FUNC();
+	
+	for(const EP_DATA & epd : g_rooms->rooms[roomIndex].epdata) {
+		
+		const EERIEPOLY & ep = g_tiles->get(epd.tile).polygons()[epd.idx];
+		if(!ep.tex || (ep.type & (POLY_IGNORE | POLY_HIDE))) {
+			// Not in the vertex buffer, see ComputePortalVertexBuffer()
+			continue;
+		}
+		
+		if(!(ep.type & POLY_GLOW) && (ep.type & POLY_TRANS)) {
+			continue;
+		}
+		
+		SMY_VERTEX * polyVertices = vertices + ep.tex->m_roomBatches[roomIndex].vertexOffset;
+		size_t count = (ep.type & POLY_QUAD) ? 4 : 3;
+		for(size_t k = 0; k < count; k++) {
+			polyVertices[ep.uslInd[k]].color = (ep.type & POLY_GLOW) ? Color::white.toRGBA() : ep.v[k].color;
+		}
+		
+	}
+	
+}
+
 static void ARX_PORTALS_Frustrum_RenderRoomTCullSoft(RoomHandle roomIndex, const Vec3f & camPos) {
 	
 	ARX_PROFILE_FUNC();
@@ -1212,7 +1245,25 @@ static void ARX_PORTALS_Frustrum_RenderRoomTCullSoft(RoomHandle roomIndex, const
 		return;
 	}
 	
-	SMY_VERTEX * pMyVertex = room.pVertexBuffer->lock(NoOverwrite);
+	/*
+	 * When the GPU adds the dynamic lights (room.gpuLighting) the vertex colors stay as they
+	 * are: the vertex buffer is only mapped to animate water and lava, or once to restore the
+	 * static colors after frames lit on the CPU.
+	 */
+	SMY_VERTEX * pMyVertex = nullptr;
+	if(!room.gpuLighting) {
+		pMyVertex = room.pVertexBuffer->lock(NoOverwrite);
+		room.staticVertexColors = false;
+	} else if(!room.staticVertexColors) {
+		pMyVertex = room.pVertexBuffer->lock(NoOverwrite);
+		if(pMyVertex) {
+			RestoreStaticVertexColors(roomIndex, pMyVertex);
+			room.staticVertexColors = true;
+		} else {
+			// The colors may still include CPU lighting: do not add the lights twice
+			room.gpuLighting = false;
+		}
+	}
 	
 	for(const EP_DATA & epd : room.epdata) {
 		
@@ -1285,9 +1336,13 @@ static void ARX_PORTALS_Frustrum_RenderRoomTCullSoft(RoomHandle roomIndex, const
 			indexCount += 3;
 		}
 		
-		SMY_VERTEX * vertices = &pMyVertex[roomMat.vertexOffset];
+		if(room.gpuLighting) {
 		
-		if(!player.m_improve) { // Normal View...
+			// The GPU adds the dynamic lights to the static colors in the vertex buffer
+			
+		} else if(!player.m_improve) { // Normal View...
+			
+			SMY_VERTEX * vertices = &pMyVertex[roomMat.vertexOffset];
 			
 			if(ep->type & POLY_GLOW) {
 				vertices[ep->uslInd[0]].color = Color::white.toRGBA();
@@ -1338,6 +1393,7 @@ static void ARX_PORTALS_Frustrum_RenderRoomTCullSoft(RoomHandle roomIndex, const
 			if(!valid) {
 				continue;
 			}
+			SMY_VERTEX * vertices = &pMyVertex[roomMat.vertexOffset];
 			vertices[ep->uslInd[0]].color = ep->color[0];
 			vertices[ep->uslInd[1]].color = ep->color[1];
 			vertices[ep->uslInd[2]].color = ep->color[2];
@@ -1347,19 +1403,33 @@ static void ARX_PORTALS_Frustrum_RenderRoomTCullSoft(RoomHandle roomIndex, const
 			
 		}
 		
-		if(ep->type & POLY_LAVA) {
-			float uvScroll = timeWaveSaw(g_gameTime.now(), 12s);
-			ManageLava_VertexBuffer(ep, uvScroll, vertices);
-			vPolyLava.push_back(ep);
-		} else if(ep->type & POLY_WATER) {
-			float uvScroll = timeWaveSaw(g_gameTime.now(), 1s);
-			ManageWater_VertexBuffer(ep, uvScroll, vertices);
-			vPolyWater.push_back(ep);
+		if(ep->type & (POLY_LAVA | POLY_WATER)) {
+			
+			if(!pMyVertex) {
+				pMyVertex = room.pVertexBuffer->lock(NoOverwrite);
+				if(!pMyVertex) {
+					continue;
+				}
+			}
+			SMY_VERTEX * vertices = &pMyVertex[roomMat.vertexOffset];
+			
+			if(ep->type & POLY_LAVA) {
+				float uvScroll = timeWaveSaw(g_gameTime.now(), 12s);
+				ManageLava_VertexBuffer(ep, uvScroll, vertices);
+				vPolyLava.push_back(ep);
+			} else {
+				float uvScroll = timeWaveSaw(g_gameTime.now(), 1s);
+				ManageWater_VertexBuffer(ep, uvScroll, vertices);
+				vPolyWater.push_back(ep);
+			}
+			
 		}
 		
 	}
 	
-	room.pVertexBuffer->unlock();
+	if(pMyVertex) {
+		room.pVertexBuffer->unlock();
+	}
 	
 }
 
@@ -1368,6 +1438,14 @@ static void BackgroundRenderOpaque(RoomHandle roomIndex) {
 	ARX_PROFILE_FUNC();
 	
 	Room & room = g_rooms->rooms[roomIndex];
+	
+	// Dynamic lights captured by ARX_SCENE_Update(), without any the static colors are final
+	u32 lightSet = InvalidGPULightSet;
+	if(room.gpuLighting && !room.gpuLights.empty()) {
+		lightSet = AddGPUTileLightSet(room.gpuLights);
+		arx_assert_msg(lightSet != InvalidGPULightSet, "room light sets must fit, see ARX_SCENE_Update()");
+	}
+	GRenderer->setGPULightSet(lightSet);
 	
 	for(TextureContainer & material : util::dereference(room.ppTextureContainer)) {
 		
@@ -1395,6 +1473,8 @@ static void BackgroundRenderOpaque(RoomHandle roomIndex) {
 		EERIEDrawnPolys += roomMat.indexCounts[BatchBucket_Opaque];
 		
 	}
+	
+	GRenderer->setGPULightSet(InvalidGPULightSet);
 	
 	GRenderer->GetTextureStage(0)->setColorOp(TextureStage::OpModulate);
 	
@@ -1574,8 +1654,25 @@ void ARX_SCENE_Update() {
 		ARX_PORTALS_Frustrum_ComputeRoom(room, g_screenFrustum, camPos, camDepth);
 	}
 	
-	for(RoomHandle room : g_rooms->visibleRooms) {
-		ARX_PORTALS_Frustrum_RenderRoomTCullSoft(room, camPos);
+	/*
+	 * Dynamic lights on the background: if the renderer can light on the GPU, the lights
+	 * that can reach each visible room are captured here, where ApplyTileLights() would
+	 * run, and the vertex shader adds them to the static colors. Infravision and rooms
+	 * the GPU cannot light stay on the CPU.
+	 * Every set added for a room in ARX_SCENE_Render() has to fit, so the distinct lights
+	 * and the lit rooms are limited by the light set capacity here.
+	 */
+	const bool gpuLighting = !player.m_improve && GRenderer->getMaxGPULightSetSize() > 0
+	                         && g_culledDynamicLightsCount <= GRenderer->getMaxGPULights();
+	size_t gpuLightSets = 0;
+	for(RoomHandle roomIndex : g_rooms->visibleRooms) {
+		Room & room = g_rooms->rooms[roomIndex];
+		room.gpuLighting = gpuLighting && room.pVertexBuffer && gpuLightSets < GRenderer->getMaxGPULightSets()
+		                   && CollectGPUTileLights(room.bbox, room.gpuLights);
+		if(room.gpuLighting && !room.gpuLights.empty()) {
+			gpuLightSets++;
+		}
+		ARX_PORTALS_Frustrum_RenderRoomTCullSoft(roomIndex, camPos);
 	}
 	
 	ARX_THROWN_OBJECT_Manage(g_gameTime.lastFrameDuration());
@@ -1588,6 +1685,10 @@ void ARX_SCENE_Update() {
 void ARX_SCENE_Render() {
 	
 	ARX_PROFILE_FUNC();
+	
+	// Nothing drawn before still references the light sets of the previous scene render
+	GRenderer->resetGPULightSets();
+	setGPUModelLighting(true);
 	
 	if(uw_mode) {
 		GRenderer->GetTextureStage(0)->setMipMapLODBias(10.f);
@@ -1624,6 +1725,9 @@ void ARX_SCENE_Render() {
 		}
 		PopAllTriangleListOpaque();
 	}
+	
+	// Model triangles batched from here on may only be drawn after the next reset
+	setGPUModelLighting(false);
 	
 	eyeball.render();
 	

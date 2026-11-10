@@ -64,6 +64,15 @@ void Cedric_ApplyLightingFirstPartRefactor(Entity & io);
 void PopAllTriangleListOpaque(RenderState baseState = render3D(), bool clear = true);
 void PopAllTriangleListTransparency();
 
+/*!
+ * Let the GPU light the opaque triangles of models rendered from now on, where the
+ * renderer supports it (lighting on the CPU otherwise)
+ *
+ * Only enable this while every model batched is also drawn by PopAllTriangleListOpaque()
+ * before the next Renderer::resetGPULightSets().
+ */
+void setGPUModelLighting(bool enable);
+
 void drawQuadRTP(const RenderMaterial & mat, TexturedQuad quat);
 void drawTriangle(const RenderMaterial & mat, const TexturedVertexUntransformed * vertices);
 

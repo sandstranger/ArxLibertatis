@@ -100,8 +100,30 @@ struct SMY_VERTEX {
 	Vec3f p = Vec3f(0.f);
 	ColorRGBA color;
 	Vec2f uv = Vec2f(0.f);
+	//! Vertex normal, for dynamic lights added by the GPU (see Renderer::setGPULightSet())
+	Vec3f n = Vec3f(0.f);
 	
 	constexpr SMY_VERTEX() arx_noexcept_default
+	
+};
+
+/*!
+ * Inputs of the dynamic lighting the GPU evaluates for one TexturedVertex
+ *
+ * \see Renderer::drawLitTriangles()
+ */
+struct TexturedVertexLighting {
+	
+	//! World-space position
+	Vec3f position = Vec3f(0.f);
+	
+	//! World-space normal, as passed to ApplyLight() (not renormalized)
+	Vec3f normal = Vec3f(0.f);
+	
+	//! Light set returned by Renderer::addGPULightSet()
+	u32 lightSet = 0;
+	
+	constexpr TexturedVertexLighting() arx_noexcept_default
 	
 };
 

@@ -95,6 +95,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "scene/Interactive.h"
 #include "scene/LevelFormat.h"
 #include "scene/Light.h"
+#include "scene/Rooms.h"
 #include "scene/Tiles.h"
 
 #include "util/Range.h"
@@ -587,6 +588,13 @@ void RestoreLastLoadedLightning() {
 	if(g_levelLighting.size() != g_tiles->countVertices()) {
 		g_levelLighting.clear();
 		return;
+	}
+	
+	// The room vertex buffers still hold the old static colors
+	if(g_rooms) {
+		for(Room & room : g_rooms->rooms) {
+			room.staticVertexColors = false;
+		}
 	}
 	
 	size_t i = 0;

@@ -57,6 +57,26 @@
 
 #ifdef ANDROID
 extern bool g_useGLES2_0;
+
+namespace {
+
+//! Lights in one light set: their indices are packed into two uvec4 (see GLESLightSet)
+const size_t glesMaxLightSetSize = 32;
+
+//! Lights per scene render: light indices are 8 bits
+const size_t glesMaxLights = 256;
+
+//! Light sets per scene render, the uniform block size of the device may allow less
+const size_t glesMaxLightSets = 1024;
+
+//! Uniform buffer binding points of the ArxLights and ArxLightSets blocks
+const GLuint glesLightBinding = 0;
+const GLuint glesLightSetBinding = 1;
+
+//! Vertices in each drawLitTriangles() streaming buffer
+const size_t glesLitVertexCapacity = 3 * 8192;
+
+} // anonymous namespace
 #endif
 
 
@@ -443,6 +463,48 @@ void OpenGLRenderer::initialize() {
 		LogInfo << "GLES program binaries: "
 		        << (m_glesProgramBinaryFormats.empty() ? std::string("not supported")
 		            : std::to_string(m_glesProgramBinaryFormats.size()) + " format(s)");
+		
+		/*
+		 * Dynamic lighting in the vertex shader (OpenGL ES 3.0 feature level only): light
+		 * data in two uniform blocks, the light set as an integer attribute and 8 vertex
+		 * attributes. The default uniform block only keeps the 6 vectors the other
+		 * programs use as well. The buffers are bound at offset 0, so the offset alignment
+		 * does not restrict anything.
+		 */
+		m_glesLightingSupported = false;
+		m_glesMaxLights = 0;
+		m_glesMaxLightSets = 0;
+		if(m_glesIsES3 && m_hasCoreMapBufferRange && glBindBufferBase && glGetUniformBlockIndex
+		   && glUniformBlockBinding && glGetActiveUniformBlockiv && glVertexAttribIPointer
+		   && glVertexAttribI4ui) {
+			GLint maxBlockSize = 0;
+			GLint maxVertexBlocks = 0;
+			GLint maxBindings = 0;
+			GLint maxAttributes = 0;
+			GLint maxVertexUniformVectors = 0;
+			GLint offsetAlignment = 0;
+			glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxBlockSize);
+			glGetIntegerv(GL_MAX_VERTEX_UNIFORM_BLOCKS, &maxVertexBlocks);
+			glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &maxBindings);
+			glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &maxAttributes);
+			glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &maxVertexUniformVectors);
+			glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &offsetAlignment);
+			LogInfo << "GLES uniform blocks: " << maxBlockSize << " bytes, " << maxVertexBlocks
+			        << " per vertex shader, " << maxBindings << " bindings, offset alignment "
+			        << offsetAlignment << "; " << maxVertexUniformVectors << " vertex uniform vectors, "
+			        << maxAttributes << " vertex attributes";
+			const size_t blockSize = size_t(std::max(maxBlockSize, GLint(0)));
+			m_glesMaxLights = std::min(glesMaxLights, blockSize / sizeof(GLESLight));
+			m_glesMaxLightSets = std::min(glesMaxLightSets, blockSize / sizeof(GLESLightSet));
+			// OpenGL ES 3.0 guarantees 16 KiB blocks: 256 lights and 204 light sets
+			m_glesLightingSupported = maxVertexBlocks >= 2 && maxBindings >= 2
+			                          && maxAttributes >= GLint(GLESAttributeCount)
+			                          && maxVertexUniformVectors >= 16
+			                          && m_glesMaxLights >= glesMaxLightSetSize && m_glesMaxLightSets >= 64;
+		}
+		if(!m_glesLightingSupported) {
+			LogInfo << "GLES dynamic lighting: CPU";
+		}
 #endif
 	} else {
 #ifndef ANDROID       
@@ -575,6 +637,13 @@ void OpenGLRenderer::reinit() {
 	m_glesIndexBufferCapacity = 0;
 	m_glesIndexBufferOffset = 0;
 	m_glesImmediateVertexOffset = 0;
+	m_glesLighting = false;
+	m_glesLightBuffer = 0;
+	m_glesLightSetBuffer = 0;
+	m_glesLitVertices = 0;
+	m_glesLitLighting = 0;
+	m_glesWorldTransformValid = false;
+	m_glesScreenTransformSize = Vec2i(0);
 	m_glalphaToCoverage = false;
 	glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
 	m_glsampleShading = false;
@@ -756,6 +825,9 @@ void OpenGLRenderer::SetViewMatrix(const glm::mat4x4 & matView) {
 	}
 	
 	m_view = matView;
+#ifdef ANDROID
+	m_glesWorldTransformValid = false;
+#endif
 }
 
 void OpenGLRenderer::SetProjectionMatrix(const glm::mat4x4 & matProj) {
@@ -769,6 +841,9 @@ void OpenGLRenderer::SetProjectionMatrix(const glm::mat4x4 & matProj) {
 	}
 	
 	m_projection = matProj;
+#ifdef ANDROID
+	m_glesWorldTransformValid = false;
+#endif
 }
 
 void OpenGLRenderer::ReleaseAllTextures() {
@@ -1796,11 +1871,14 @@ GLuint buildGLESProgram(const std::string & vertexSource, const std::string & fr
 	}
 	glAttachShader(program, vertex);
 	glAttachShader(program, fragment);
-	glBindAttribLocation(program, 0, "aPosition");
-	glBindAttribLocation(program, 1, "aColor");
-	glBindAttribLocation(program, 2, "aTexCoord0");
-	glBindAttribLocation(program, 3, "aTexCoord1");
-	glBindAttribLocation(program, 4, "aTexCoord2");
+	glBindAttribLocation(program, GLESAttributePosition, "aPosition");
+	glBindAttribLocation(program, GLESAttributeColor, "aColor");
+	glBindAttribLocation(program, GLESAttributeTexCoord0, "aTexCoord0");
+	glBindAttribLocation(program, GLESAttributeTexCoord1, "aTexCoord1");
+	glBindAttribLocation(program, GLESAttributeTexCoord2, "aTexCoord2");
+	glBindAttribLocation(program, GLESAttributeNormal, "aNormal");
+	glBindAttribLocation(program, GLESAttributeWorldPosition, "aWorldPosition");
+	glBindAttribLocation(program, GLESAttributeLightSet, "aLightSet");
 	if(cache) {
 		glProgramParameteri(program, GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
 	}
@@ -1851,11 +1929,16 @@ const char * const glesShaderPrefix300 =
 	"#define ARX_FRAG_COLOR arxFragColor\n";
 
 /*
- * Variants: ARX_STAGES (0, 1 or 3 texture stages), ARX_ALPHA_CUTOUT, ARX_FOG and ARX_GAMMA.
+ * Variants: ARX_STAGES (0, 1 or 3 texture stages), ARX_ALPHA_CUTOUT, ARX_FOG, ARX_GAMMA and
+ * ARX_LIGHTING (GLSL ES 3.00 only).
  * Nothing in the shaders branches on uniforms, values that only depend on uniforms
  * (MVP matrix, fog plane and scale, texture combiner coefficients) come from the CPU.
  * Linear fog is evaluated per vertex: the fog factor is affine in the vertex position,
  * so interpolating it is exact and only the clamp is left to the fragment shader.
+ *
+ * ARX_LIGHTING computes the vertex color the way ApplyLight() and ApplyTileLights() do
+ * on the CPU (see GPULightSet and docs/gles3-gpu-lighting.md). The loop runs over the
+ * lights of one set, which the CPU already culled for the room or model.
  */
 const char * const glesVertexShader = R"(
 precision highp float;
@@ -1878,9 +1961,64 @@ uniform highp vec4 uFogPlane;
 uniform highp vec2 uFogParams;
 ARX_VARYING_OUT mediump float vFog;
 #endif
+#ifdef ARX_LIGHTING
+ARX_VS_IN highp vec3 aNormal;
+ARX_VS_IN highp vec3 aWorldPosition;
+ARX_VS_IN highp uint aLightSet;
+struct ArxLight {
+    highp vec4 position; // xyz: position, w: fall start
+    highp vec4 color;    // rgb: color (0-255, intensity applied), w: fall end
+    highp vec4 falloff;  // x: 1 / (fall end - fall start)
+};
+struct ArxLightSet {
+    highp vec4 ambient;    // rgb: ambient (0-255), w: weight of the vertex color
+    highp vec4 factor;     // rgb: color factor, w: diffuse factor
+    highp vec4 term;       // rgb: added color (0-255), w: number of lights
+    highp uvec4 lights[2]; // indices into uLights, 8 bits each
+};
+layout(std140) uniform ArxLights {
+    ArxLight uLights[ARX_MAX_LIGHTS];
+};
+layout(std140) uniform ArxLightSets {
+    ArxLightSet uLightSets[ARX_MAX_LIGHT_SETS];
+};
+mediump vec4 arxLighting() {
+    int set = int(aLightSet);
+    highp vec4 ambient = uLightSets[set].ambient;
+    highp vec4 factor = uLightSets[set].factor;
+    highp vec4 term = uLightSets[set].term;
+    // The static lighting of the background is stored as bytes, restore the exact values
+    highp vec3 vertexColor = aColor.rgb;
+    highp vec3 color = ambient.rgb + floor(vertexColor * 255.0 + 0.5) * ambient.w;
+    int count = int(term.w);
+    for(int i = 0; i < count; i++) {
+        highp uint word = uLightSets[set].lights[i >> 4][(i >> 2) & 3];
+        int light = int((word >> uint((i & 3) * 8)) & 255u);
+        highp vec4 position = uLights[light].position;
+        highp vec3 toLight = position.xyz - aWorldPosition;
+        highp float distance2 = dot(toLight, toLight);
+        highp float invDistance = inversesqrt(max(distance2, 1e-20));
+        highp float cosangle = dot(aNormal, toLight) * invDistance;
+        if(cosangle > 0.0) {
+            highp vec4 lightColor = uLights[light].color;
+            highp float lightDistance = distance2 * invDistance;
+            highp float attenuation = (lightDistance <= position.w) ? 1.0
+                                      : max((lightColor.w - lightDistance) * uLights[light].falloff.x, 0.0);
+            color += lightColor.rgb * (cosangle * attenuation * factor.w);
+        }
+    }
+    // Like the integer conversion and clipByte255() on the CPU
+    color = floor(clamp(color * factor.rgb + term.rgb, 0.0, 255.0));
+    return vec4(color * (1.0 / 255.0), 1.0);
+}
+#endif
 void main() {
     gl_Position = uMVP * aPosition;
+#ifdef ARX_LIGHTING
+    vColor = arxLighting();
+#else
     vColor = aColor;
+#endif
 #if ARX_STAGES >= 1
     vTexCoord0 = aTexCoord0;
 #endif
@@ -2017,6 +2155,38 @@ void glesCombinerCoefficients(TextureStage::TextureOp op, float & a, float & b, 
 	}
 }
 
+/*!
+ * Append the entries after uploaded to a uniform buffer
+ *
+ * Queued draws only read entries before uploaded, so the new range is written without
+ * synchronization (the buffer is orphaned when the entries start over).
+ */
+template <typename T>
+void appendGLESUniformData(GLuint buffer, const std::vector<T> & data, size_t & uploaded) {
+
+	if(uploaded >= data.size()) {
+		return;
+	}
+
+	const GLintptr offset = GLintptr(uploaded * sizeof(T));
+	const GLsizeiptr size = GLsizeiptr((data.size() - uploaded) * sizeof(T));
+	const T * source = data.data() + uploaded;
+
+	glBindBuffer(GL_UNIFORM_BUFFER, buffer);
+	void * destination = glMapBufferRange(GL_UNIFORM_BUFFER, offset, size,
+	                                      GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+	bool written = false;
+	if(destination) {
+		std::memcpy(destination, source, size_t(size));
+		written = glUnmapBuffer(GL_UNIFORM_BUFFER) != GL_FALSE;
+	}
+	if(!written) {
+		glBufferSubData(GL_UNIFORM_BUFFER, offset, size, source);
+	}
+
+	uploaded = data.size();
+}
+
 } // namespace
 
 extern "C" {
@@ -2058,7 +2228,17 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	const char * stageCNames[3] = { "uStageC0", "uStageC1", "uStageC2" };
 	const char * lodBiasNames[3] = { "uLodBias0", "uLodBias1", "uLodBias2" };
 
+	// Lighting variants are an optimization: if they fail, the CPU lights everything
+	bool lighting = m_glesIsES3 && m_glesLightingSupported;
+	m_glesLightBufferSize = 0;
+	m_glesLightSetBufferSize = 0;
+
 	for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
+
+		const bool lit = (variant & GLESProgramLighting) != 0;
+		if(lit && !lighting) {
+			continue;
+		}
 
 		std::string defines = prefix;
 		defines += "#define ARX_STAGES ";
@@ -2073,8 +2253,21 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		if(variant & GLESProgramGamma) {
 			defines += "#define ARX_GAMMA 1\n";
 		}
+		if(lit) {
+			defines += "#define ARX_LIGHTING 1\n";
+			defines += "#define ARX_MAX_LIGHTS " + std::to_string(m_glesMaxLights) + "\n";
+			defines += "#define ARX_MAX_LIGHT_SETS " + std::to_string(m_glesMaxLightSets) + "\n";
+		}
 
 		GLuint id = buildGLESProgram(defines + glesVertexShader, defines + glesFragmentShader, cache);
+		if(lit && (!id || !setupGLESLightingProgram(id))) {
+			LogWarning << "GLES lighting programs are not available, lighting on the CPU";
+			if(id) {
+				glDeleteProgram(id);
+			}
+			lighting = false;
+			continue;
+		}
 		if(!id) {
 			shutdownGLESProgram();
 			return false;
@@ -2128,6 +2321,25 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	glUseProgram(0);
 	m_glesBoundProgram = 0;
 
+	if(lighting && !createGLESLightingBuffers()) {
+		LogWarning << "Could not create the GLES lighting buffers, lighting on the CPU";
+		lighting = false;
+	}
+	if(!lighting) {
+		for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
+			if((variant & GLESProgramLighting) && m_glesPrograms[variant].id) {
+				glDeleteProgram(m_glesPrograms[variant].id);
+				m_glesPrograms[variant] = GLESProgram();
+			}
+		}
+		shutdownGLESLighting();
+	} else {
+		m_glesLighting = true;
+		LogInfo << "GLES dynamic lighting: vertex shader, " << m_glesMaxLights << " lights and "
+		        << m_glesMaxLightSets << " light sets per scene, up to " << glesMaxLightSetSize
+		        << " lights per set";
+	}
+
 	if(cache) {
 		cleanGLESProgramCache(*cache);
 		LogInfo << "GLES program cache: " << cache->loaded << " loaded, " << cache->compiled
@@ -2140,6 +2352,8 @@ bool OpenGLRenderer::initializeGLESProgram() {
 }
 
 void OpenGLRenderer::shutdownGLESProgram() {
+
+	shutdownGLESLighting();
 
 	if(m_glesBoundProgram) {
 		glUseProgram(0);
@@ -2166,7 +2380,7 @@ void OpenGLRenderer::shutdownGLESProgram() {
 
 }
 
-void OpenGLRenderer::prepareGLESProgram(bool transformed) {
+void OpenGLRenderer::prepareGLESProgram(bool transformed, bool lit) {
 
 	// Texture stages that contribute to this draw
 	GLTextureStage * stages[3] = { nullptr, nullptr, nullptr };
@@ -2191,6 +2405,10 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	if(std::abs(m_glesGamma - 1.f) > 0.001f) {
 		variant |= GLESProgramGamma;
 	}
+	if(lit) {
+		arx_assert(m_glesLighting);
+		variant |= GLESProgramLighting;
+	}
 
 	GLESProgram & program = m_glesPrograms[variant];
 	if(!program.id) {
@@ -2202,32 +2420,52 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 		m_glesBoundProgram = program.id;
 	}
 
+	if(lit) {
+		uploadGLESLighting();
+		if(!m_glesLitDraw && m_glesLightSetAttribute != m_glesRoomLightSet) {
+			// Room geometry uses one light set for the whole draw: a constant attribute value
+			// (the SMY_VERTEX layout keeps the array disabled)
+			glVertexAttribI4ui(GLESAttributeLightSet, m_glesRoomLightSet, 0, 0, 0);
+			m_glesLightSetAttribute = m_glesRoomLightSet;
+		}
+	}
+
 	const bool cacheValid = program.cacheValid;
 
-	glm::mat4 mvp;
+	// Both transforms only change with the view, projection or viewport size
+	const glm::mat4 * mvp;
 	glm::vec4 fogPlane;
 	if(transformed) {
-		mvp = m_projection * m_view;
-		// Fog distance: the view-space depth. Arx uses a left-handed view where visible
-		// points have z > 0 (createProjectionMatrix() in Camera.cpp puts +z into clip w),
-		// the same distance the fixed-function fog of the desktop renderer uses. Taking
-		// -z made every distance negative, so the fog factor was always clamped to 1.
-		fogPlane = glm::vec4(m_view[0][2], m_view[1][2], m_view[2][2], m_view[3][2]);
+		if(!m_glesWorldTransformValid) {
+			m_glesWorldTransform = m_projection * m_view;
+			// Fog distance: the view-space depth. Arx uses a left-handed view where visible
+			// points have z > 0 (createProjectionMatrix() in Camera.cpp puts +z into clip w),
+			// the same distance the fixed-function fog of the desktop renderer uses. Taking
+			// -z made every distance negative, so the fog factor was always clamped to 1.
+			m_glesWorldFogPlane = glm::vec4(m_view[0][2], m_view[1][2], m_view[2][2], m_view[3][2]);
+			m_glesWorldTransformValid = true;
+		}
+		mvp = &m_glesWorldTransform;
+		fogPlane = m_glesWorldFogPlane;
 	} else {
 		// Pre-transformed vertices: pixel coordinates, the view depth is in w
-		const float width = float(std::max(1, viewport.width()));
-		const float height = float(std::max(1, viewport.height()));
-		mvp = glm::mat4(1.f);
-		mvp = glm::translate(mvp, glm::vec3(-1.f, 1.f, 0.f));
-		mvp = glm::scale(mvp, glm::vec3(2.f / width, -2.f / height, 1.f));
-		mvp = glm::translate(mvp, glm::vec3(0.5f, 0.5f, 0.f));
+		const Vec2i size(std::max(1, viewport.width()), std::max(1, viewport.height()));
+		if(size != m_glesScreenTransformSize) {
+			glm::mat4 screen(1.f);
+			screen = glm::translate(screen, glm::vec3(-1.f, 1.f, 0.f));
+			screen = glm::scale(screen, glm::vec3(2.f / float(size.x), -2.f / float(size.y), 1.f));
+			screen = glm::translate(screen, glm::vec3(0.5f, 0.5f, 0.f));
+			m_glesScreenTransform = screen;
+			m_glesScreenTransformSize = size;
+		}
+		mvp = &m_glesScreenTransform;
 		fogPlane = glm::vec4(0.f, 0.f, 0.f, 1.f);
 	}
 
 	if(program.uniformMVP >= 0
-	   && (!cacheValid || std::memcmp(glm::value_ptr(program.mvp), glm::value_ptr(mvp), sizeof(glm::mat4)) != 0)) {
-		glUniformMatrix4fv(program.uniformMVP, 1, GL_FALSE, glm::value_ptr(mvp));
-		program.mvp = mvp;
+	   && (!cacheValid || std::memcmp(glm::value_ptr(program.mvp), glm::value_ptr(*mvp), sizeof(glm::mat4)) != 0)) {
+		glUniformMatrix4fv(program.uniformMVP, 1, GL_FALSE, glm::value_ptr(*mvp));
+		program.mvp = *mvp;
 	}
 
 	if(program.uniformFogPlane >= 0 && (!cacheValid || program.fogPlane != fogPlane)) {
@@ -2318,6 +2556,320 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
 	}
 
 	program.cacheValid = true;
+}
+
+bool OpenGLRenderer::setupGLESLightingProgram(GLuint program) {
+
+	const GLuint lights = glGetUniformBlockIndex(program, "ArxLights");
+	const GLuint sets = glGetUniformBlockIndex(program, "ArxLightSets");
+	if(lights == GL_INVALID_INDEX || sets == GL_INVALID_INDEX) {
+		LogError << "GLES lighting program without its uniform blocks";
+		return false;
+	}
+
+	glUniformBlockBinding(program, lights, glesLightBinding);
+	glUniformBlockBinding(program, sets, glesLightSetBinding);
+
+	// The bound buffers must cover the whole blocks: the std140 sizes, unless the driver says more
+	GLint lightsSize = 0;
+	GLint setsSize = 0;
+	glGetActiveUniformBlockiv(program, lights, GL_UNIFORM_BLOCK_DATA_SIZE, &lightsSize);
+	glGetActiveUniformBlockiv(program, sets, GL_UNIFORM_BLOCK_DATA_SIZE, &setsSize);
+	m_glesLightBufferSize = std::max(m_glesLightBufferSize, size_t(std::max(lightsSize, GLint(0))));
+	m_glesLightSetBufferSize = std::max(m_glesLightSetBufferSize, size_t(std::max(setsSize, GLint(0))));
+
+	return true;
+}
+
+bool OpenGLRenderer::createGLESLightingBuffers() {
+
+	static_assert(sizeof(GLESLight) == 3 * 16, "ArxLight std140 layout");
+	static_assert(sizeof(GLESLightSet) == 5 * 16, "ArxLightSet std140 layout");
+	static_assert(sizeof(TexturedVertexLighting) == 28, "unexpected TexturedVertexLighting padding");
+
+	m_glesLightBufferSize = std::max(m_glesLightBufferSize, m_glesMaxLights * sizeof(GLESLight));
+	m_glesLightSetBufferSize = std::max(m_glesLightSetBufferSize, m_glesMaxLightSets * sizeof(GLESLightSet));
+
+	glGenBuffers(1, &m_glesLightBuffer);
+	glGenBuffers(1, &m_glesLightSetBuffer);
+	glGenBuffers(1, &m_glesLitVertices);
+	glGenBuffers(1, &m_glesLitLighting);
+	if(!m_glesLightBuffer || !m_glesLightSetBuffer || !m_glesLitVertices || !m_glesLitLighting) {
+		return false;
+	}
+
+	glBindBuffer(GL_UNIFORM_BUFFER, m_glesLightBuffer);
+	glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(m_glesLightBufferSize), nullptr, GL_STREAM_DRAW);
+	glBindBuffer(GL_UNIFORM_BUFFER, m_glesLightSetBuffer);
+	glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(m_glesLightSetBufferSize), nullptr, GL_STREAM_DRAW);
+	glBindBuffer(GL_UNIFORM_BUFFER, GL_NONE);
+
+	// Orphaning keeps the buffer names, so the bindings stay valid
+	glBindBufferBase(GL_UNIFORM_BUFFER, glesLightBinding, m_glesLightBuffer);
+	glBindBufferBase(GL_UNIFORM_BUFFER, glesLightSetBinding, m_glesLightSetBuffer);
+
+	m_glesLights.reserve(m_glesMaxLights);
+	m_glesLightSets.reserve(m_glesMaxLightSets);
+	m_glesUploadedLights = 0;
+	m_glesUploadedLightSets = 0;
+	m_glesOrphanLightBuffers = false;
+
+	// The streaming buffers get their storage with the first write at offset 0
+	m_glesLitOffset = 0;
+
+	return true;
+}
+
+void OpenGLRenderer::shutdownGLESLighting() {
+
+	m_glesLighting = false;
+
+	if(m_glesLightBuffer || m_glesLightSetBuffer) {
+		glBindBuffer(GL_UNIFORM_BUFFER, GL_NONE);
+		glBindBufferBase(GL_UNIFORM_BUFFER, glesLightBinding, GL_NONE);
+		glBindBufferBase(GL_UNIFORM_BUFFER, glesLightSetBinding, GL_NONE);
+	}
+	if(m_glesLightBuffer) {
+		glDeleteBuffers(1, &m_glesLightBuffer);
+		m_glesLightBuffer = 0;
+	}
+	if(m_glesLightSetBuffer) {
+		glDeleteBuffers(1, &m_glesLightSetBuffer);
+		m_glesLightSetBuffer = 0;
+	}
+
+	clearVertexArray(&m_glesLitVertices);
+	if(m_glesLitVertices) {
+		unbindBuffer(m_glesLitVertices);
+		glDeleteBuffers(1, &m_glesLitVertices);
+		m_glesLitVertices = 0;
+	}
+	if(m_glesLitLighting) {
+		unbindBuffer(m_glesLitLighting);
+		glDeleteBuffers(1, &m_glesLitLighting);
+		m_glesLitLighting = 0;
+	}
+	m_glesLitOffset = 0;
+
+	m_glesLights.clear();
+	m_glesLightSets.clear();
+	m_glesLightKeys.clear();
+	m_glesUploadedLights = 0;
+	m_glesUploadedLightSets = 0;
+	m_glesOrphanLightBuffers = true;
+	m_glesRoomLightSet = InvalidGPULightSet;
+	m_glesLightSetAttribute = InvalidGPULightSet;
+	m_glesLitDraw = false;
+
+}
+
+size_t OpenGLRenderer::getMaxGPULightSetSize() const {
+	return m_glesLighting ? glesMaxLightSetSize : 0;
+}
+
+void OpenGLRenderer::resetGPULightSets() {
+
+	m_glesLights.clear();
+	m_glesLightSets.clear();
+	m_glesLightKeys.clear();
+
+	if(m_glesUploadedLights != 0 || m_glesUploadedLightSets != 0) {
+		// Queued draws may still read the old entries: the next upload gets new storage
+		m_glesOrphanLightBuffers = true;
+	}
+	m_glesUploadedLights = 0;
+	m_glesUploadedLightSets = 0;
+
+	m_glesRoomLightSet = InvalidGPULightSet;
+
+}
+
+u32 OpenGLRenderer::addGPULightSet(const GPULightSet & set, const GPULight * lights, size_t count) {
+
+	if(!m_glesLighting || count > glesMaxLightSetSize || m_glesLightSets.size() >= m_glesMaxLightSets) {
+		return InvalidGPULightSet;
+	}
+
+	// Lights already stored for an earlier set of this scene are shared
+	GLESLight converted[glesMaxLightSetSize];
+	u32 indices[glesMaxLightSetSize];
+	size_t added = 0;
+	for(size_t i = 0; i < count; i++) {
+
+		const GPULight & light = lights[i];
+		GLESLight & data = converted[i];
+		data.position[0] = light.pos.x;
+		data.position[1] = light.pos.y;
+		data.position[2] = light.pos.z;
+		data.position[3] = light.fallStart;
+		data.color[0] = light.color.r;
+		data.color[1] = light.color.g;
+		data.color[2] = light.color.b;
+		data.color[3] = light.fallEnd;
+		data.falloff[0] = light.fallDiffMul;
+		data.falloff[1] = 0.f;
+		data.falloff[2] = 0.f;
+		data.falloff[3] = 0.f;
+
+		indices[i] = InvalidGPULightSet;
+		if(light.key) {
+			auto it = m_glesLightKeys.find(light.key);
+			if(it != m_glesLightKeys.end()
+			   && std::memcmp(&m_glesLights[it->second], &data, sizeof(GLESLight)) == 0) {
+				indices[i] = it->second;
+			}
+		}
+		if(indices[i] == InvalidGPULightSet) {
+			added++;
+		}
+
+	}
+
+	if(m_glesLights.size() + added > m_glesMaxLights) {
+		return InvalidGPULightSet;
+	}
+
+	GLESLightSet data;
+	std::memset(&data, 0, sizeof(data));
+	data.ambient[0] = set.ambient.r;
+	data.ambient[1] = set.ambient.g;
+	data.ambient[2] = set.ambient.b;
+	data.ambient[3] = set.vertexColorWeight;
+	data.factor[0] = set.factor.r;
+	data.factor[1] = set.factor.g;
+	data.factor[2] = set.factor.b;
+	data.factor[3] = set.diffuse;
+	data.term[0] = set.term.r;
+	data.term[1] = set.term.g;
+	data.term[2] = set.term.b;
+	data.term[3] = float(count);
+
+	for(size_t i = 0; i < count; i++) {
+		u32 index = indices[i];
+		if(index == InvalidGPULightSet) {
+			index = u32(m_glesLights.size());
+			m_glesLights.push_back(converted[i]);
+			if(lights[i].key) {
+				m_glesLightKeys[lights[i].key] = index;
+			}
+		}
+		arx_assert(index < 256);
+		data.lights[i / 4] |= index << (8 * (i % 4));
+	}
+
+	m_glesLightSets.push_back(data);
+
+	return u32(m_glesLightSets.size() - 1);
+}
+
+void OpenGLRenderer::setGPULightSet(u32 set) {
+	arx_assert(set == InvalidGPULightSet || set < m_glesLightSets.size());
+	m_glesRoomLightSet = m_glesLighting ? set : InvalidGPULightSet;
+}
+
+void OpenGLRenderer::uploadGLESLighting() {
+
+	if(m_glesUploadedLights == m_glesLights.size() && m_glesUploadedLightSets == m_glesLightSets.size()) {
+		return;
+	}
+
+	if(m_glesOrphanLightBuffers) {
+		glBindBuffer(GL_UNIFORM_BUFFER, m_glesLightBuffer);
+		glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(m_glesLightBufferSize), nullptr, GL_STREAM_DRAW);
+		glBindBuffer(GL_UNIFORM_BUFFER, m_glesLightSetBuffer);
+		glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(m_glesLightSetBufferSize), nullptr, GL_STREAM_DRAW);
+		m_glesOrphanLightBuffers = false;
+	}
+
+	appendGLESUniformData(m_glesLightBuffer, m_glesLights, m_glesUploadedLights);
+	appendGLESUniformData(m_glesLightSetBuffer, m_glesLightSets, m_glesUploadedLightSets);
+
+}
+
+void OpenGLRenderer::streamGLESVertices(GLuint buffer, size_t bufferSize, size_t offset, const void * data,
+                                        size_t size) {
+
+	bindBuffer(buffer);
+
+	if(offset == 0) {
+		// First use or wrapped around: new storage, queued draws keep the old one
+		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(bufferSize), nullptr, GL_STREAM_DRAW);
+	}
+
+	// Queued draws never read the range after the previous write position
+	void * destination = mapBufferRange(GL_ARRAY_BUFFER, offset, size, GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+	if(destination) {
+		std::memcpy(destination, data, size);
+		if(unmapBuffer(GL_ARRAY_BUFFER)) {
+			return;
+		}
+	}
+	glBufferSubData(GL_ARRAY_BUFFER, GLintptr(offset), GLsizeiptr(size), data);
+
+}
+
+void OpenGLRenderer::drawLitTriangles(const TexturedVertex * vertices, const TexturedVertexLighting * lighting,
+                                      size_t count) {
+
+	arx_assert(count % 3 == 0);
+
+	if(!m_glesLighting) {
+		return;
+	}
+
+	const u32 lightingAttributes = glesAttributeBit(GLESAttributeNormal)
+	                               | glesAttributeBit(GLESAttributeWorldPosition)
+	                               | glesAttributeBit(GLESAttributeLightSet);
+
+	while(count >= 3) {
+
+		size_t batch = std::min(count, glesLitVertexCapacity);
+		batch -= batch % 3;
+		size_t offset = m_glesLitOffset;
+		if(offset + batch > glesLitVertexCapacity) {
+			offset = 0;
+		}
+
+		// Both streams advance together, so the first vertex of the draw selects both
+		streamGLESVertices(m_glesLitVertices, glesLitVertexCapacity * sizeof(TexturedVertex),
+		                   offset * sizeof(TexturedVertex), vertices, batch * sizeof(TexturedVertex));
+		streamGLESVertices(m_glesLitLighting, glesLitVertexCapacity * sizeof(TexturedVertexLighting),
+		                   offset * sizeof(TexturedVertexLighting), lighting,
+		                   batch * sizeof(TexturedVertexLighting));
+
+		m_glesLitDraw = true;
+		beforeDraw<TexturedVertex>();
+		m_glesLitDraw = false;
+
+		if(switchVertexArray(GL_TexturedVertexLit, &m_glesLitVertices, 1, nullptr, lightingAttributes)) {
+			bindBuffer(m_glesLitVertices);
+			glVertexAttribPointer(GLESAttributePosition, 4, GL_FLOAT, GL_FALSE, sizeof(TexturedVertex),
+			                      vertexAttributeOffset(nullptr, offsetof(TexturedVertex, p)));
+			glVertexAttribPointer(GLESAttributeColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(TexturedVertex),
+			                      vertexAttributeOffset(nullptr, offsetof(TexturedVertex, color)));
+			setVertexArrayTexCoord(0, vertexAttributeOffset(nullptr, offsetof(TexturedVertex, uv)),
+			                       sizeof(TexturedVertex));
+			bindBuffer(m_glesLitLighting);
+			glVertexAttribPointer(GLESAttributeNormal, 3, GL_FLOAT, GL_FALSE, sizeof(TexturedVertexLighting),
+			                      vertexAttributeOffset(nullptr, offsetof(TexturedVertexLighting, normal)));
+			glVertexAttribPointer(GLESAttributeWorldPosition, 3, GL_FLOAT, GL_FALSE, sizeof(TexturedVertexLighting),
+			                      vertexAttributeOffset(nullptr, offsetof(TexturedVertexLighting, position)));
+			glVertexAttribIPointer(GLESAttributeLightSet, 1, GL_UNSIGNED_INT, sizeof(TexturedVertexLighting),
+			                       vertexAttributeOffset(nullptr, offsetof(TexturedVertexLighting, lightSet)));
+		}
+
+		glDrawArrays(GL_TRIANGLES, GLint(offset), GLsizei(batch));
+
+		m_glesLitOffset = offset + batch;
+		vertices += batch;
+		lighting += batch;
+		count -= batch;
+
+	}
+
+	// The current value of an attribute is undefined after a draw with its array enabled
+	m_glesLightSetAttribute = InvalidGPULightSet;
+
 }
 
 /*

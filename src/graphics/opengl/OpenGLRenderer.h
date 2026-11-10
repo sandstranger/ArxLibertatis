@@ -21,6 +21,7 @@
 #define ARX_GRAPHICS_OPENGL_OPENGLRENDERER_H
 
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <boost/intrusive/list.hpp>
@@ -107,6 +108,19 @@ public:
 
 	void endFrame() override;
 	void beginFrame() override;
+	
+	// Dynamic lighting in the vertex shader (OpenGL ES 3.0 feature level)
+	size_t getMaxGPULightSetSize() const override;
+	size_t getMaxGPULights() const override { return m_glesLighting ? m_glesMaxLights : 0; }
+	size_t getMaxGPULightSets() const override { return m_glesLighting ? m_glesMaxLightSets : 0; }
+	void resetGPULightSets() override;
+	u32 addGPULightSet(const GPULightSet & set, const GPULight * lights, size_t count) override;
+	void setGPULightSet(u32 set) override;
+	void drawLitTriangles(const TexturedVertex * vertices, const TexturedVertexLighting * lighting,
+	                      size_t count) override;
+	
+	//! The lighting programs are available
+	bool hasGLESLighting() const { return m_glesLighting; }
 #endif
 
 	bool getSnapshot(Image & image) override;
@@ -126,7 +140,7 @@ public:
 		flushState();
 		selectTrasform<Vertex>();
 #ifdef ANDROID
-		prepareGLESProgram(m_currentTransform == GL_ModelViewProjectionTransform);
+		prepareGLESProgram(m_currentTransform == GL_ModelViewProjectionTransform, isGLESLitDraw<Vertex>());
 #endif
 	}
 	
@@ -232,7 +246,17 @@ private:
 #ifdef ANDROID
 	bool initializeGLESProgram();
 	void shutdownGLESProgram();
-	void prepareGLESProgram(bool transformed);
+	void prepareGLESProgram(bool transformed, bool lit);
+	
+	//! Whether the next draw of this vertex type is lit by the GPU
+	template <class Vertex>
+	bool isGLESLitDraw() const;
+	
+	bool setupGLESLightingProgram(GLuint program);
+	bool createGLESLightingBuffers();
+	void shutdownGLESLighting();
+	void uploadGLESLighting();
+	void streamGLESVertices(GLuint buffer, size_t bufferSize, size_t offset, const void * data, size_t size);
 
 	// Tile-based render pass management (see beginFrame()/endFrame())
 	void startRenderPass();
@@ -245,8 +269,8 @@ private:
 	 * One linked program per shader variant.
 	 *
 	 * Everything that would otherwise be uniform control flow is compiled in only where
-	 * it is used: the number of texture stages, alpha cutout (discard), fog and the
-	 * brightness gamma curve.
+	 * it is used: the number of texture stages, alpha cutout (discard), fog, the
+	 * brightness gamma curve and dynamic lighting in the vertex shader.
 	 * A shader that may discard turns off early depth/stencil updates and forward pixel
 	 * kill on Mali for every draw that uses it, so opaque geometry must not share a
 	 * program with alpha-tested geometry.
@@ -283,7 +307,8 @@ private:
 		GLESProgramAlphaCutout = 1 << 0,
 		GLESProgramFog = 1 << 1,
 		GLESProgramGamma = 1 << 2,
-		GLESProgramStageBucketShift = 3,
+		GLESProgramLighting = 1 << 3, // OpenGL ES 3.0 feature level only
+		GLESProgramStageBucketShift = 4,
 		GLESProgramStageBucketCount = 3, // 0, 1 or 3 texture stages
 		GLESProgramVariantCount = GLESProgramStageBucketCount << GLESProgramStageBucketShift
 	};
@@ -337,6 +362,62 @@ private:
 	float m_glesFogEnd = 1.f;
 	bool m_glesAlphaCutout = false;
 	float m_glesAlphaThreshold = 0.5f;
+	
+	// Transforms for prepareGLESProgram(), only recomputed when their inputs change
+	glm::mat4 m_glesWorldTransform{1.f};
+	glm::vec4 m_glesWorldFogPlane{0.f};
+	bool m_glesWorldTransformValid = false;
+	glm::mat4 m_glesScreenTransform{1.f};
+	Vec2i m_glesScreenTransformSize = Vec2i(0);
+	
+	/*
+	 * Dynamic lighting in the vertex shader, see docs/gles3-gpu-lighting.md
+	 *
+	 * Light sets are appended to the ArxLights and ArxLightSets uniform buffers until
+	 * resetGPULightSets(), which orphans them for the next uploads.
+	 */
+	
+	//! std140 layout of ArxLight
+	struct GLESLight {
+		float position[4]; //!< xyz: position, w: fall start
+		float color[4];    //!< rgb: color (0-255, intensity applied), w: fall end
+		float falloff[4];  //!< x: 1 / (fall end - fall start)
+	};
+	
+	//! std140 layout of ArxLightSet
+	struct GLESLightSet {
+		float ambient[4];  //!< rgb: ambient (0-255), w: weight of the vertex color
+		float factor[4];   //!< rgb: color factor, w: diffuse factor
+		float term[4];     //!< rgb: added color (0-255), w: number of lights
+		u32 lights[8];     //!< indices into ArxLights, 8 bits each
+	};
+	
+	bool m_glesLightingSupported = false; //!< The device limits allow lighting programs
+	bool m_glesLighting = false;          //!< Lighting programs and buffers exist
+	size_t m_glesMaxLights = 0;
+	size_t m_glesMaxLightSets = 0;
+	std::vector<GLESLight> m_glesLights;
+	std::vector<GLESLightSet> m_glesLightSets;
+	std::unordered_map<const void *, u32> m_glesLightKeys;
+	size_t m_glesUploadedLights = 0;
+	size_t m_glesUploadedLightSets = 0;
+	bool m_glesOrphanLightBuffers = true;
+	GLuint m_glesLightBuffer = 0;
+	GLuint m_glesLightSetBuffer = 0;
+	size_t m_glesLightBufferSize = 0;
+	size_t m_glesLightSetBufferSize = 0;
+	
+	//! Light set of SMY_VERTEX draws (setGPULightSet())
+	u32 m_glesRoomLightSet = InvalidGPULightSet;
+	//! Current value of the aLightSet attribute while its array is disabled
+	u32 m_glesLightSetAttribute = InvalidGPULightSet;
+	//! drawLitTriangles() is drawing
+	bool m_glesLitDraw = false;
+	
+	// Streaming vertex buffers for drawLitTriangles(), written in lockstep
+	GLuint m_glesLitVertices = 0;
+	GLuint m_glesLitLighting = 0;
+	size_t m_glesLitOffset = 0;
 #endif
 	
 };
@@ -346,5 +427,18 @@ void OpenGLRenderer::selectTrasform() { enableTransform(); }
 
 template <>
 inline void OpenGLRenderer::selectTrasform<TexturedVertex>() { disableTransform(); }
+
+#ifdef ANDROID
+
+template <class Vertex>
+bool OpenGLRenderer::isGLESLitDraw() const { return false; }
+
+template <>
+inline bool OpenGLRenderer::isGLESLitDraw<TexturedVertex>() const { return m_glesLitDraw; }
+
+template <>
+inline bool OpenGLRenderer::isGLESLitDraw<SMY_VERTEX>() const { return m_glesRoomLightSet != InvalidGPULightSet; }
+
+#endif
 
 #endif // ARX_GRAPHICS_OPENGL_OPENGLRENDERER_H

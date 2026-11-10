@@ -969,6 +969,9 @@ void EERIE_PORTAL_ReleaseOnlyVertexBuffer() {
 		room.pVertexBuffer.reset();
 		room.indexBuffer.clear();
 		room.ppTextureContainer.clear();
+		room.staticVertexColors = false;
+		room.gpuLighting = false;
+		room.gpuLights.clear();
 	}
 	
 }
@@ -1107,6 +1110,10 @@ void ComputePortalVertexBuffer() {
 		
 		SMY_VERTEX * vertex = room->pVertexBuffer->lock(NoOverwrite);
 		
+		// Glowing polygons are not white yet: the first frame lit on the GPU fixes them
+		room->staticVertexColors = false;
+		room->bbox.reset();
+		
 		u32 startIndex = 0;
 		u32 startIndexCull = 0;
 		
@@ -1142,6 +1149,8 @@ void ComputePortalVertexBuffer() {
 				vertex->p.z = poly.v[0].p.z;
 				vertex->color = poly.v[0].color;
 				vertex->uv = poly.v[0].uv + texture->hd;
+				vertex->n = poly.nrml[0];
+				room->bbox.add(vertex->p);
 				vertex++;
 				poly.uslInd[0] = index++;
 				
@@ -1150,6 +1159,8 @@ void ComputePortalVertexBuffer() {
 				vertex->p.z = poly.v[1].p.z;
 				vertex->color = poly.v[1].color;
 				vertex->uv = poly.v[1].uv + texture->hd;
+				vertex->n = poly.nrml[1];
+				room->bbox.add(vertex->p);
 				vertex++;
 				poly.uslInd[1] = index++;
 				
@@ -1158,6 +1169,8 @@ void ComputePortalVertexBuffer() {
 				vertex->p.z = poly.v[2].p.z;
 				vertex->color = poly.v[2].color;
 				vertex->uv = poly.v[2].uv + texture->hd;
+				vertex->n = poly.nrml[2];
+				room->bbox.add(vertex->p);
 				vertex++;
 				poly.uslInd[2] = index++;
 				
@@ -1167,6 +1180,8 @@ void ComputePortalVertexBuffer() {
 					vertex->p.z = poly.v[3].p.z;
 					vertex->color = poly.v[3].color;
 					vertex->uv = poly.v[3].uv + texture->hd;
+					vertex->n = poly.nrml[3];
+					room->bbox.add(vertex->p);
 					vertex++;
 					poly.uslInd[3] = index++;
 				}

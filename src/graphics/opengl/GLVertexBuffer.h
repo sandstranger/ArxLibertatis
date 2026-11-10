@@ -43,12 +43,30 @@ enum GLArrayClientState {
 	GL_NoArray,
 	GL_TexturedVertex,
 	GL_SMY_VERTEX,
-	GL_SMY_VERTEX3
+	GL_SMY_VERTEX3,
+	GL_TexturedVertexLit
 };
 
 #ifdef ANDROID
 static inline const void * vertexAttributeOffset(const void * base, size_t offset) {
 	return reinterpret_cast<const void *>(reinterpret_cast<std::uintptr_t>(base) + offset);
+}
+
+//! Vertex attribute locations of the GLES programs (see buildGLESProgram())
+enum GLESVertexAttribute : GLuint {
+	GLESAttributePosition = 0,
+	GLESAttributeColor = 1,
+	GLESAttributeTexCoord0 = 2,
+	GLESAttributeTexCoord1 = 3,
+	GLESAttributeTexCoord2 = 4,
+	GLESAttributeNormal = 5,         //!< Lighting programs only
+	GLESAttributeWorldPosition = 6,  //!< Lighting programs only
+	GLESAttributeLightSet = 7,       //!< Lighting programs only (integer)
+	GLESAttributeCount = 8           //!< OpenGL ES 2.0 guarantees 8 vertex attributes
+};
+
+inline constexpr u32 glesAttributeBit(GLESVertexAttribute attribute) {
+	return u32(1) << u32(attribute);
 }
 #endif
 
@@ -60,7 +78,13 @@ void unbindIndexBuffer(GLuint buffer);
 void resetVertexArrayState();
 #endif
 void setVertexArrayTexCoord(int index, const void * coord, size_t stride);
-bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount, const void * vertexOffset);
+/*!
+ * \param extraAttributes Android only: attributes the layout uses besides position, color
+ *                        and texcoords, as glesAttributeBit() values
+ * \return true if the attribute pointers for the layout have to be specified
+ */
+bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount, const void * vertexOffset,
+                       u32 extraAttributes = 0);
 void clearVertexArray(const void * ref);
 
 template <>
@@ -72,11 +96,10 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 	}
 
 #ifdef ANDROID
-	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+	ARX_UNUSED(renderer);
+	glVertexAttribPointer(GLESAttributePosition, 4, GL_FLOAT, GL_FALSE, sizeof(*vertices),
 	                      vertexAttributeOffset(vertices, offsetof(TexturedVertex, p)));
-	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
+	glVertexAttribPointer(GLESAttributeColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
 	                      vertexAttributeOffset(vertices, offsetof(TexturedVertex, color)));
 	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(TexturedVertex, uv)), sizeof(*vertices));
 #else
@@ -92,18 +115,36 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 
 template <>
 inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertices, const void * ref) {
+#ifdef ANDROID
+	/*
+	 * With lighting programs available the normal and world position are always set up for
+	 * room geometry, so switching between lit and unlit draws of a room needs no new pointers.
+	 * Programs without lighting do not read them.
+	 */
+	const u32 lighting = renderer->hasGLESLighting()
+	                     ? glesAttributeBit(GLESAttributeNormal) | glesAttributeBit(GLESAttributeWorldPosition)
+	                     : 0;
+	if(!switchVertexArray(GL_SMY_VERTEX, ref, 1, vertices, lighting)) {
+		return;
+	}
+#else
 	if(!switchVertexArray(GL_SMY_VERTEX, ref, 1, vertices)) {
 		return;
 	}
+#endif
 
 #ifdef ANDROID
-	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+	glVertexAttribPointer(GLESAttributePosition, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
 	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, p)));
-	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
+	glVertexAttribPointer(GLESAttributeColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
 	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, color)));
 	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, uv)), sizeof(*vertices));
+	if(lighting) {
+		glVertexAttribPointer(GLESAttributeNormal, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+		                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, n)));
+		glVertexAttribPointer(GLESAttributeWorldPosition, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+		                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, p)));
+	}
 #else
 	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
 	if(renderer->hasVertexFogCoordinate()) glDisableClientState(GL_FOG_COORDINATE_ARRAY);
@@ -119,11 +160,10 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX3 * vertic
 	}
 
 #ifdef ANDROID
-	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
+	ARX_UNUSED(renderer);
+	glVertexAttribPointer(GLESAttributePosition, 3, GL_FLOAT, GL_FALSE, sizeof(*vertices),
 	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, p)));
-	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
+	glVertexAttribPointer(GLESAttributeColor, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(*vertices),
 	                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, color)));
 	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv)), sizeof(*vertices));
 	setVertexArrayTexCoord(1, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + sizeof(Vec2f)), sizeof(*vertices));
