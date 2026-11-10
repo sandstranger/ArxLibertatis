@@ -431,6 +431,24 @@ public:
 	
 	virtual void drawIndexed(Primitive primitive, const TexturedVertex * vertices, size_t nvertices, unsigned short * indices, size_t nindices) = 0;
 	
+	//! Indices in client memory, see uploadIndexRanges()
+	struct IndexRange {
+		const unsigned short * indices;
+		size_t count;
+	};
+	
+	/*!
+	 * Upload the indices of several following indexed draws at once
+	 *
+	 * Until the next call, VertexBuffer::drawIndexed() calls whose indices start where one of
+	 * these ranges starts (and are not longer than it) use the uploaded copy instead of
+	 * uploading their indices separately. The indices must not change until the next call:
+	 * call it without ranges to forget them.
+	 */
+	virtual void uploadIndexRanges(const IndexRange * ranges, size_t count) {
+		ARX_UNUSED(ranges), ARX_UNUSED(count);
+	}
+	
 	/*!
 	 * Dynamic lighting evaluated by the vertex shader
 	 *

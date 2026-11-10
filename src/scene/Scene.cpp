@@ -1480,6 +1480,41 @@ static void BackgroundRenderOpaque(RoomHandle roomIndex) {
 	
 }
 
+/*!
+ * Upload the indices of every room batch drawn by BackgroundRenderOpaque() and
+ * BackgroundRenderTransparent() at once, instead of separately for each draw
+ *
+ * The index lists are final after ARX_SCENE_Update(), forget them with
+ * Renderer::uploadIndexRanges(nullptr, 0) once the rooms are drawn.
+ */
+static void UploadRoomIndices() {
+	
+	ARX_PROFILE_FUNC();
+	
+	static std::vector<Renderer::IndexRange> ranges;
+	ranges.clear();
+	
+	for(RoomHandle roomIndex : g_rooms->visibleRooms) {
+		Room & room = g_rooms->rooms[roomIndex];
+		if(!room.pVertexBuffer) {
+			continue;
+		}
+		for(TextureContainer & material : util::dereference(room.ppTextureContainer)) {
+			const SMY_ARXMAT & roomMat = material.m_roomBatches[roomIndex];
+			for(BatchBucket bucket : { BatchBucket_Opaque, BatchBucket_Blended, BatchBucket_Multiplicative,
+			                           BatchBucket_Additive, BatchBucket_Subtractive }) {
+				if(roomMat.indexCounts[bucket]) {
+					ranges.push_back({ room.indexBuffer.data() + roomMat.indexOffsets[bucket],
+					                   roomMat.indexCounts[bucket] });
+				}
+			}
+		}
+	}
+	
+	GRenderer->uploadIndexRanges(ranges.data(), ranges.size());
+	
+}
+
 static constexpr std::array<BatchBucket, 4> transRenderOrder = {
 	BatchBucket_Blended,
 	BatchBucket_Multiplicative,
@@ -1695,6 +1730,7 @@ void ARX_SCENE_Render() {
 	}
 	
 	if(g_rooms) {
+		UploadRoomIndices();
 		for(RoomHandle room : g_rooms->visibleRooms) {
 			BackgroundRenderOpaque(room);
 		}
@@ -1741,6 +1777,8 @@ void ARX_SCENE_Render() {
 		for(RoomHandle room : g_rooms->visibleRooms) {
 			BackgroundRenderTransparent(room);
 		}
+		// The next ARX_SCENE_Update() rewrites the room index lists
+		GRenderer->uploadIndexRanges(nullptr, 0);
 	}
 	
 	RenderWater();

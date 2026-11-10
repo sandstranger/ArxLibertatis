@@ -106,6 +106,8 @@ public:
 	void drawIndexedElements(Primitive primitive, const void * indices, size_t nindices,
 	                         size_t baseVertex, size_t vertexCount);
 
+	void uploadIndexRanges(const IndexRange * ranges, size_t count) override;
+	
 	void endFrame() override;
 	void beginFrame() override;
 	
@@ -325,6 +327,17 @@ private:
 	GLuint m_glesIndexBuffer = 0;
 	size_t m_glesIndexBufferCapacity = 0;
 	size_t m_glesIndexBufferOffset = 0;
+	
+	//! Where uploadIndexRanges() put a range in m_glesBatchIndexBuffer
+	struct GLESIndexRange {
+		size_t count;
+		size_t offset; //!< in bytes
+	};
+	
+	// Element array buffer for uploadIndexRanges(), respecified with every upload
+	GLuint m_glesBatchIndexBuffer = 0;
+	std::unordered_map<const unsigned short *, GLESIndexRange> m_glesIndexRanges;
+	std::vector<unsigned short> m_glesBatchIndices; //!< Staging copy without buffer mapping
 	
 	// Streaming vertex buffer for drawIndexed() with client vertices
 	std::unique_ptr<VertexBuffer<TexturedVertex>> m_glesImmediateVertices;

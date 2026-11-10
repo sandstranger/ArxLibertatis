@@ -636,6 +636,8 @@ void OpenGLRenderer::reinit() {
 	m_glesIndexBuffer = 0;
 	m_glesIndexBufferCapacity = 0;
 	m_glesIndexBufferOffset = 0;
+	m_glesBatchIndexBuffer = 0;
+	m_glesIndexRanges.clear();
 	m_glesImmediateVertexOffset = 0;
 	m_glesLighting = false;
 	m_glesLightBuffer = 0;
@@ -771,6 +773,12 @@ void OpenGLRenderer::shutdown() {
 	}
 	m_glesIndexBufferCapacity = 0;
 	m_glesIndexBufferOffset = 0;
+	m_glesIndexRanges.clear();
+	if(m_glesBatchIndexBuffer) {
+		unbindIndexBuffer(m_glesBatchIndexBuffer);
+		glDeleteBuffers(1, &m_glesBatchIndexBuffer);
+		m_glesBatchIndexBuffer = 0;
+	}
 	shutdownGLESProgram();
 #endif
 	
@@ -1281,6 +1289,15 @@ const void * OpenGLRenderer::streamIndices(const unsigned short * indices, size_
 	
 	const size_t bytes = count * sizeof(unsigned short);
 	
+	// Indices that uploadIndexRanges() already put into the batch buffer
+	if(!m_glesIndexRanges.empty()) {
+		auto range = m_glesIndexRanges.find(indices);
+		if(range != m_glesIndexRanges.end() && count <= range->second.count) {
+			bindIndexBuffer(m_glesBatchIndexBuffer);
+			return reinterpret_cast<const void *>(range->second.offset);
+		}
+	}
+	
 	if(!hasMapBufferRange() || bytes == 0) {
 		// Client memory indices require that no element array buffer is bound.
 		bindIndexBuffer(GL_NONE);
@@ -1320,6 +1337,68 @@ const void * OpenGLRenderer::streamIndices(const unsigned short * indices, size_
 	m_glesIndexBufferOffset = offset + bytes;
 	
 	return reinterpret_cast<const void *>(offset);
+}
+
+void OpenGLRenderer::uploadIndexRanges(const IndexRange * ranges, size_t count) {
+
+	m_glesIndexRanges.clear();
+
+	// Place every range, a range that starts at the same indices again replaces the shorter one
+	size_t total = 0;
+	for(size_t i = 0; i < count; i++) {
+		const IndexRange & range = ranges[i];
+		if(!range.indices || range.count == 0) {
+			continue;
+		}
+		GLESIndexRange & entry = m_glesIndexRanges[range.indices];
+		if(entry.count >= range.count) {
+			continue;
+		}
+		entry.count = range.count;
+		entry.offset = total * sizeof(unsigned short);
+		total += range.count;
+	}
+
+	if(total == 0) {
+		m_glesIndexRanges.clear();
+		return;
+	}
+
+	if(!m_glesBatchIndexBuffer) {
+		glGenBuffers(1, &m_glesBatchIndexBuffer);
+		if(!m_glesBatchIndexBuffer) {
+			m_glesIndexRanges.clear();
+			return;
+		}
+	}
+	bindIndexBuffer(m_glesBatchIndexBuffer);
+	
+	const size_t bytes = total * sizeof(unsigned short);
+	
+	// One write for all ranges into fresh storage: queued draws keep the old one, nothing waits
+	if(hasMapBufferRange()) {
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(bytes), nullptr, GL_STREAM_DRAW);
+		if(void * buffer = mapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, bytes,
+		                                  GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT)) {
+			char * destination = static_cast<char *>(buffer);
+			for(const auto & range : m_glesIndexRanges) {
+				std::memcpy(destination + range.second.offset, range.first,
+				            range.second.count * sizeof(unsigned short));
+			}
+			if(unmapBuffer(GL_ELEMENT_ARRAY_BUFFER)) {
+				return;
+			}
+		}
+	}
+	
+	// Without buffer mapping: respecifying the whole buffer with data does not wait either
+	m_glesBatchIndices.resize(total);
+	for(const auto & range : m_glesIndexRanges) {
+		std::memcpy(m_glesBatchIndices.data() + range.second.offset / sizeof(unsigned short), range.first,
+		            range.second.count * sizeof(unsigned short));
+	}
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(bytes), m_glesBatchIndices.data(), GL_STREAM_DRAW);
+	
 }
 
 void OpenGLRenderer::drawIndexedElements(Primitive primitive, const void * indices, size_t nindices,
