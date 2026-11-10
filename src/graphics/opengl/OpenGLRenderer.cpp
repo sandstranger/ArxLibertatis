@@ -396,13 +396,15 @@ void OpenGLRenderer::initialize() {
 			m_glesMSAAResolveBlit = true;
 			m_glesMSAABlitANGLE = true;
 		}
-		if(m_glesMSAAResolveBlit) {
-			// The resolve can only become a resolve attachment if the multisampled color
-			// format matches the window surface. Query it the way the actual context
+		if(m_glesMaxMSAASamples > 1) {
+			// The blit resolve can only become a resolve attachment if the multisampled color
+			// format matches the window surface, and the resolved texture of
+			// GL_EXT_multisampled_render_to_texture is not blitted into RGB565 windows (see
+			// createMultisampleResolveFramebuffer()). Query it the way the actual context
 			// version allows: OpenGL ES 3.0 describes the window as attachments of the
 			// default framebuffer, OpenGL ES 2.0 has the x_BITS state.
 			GLint red = 0, green = 0, blue = 0, alpha = 0;
-			if(gl.is(3, 0)) {
+			if(gl.is(3, 0) && glGetFramebufferAttachmentParameteriv) {
 				glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red);
 				glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &green);
 				glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &blue);
@@ -571,6 +573,9 @@ void OpenGLRenderer::reinit() {
 	m_glesMSAASamples = 0;
 	m_glesMSAASize = Vec2i(0);
 	m_glesMSAAFailed = false;
+	m_glesMSAAResolveFramebuffer = 0;
+	m_glesMSAAColorBlitVerified = false;
+	m_glesMSAAColorBlitFailed = false;
 	m_glesIndexBuffer = 0;
 	m_glesIndexBufferCapacity = 0;
 	m_glesIndexBufferOffset = 0;
@@ -2184,24 +2189,29 @@ bool OpenGLRenderer::initializeGLESProgram() {
 
 	}
 
-	// Copy of the resolved MSAA image into the window surface
-	m_glesCopyProgram = buildGLESProgram(prefix + glesCopyVertexShader, prefix + glesCopyFragmentShader,
-	                                     cache);
-	if(m_glesCopyProgram) {
-		glUseProgram(m_glesCopyProgram);
-		m_glesBoundProgram = m_glesCopyProgram;
-		GLint sampler = glGetUniformLocation(m_glesCopyProgram, "uTexture");
-		if(sampler >= 0) {
-			glUniform1i(sampler, GLint(glesCopyTextureUnit));
+	// Copy of the resolved MSAA image into the window surface. Only the
+	// GL_EXT_multisampled_render_to_texture path can need it (OpenGL ES 2.0 feature level, or
+	// as the fallback of its blit), the multisampled framebuffer path resolves into the window
+	// with glBlitFramebuffer() itself.
+	if(m_glesMaxMSAASamples > 1 && !m_glesMSAAResolveBlit) {
+		m_glesCopyProgram = buildGLESProgram(prefix + glesCopyVertexShader, prefix + glesCopyFragmentShader,
+		                                     cache);
+		if(m_glesCopyProgram) {
+			glUseProgram(m_glesCopyProgram);
+			m_glesBoundProgram = m_glesCopyProgram;
+			GLint sampler = glGetUniformLocation(m_glesCopyProgram, "uTexture");
+			if(sampler >= 0) {
+				glUniform1i(sampler, GLint(glesCopyTextureUnit));
+			}
+			// One triangle covering the whole viewport
+			const GLfloat triangle[] = { -1.f, -1.f, 3.f, -1.f, -1.f, 3.f };
+			glGenBuffers(1, &m_glesCopyVertices);
+			bindBuffer(m_glesCopyVertices);
+			glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(triangle)), triangle, GL_STATIC_DRAW);
+			bindBuffer(GL_NONE);
+		} else {
+			LogWarning << "MSAA is not available: could not build the GLES copy program";
 		}
-		// One triangle covering the whole viewport
-		const GLfloat triangle[] = { -1.f, -1.f, 3.f, -1.f, -1.f, 3.f };
-		glGenBuffers(1, &m_glesCopyVertices);
-		bindBuffer(m_glesCopyVertices);
-		glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(sizeof(triangle)), triangle, GL_STATIC_DRAW);
-		bindBuffer(GL_NONE);
-	} else {
-		LogWarning << "MSAA is not available: could not build the GLES copy program";
 	}
 
 	glUseProgram(0);
@@ -2409,7 +2419,12 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed) {
  *  - Depth is invalidated before the pass ends, so it never leaves tile memory.
  *  - Multisampled color is resolved into a single-sampled texture as part of the tile
  *    write-back (GL_EXT_multisampled_render_to_texture), the extra samples never reach
- *    memory. One full-screen copy then puts the image into the window surface.
+ *    memory. The window surface cannot be that texture, so the image needs one more
+ *    pass into the window: a glBlitFramebuffer() from a single-sampled framebuffer
+ *    around the texture on the OpenGL ES 3.0 feature level (no shader, no draw state),
+ *    a full-screen copy draw otherwise.
+ *  - Without that extension the multisampled framebuffer is resolved into the window
+ *    with glBlitFramebuffer() while its render pass is still open (one pass under ANGLE).
  * This also keeps the window surface single-sampled, so Swappy's sync fence before
  * eglSwapBuffers() cannot force ANGLE to store and resolve multisampled data.
  */
@@ -2592,8 +2607,59 @@ bool OpenGLRenderer::updateMultisampleFramebuffer() {
 	m_glesMSAASize = size;
 	m_MSAALevel = int(m_glesMSAASamples);
 
-	LogInfo << "Using " << m_glesMSAASamples << "x MSAA (GL_EXT_multisampled_render_to_texture) at "
+	const bool blit = createMultisampleResolveFramebuffer();
+	glBindFramebuffer(GL_FRAMEBUFFER, m_glesMSAAFramebuffer);
+
+	LogInfo << "Using " << m_glesMSAASamples << "x MSAA (GL_EXT_multisampled_render_to_texture, "
+	        << (blit ? "glBlitFramebuffer" : "copy program") << " into the window) at "
 	        << size.x << "x" << size.y;
+
+	return true;
+}
+
+bool OpenGLRenderer::createMultisampleResolveFramebuffer() {
+
+	m_glesMSAAColorBlitVerified = false;
+
+	/*
+	 * A single-sampled framebuffer around the resolved texture, blitted into the window
+	 * instead of drawing it with the copy program. The texture stays the only image: a
+	 * framebuffer object has no storage of its own.
+	 *
+	 * Both sides are single-sampled, so this is a plain OpenGL ES 3.0 copy and not a
+	 * multisample resolve: the formats do not have to be identical (an RGB8 window drops the
+	 * alpha like the copy draw does), and nothing depends on how
+	 * GL_EXT_multisampled_render_to_texture defines reads from its own framebuffer.
+	 * Blits skip dithering, which the copy draw applies to RGB565 windows: those keep it.
+	 */
+	if(!m_glesIsES3 || !glBlitFramebuffer || m_glesMSAAColorBlitFailed
+	   || m_glesWindowColorFormat == GL_RGB565) {
+		return false;
+	}
+
+	// The draw framebuffer of a blit must not be multisampled
+	glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+	GLint windowSampleBuffers = 0;
+	glGetIntegerv(GL_SAMPLE_BUFFERS, &windowSampleBuffers);
+	if(windowSampleBuffers != 0) {
+		LogInfo << "MSAA: the window is multisampled, copying the resolved image with the copy program";
+		m_glesMSAAColorBlitFailed = true;
+		return false;
+	}
+
+	glGenFramebuffers(1, &m_glesMSAAResolveFramebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, m_glesMSAAResolveFramebuffer);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_glesMSAAColor, 0);
+	const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+	if(status != GL_FRAMEBUFFER_COMPLETE) {
+		LogWarning << "MSAA resolve framebuffer is incomplete (status " << status
+		           << "), copying the resolved image with the copy program";
+		glDeleteFramebuffers(1, &m_glesMSAAResolveFramebuffer);
+		m_glesMSAAResolveFramebuffer = 0;
+		m_glesMSAAColorBlitFailed = true;
+		return false;
+	}
 
 	return true;
 }
@@ -2604,6 +2670,11 @@ void OpenGLRenderer::destroyMultisampleFramebuffer() {
 		glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
 		glDeleteFramebuffers(1, &m_glesMSAAFramebuffer);
 		m_glesMSAAFramebuffer = 0;
+	}
+	if(m_glesMSAAResolveFramebuffer) {
+		glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+		glDeleteFramebuffers(1, &m_glesMSAAResolveFramebuffer);
+		m_glesMSAAResolveFramebuffer = 0;
 	}
 	if(m_glesMSAAColorBuffer) {
 		glDeleteRenderbuffers(1, &m_glesMSAAColorBuffer);
@@ -2673,6 +2744,70 @@ void OpenGLRenderer::resolveMultisampleFramebuffer() {
 	// Depth is not needed after the frame: keep it in tile memory. The color samples are
 	// resolved into m_glesMSAAColor when the render pass ends with the binding change.
 	invalidateAttachments(false, false, true);
+
+	if(m_glesMSAAResolveFramebuffer && blitMultisampleColor()) {
+		return;
+	}
+
+	copyMultisampleColor();
+
+}
+
+bool OpenGLRenderer::blitMultisampleColor() {
+
+	// Reading the texture through another framebuffer ends the render pass of
+	// m_glesMSAAFramebuffer, which resolves the samples into it.
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, m_glesMSAAResolveFramebuffer);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GL_NONE);
+
+	// The blit covers the whole window: nothing has to be loaded from memory.
+	// GL_FRAMEBUFFER invalidates the draw framebuffer.
+	invalidateAttachments(true, true, true);
+
+	const bool verify = !m_glesMSAAColorBlitVerified;
+	if(verify) {
+		// Validate the first blit into this window: errors of earlier calls must not count
+		for(int i = 0; i < 8; i++) {
+			const GLenum error = glGetError();
+			if(error == GL_NO_ERROR) {
+				break;
+			}
+			LogWarning << "GL error " << error << " before the first MSAA blit";
+		}
+	}
+
+	// The scissor test would limit the blit, the viewport and masks do not apply to it.
+	const Vec2i size = m_glesMSAASize;
+	if(m_scissor.isValid()) {
+		glDisable(GL_SCISSOR_TEST);
+	}
+	glBlitFramebuffer(0, 0, size.x, size.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	if(m_scissor.isValid()) {
+		glEnable(GL_SCISSOR_TEST);
+	}
+
+	if(verify) {
+		const GLenum error = glGetError();
+		if(error != GL_NO_ERROR) {
+			LogWarning << "MSAA: glBlitFramebuffer into the window failed (GL error " << error
+			           << "), copying the resolved image with the copy program";
+			glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+			glDeleteFramebuffers(1, &m_glesMSAAResolveFramebuffer);
+			m_glesMSAAResolveFramebuffer = 0;
+			m_glesMSAAColorBlitFailed = true;
+			return false;
+		}
+		m_glesMSAAColorBlitVerified = true;
+	}
+
+	// Only the color is presented
+	invalidateAttachments(true, false, true);
+
+	return true;
+}
+
+void OpenGLRenderer::copyMultisampleColor() {
+
 	glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
 
 	// The copy covers the whole window: nothing has to be loaded from memory.

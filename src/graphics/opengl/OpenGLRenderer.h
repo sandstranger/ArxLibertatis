@@ -241,8 +241,11 @@ private:
 	void startRenderPass();
 	void invalidateAttachments(bool defaultFramebuffer, bool color, bool depth);
 	bool updateMultisampleFramebuffer();
+	bool createMultisampleResolveFramebuffer();
 	void destroyMultisampleFramebuffer();
 	void resolveMultisampleFramebuffer();
+	bool blitMultisampleColor();
+	void copyMultisampleColor();
 
 	/*!
 	 * One linked program per shader variant.
@@ -340,6 +343,11 @@ private:
 	GLuint m_glesMSAADepth = 0;
 	Vec2i m_glesMSAASize = Vec2i(0);
 	bool m_glesMSAAFailed = false;
+	
+	// Single-sampled framebuffer around m_glesMSAAColor, blitted into the window (no storage)
+	GLuint m_glesMSAAResolveFramebuffer = 0;
+	bool m_glesMSAAColorBlitVerified = false; //!< A blit into the window gave no GL error
+	bool m_glesMSAAColorBlitFailed = false;   //!< Use the copy program for this context
 	
 	// Program and vertices for copying the resolved MSAA image to the window
 	GLuint m_glesCopyProgram = 0;
