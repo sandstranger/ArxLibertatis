@@ -350,7 +350,8 @@ private:
 	bool m_glesPassStarted = false;
 	GLbitfield m_glesPassCleared = 0;
 	
-	// MSAA framebuffer: GL_EXT_multisampled_render_to_texture color texture + depth
+	// Driver identity and GLES feature level for Android-specific compatibility paths.
+	bool m_glesIsANGLE = false;
 	bool m_glesIsES3 = false;
 	GLenum m_glesDepthFormat = GL_DEPTH_COMPONENT16;
 	int m_glesMaxMSAASamples = 0;

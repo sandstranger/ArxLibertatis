@@ -362,6 +362,8 @@ static const char *exts = NULL;
 static int num_exts_i = 0;
 static char **exts_i = NULL;
 
+static void free_exts(void);
+
 static int get_exts(void) {
 #ifdef _GLAD_IS_SOME_NEW_VERSION
     if(max_loaded_major < 3) {
@@ -371,25 +373,40 @@ static int get_exts(void) {
     } else {
         int index;
 
-        num_exts_i = 0;
-        glGetIntegerv(GL_NUM_EXTENSIONS, &num_exts_i);
-        if (num_exts_i > 0) {
-            exts_i = (char **)malloc((size_t)num_exts_i * (sizeof *exts_i));
+        if (glGetIntegerv == NULL || glGetStringi == NULL) {
+            return 0;
         }
 
+        num_exts_i = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &num_exts_i);
+        if (num_exts_i < 0) {
+            return 0;
+        }
+        if (num_exts_i == 0) {
+            exts_i = NULL;
+            return 1;
+        }
+
+        exts_i = (char **)calloc((size_t)num_exts_i, sizeof *exts_i);
         if (exts_i == NULL) {
+            num_exts_i = 0;
             return 0;
         }
 
         for(index = 0; index < num_exts_i; index++) {
             const char *gl_str_tmp = (const char*)glGetStringi(GL_EXTENSIONS, index);
-            size_t len = strlen(gl_str_tmp);
-
-            char *local_str = (char*)malloc((len+1) * sizeof(char));
-            if(local_str != NULL) {
-                memcpy(local_str, gl_str_tmp, (len+1) * sizeof(char));
+            if (gl_str_tmp == NULL) {
+                free_exts();
+                return 0;
             }
-            exts_i[index] = local_str;
+
+            size_t len = strlen(gl_str_tmp);
+            exts_i[index] = (char*)malloc((len + 1) * sizeof(char));
+            if (exts_i[index] == NULL) {
+                free_exts();
+                return 0;
+            }
+            memcpy(exts_i[index], gl_str_tmp, (len + 1) * sizeof(char));
         }
     }
 #endif

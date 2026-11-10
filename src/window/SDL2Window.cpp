@@ -538,19 +538,11 @@ bool SDL2Window::initialize() {
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, g_useGLES2_0 ? 2 : 3);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-                // Prefer no-error contexts on ANGLE. The renderer does not rely on
-                // GL error polling in the draw loop, and avoiding per-call validation
-                // is important for translation-layer CPU overhead.
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 1);
+                // Keep validation enabled on Android. No-error contexts can hide invalid
+                // GLES calls from translation layers such as ANGLE and make driver faults
+                // much harder to diagnose.
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
                 samples = createWindowAndGLContext("OpenGL ES");
-
-                // Some native GLES drivers and older ANGLE builds do not expose
-                // EGL_KHR_create_context_no_error. Retry the same GLES profile
-                // with normal validation before falling back to GLES 2.0.
-                if(samples == 0) {
-                    SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
-                    samples = createWindowAndGLContext("OpenGL ES (validated context)");
-                }
             }
 
             // Prefer GLES 3.0, but keep the GLES 2.0 backend available on older
@@ -563,12 +555,8 @@ bool SDL2Window::initialize() {
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
                 SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 1);
+                SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
                 samples = createWindowAndGLContext("OpenGL ES 2.0 fallback");
-                if(samples == 0) {
-                    SDL_GL_SetAttribute(SDL_GL_CONTEXT_NO_ERROR, 0);
-                    samples = createWindowAndGLContext("OpenGL ES 2.0 validated fallback");
-                }
             }
         }
 #endif

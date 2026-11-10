@@ -149,6 +149,11 @@ void OpenGLRenderer::initialize() {
 	if(gl.isES() && !gl.is(3, 0)) {
 		g_useGLES2_0 = true;
 	}
+	const char * glRenderer = gl.renderer();
+	m_glesIsANGLE = glRenderer && std::strstr(glRenderer, "ANGLE");
+	if(m_glesIsANGLE) {
+		LogWarning << "ANGLE detected: using conservative GLES rendering paths";
+	}
 	// Feature level: the legacy OpenGL ES 2.0 mode uses OpenGL ES 2.0 and its extensions
 	// only, even when the driver created a newer context (Mali and Adreno always do).
 	m_glesIsES3 = gl.isES() && gl.is(3, 0) && !g_useGLES2_0;
@@ -394,18 +399,18 @@ void OpenGLRenderer::initialize() {
 		m_glesMaxMSAASamples = 0;
 		m_glesMSAAResolveBlit = false;
 		m_glesMSAABlitANGLE = false;
-		if(gl.has("GL_EXT_multisampled_render_to_texture")
+		if(!m_glesIsANGLE && gl.has("GL_EXT_multisampled_render_to_texture")
 		   && glFramebufferTexture2DMultisampleEXT && glRenderbufferStorageMultisampleEXT) {
 			GLint maxSamples = 0;
 			glGetIntegerv(GL_MAX_SAMPLES_EXT, &maxSamples);
 			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
-		} else if(m_glesIsES3 && glRenderbufferStorageMultisample && glBlitFramebuffer
+		} else if(!m_glesIsANGLE && m_glesIsES3 && glRenderbufferStorageMultisample && glBlitFramebuffer
 		          && glGetFramebufferAttachmentParameteriv) {
 			GLint maxSamples = 0;
 			glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
 			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
 			m_glesMSAAResolveBlit = true;
-		} else if(gl.has("GL_ANGLE_framebuffer_multisample") && gl.has("GL_ANGLE_framebuffer_blit")
+		} else if(!m_glesIsANGLE && gl.has("GL_ANGLE_framebuffer_multisample") && gl.has("GL_ANGLE_framebuffer_blit")
 		          && gl.has("GL_OES_rgb8_rgba8")
 		          && glRenderbufferStorageMultisampleANGLE && glBlitFramebufferANGLE) {
 			// OpenGL ES 2.0 feature level under ANGLE: the same multisampled framebuffer and
@@ -452,7 +457,7 @@ void OpenGLRenderer::initialize() {
 		
 		// Program binaries for the shader cache (OpenGL ES 3.0 feature level only)
 		m_glesProgramBinaryFormats.clear();
-		if(m_glesIsES3 && glGetProgramBinary && glProgramBinary && glProgramParameteri) {
+		if(m_glesIsES3 && !m_glesIsANGLE && glGetProgramBinary && glProgramBinary && glProgramParameteri) {
 			GLint count = 0;
 			glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &count);
 			if(count > 0) {
@@ -474,7 +479,7 @@ void OpenGLRenderer::initialize() {
 		m_glesLightingSupported = false;
 		m_glesMaxLights = 0;
 		m_glesMaxLightSets = 0;
-		if(m_glesIsES3 && m_hasCoreMapBufferRange && glBindBufferBase && glGetUniformBlockIndex
+		if(!m_glesIsANGLE && m_glesIsES3 && m_hasCoreMapBufferRange && glBindBufferBase && glGetUniformBlockIndex
 		   && glUniformBlockBinding && glGetActiveUniformBlockiv && glVertexAttribIPointer
 		   && glVertexAttribI4ui) {
 			GLint maxBlockSize = 0;

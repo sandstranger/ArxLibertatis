@@ -105,7 +105,7 @@ OpenGLInfo::OpenGLInfo()
 
     #ifdef ANDROID
     ogl_extensions.clear();
-    if(m_isES && m_version >= 30) {
+    if(m_isES && m_version >= 30 && glGetStringi) {
         GLint extensionCount = 0;
         glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
         for(GLint i = 0; i < extensionCount; ++i) {
@@ -114,7 +114,7 @@ OpenGLInfo::OpenGLInfo()
                 ogl_extensions.insert(extension);
             }
         }
-    } else {
+    } else if(!m_isES || m_version < 30) {
         const char * ext = reinterpret_cast<const char *>(glGetString(GL_EXTENSIONS));
         if(ext) {
             std::stringstream ss(ext);
