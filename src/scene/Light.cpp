@@ -58,6 +58,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/Math.h"
 #include "graphics/Draw.h"
 #include "graphics/DrawLine.h"
+#include "graphics/Renderer.h"
 
 #include "platform/profiler/Profiler.h"
 
@@ -453,6 +454,7 @@ void UpdateLlights(ShaderLight lights[], size_t & lightsCount, const Vec3f pos, 
 			sl.intensity = el->intensity;
 			sl.rgb = el->rgb;
 			sl.rgb255 = el->rgb255;
+			sl.source = el;
 			
 			lightsCount = i + 1;
 		} else {
@@ -660,4 +662,108 @@ void ApplyTileLights(EERIEPOLY * ep, Vec2s index) {
 		
 	}
 	
+}
+
+/*
+ * Lighting on the GPU (see docs/gles3-gpu-lighting.md)
+ *
+ * The GPU gets the values ApplyLight() and ApplyTileLights() use, with the light
+ * intensity and GLOBAL_LIGHT_FACTOR premultiplied into the color. The attenuation
+ * branches, the cosine test and the integer truncation are kept in the shader.
+ */
+
+static GPULight toGPULight(const void * key, const Vec3f & pos, float fallstart, float fallend,
+                           float falldiffmul, float intensity, const Color3f & rgb255) {
+	GPULight light;
+	light.key = key;
+	light.pos = pos;
+	light.fallStart = fallstart;
+	light.fallEnd = fallend;
+	light.fallDiffMul = falldiffmul;
+	light.color = rgb255 * (intensity * GLOBAL_LIGHT_FACTOR);
+	return light;
+}
+
+u32 AddGPULightSet(const ShaderLight lights[], size_t lightsCount, const ColorMod & colorMod,
+                   float materialDiffuse) {
+	
+	arx_assert(lightsCount <= llightsSize);
+	
+	if(lightsCount > GRenderer->getMaxGPULightSetSize()) {
+		return InvalidGPULightSet;
+	}
+	
+	GPULight gpuLights[llightsSize];
+	for(size_t i = 0; i < lightsCount; i++) {
+		const ShaderLight & light = lights[i];
+		gpuLights[i] = toGPULight(light.source, light.pos, light.fallstart, light.fallend,
+		                          light.falldiffmul, light.intensity, light.rgb255);
+	}
+	
+	GPULightSet set;
+	set.ambient = colorMod.ambientColor;
+	set.vertexColorWeight = 0.f;
+	set.diffuse = materialDiffuse;
+	set.factor = colorMod.factor;
+	set.term = colorMod.term;
+	
+	return GRenderer->addGPULightSet(set, gpuLights, lightsCount);
+}
+
+bool CollectGPUTileLights(const EERIE_3D_BBOX & bbox, std::vector<GPULight> & lights) {
+	
+	lights.clear();
+	
+	const size_t maxLights = GRenderer->getMaxGPULightSetSize();
+	if(maxLights == 0 || !bbox.valid()) {
+		return false;
+	}
+	
+	for(size_t i = 0; i < g_culledDynamicLightsCount; i++) {
+		
+		const EERIE_LIGHT & light = *g_culledDynamicLights[i];
+		
+		if(light.fallend < light.fallstart) {
+			/*
+			 * With fallend < fallstart the attenuation grows again past fallstart, so the light
+			 * reaches every distance. ApplyTileLights() only adds it to the tiles within
+			 * fallend + 60 of it: leave polygons that may be on such a tile to the CPU.
+			 */
+			Vec2f closest = glm::clamp(getXZ(light.pos), getXZ(bbox.min), getXZ(bbox.max));
+			float range = light.fallend + 60.f + 2.f * glm::length(g_backgroundTileSize);
+			if(arx::distance2(closest, getXZ(light.pos)) <= range * range) {
+				return false;
+			}
+			continue;
+		}
+		
+		// Lights beyond fallend of every point in the box add nothing
+		Vec3f closest = glm::clamp(light.pos, bbox.min, bbox.max);
+		if(arx::distance2(closest, light.pos) > light.fallend * light.fallend) {
+			continue;
+		}
+		
+		if(lights.size() == maxLights) {
+			return false;
+		}
+		
+		lights.push_back(toGPULight(&light, light.pos, light.fallstart, light.fallend,
+		                            light.falldiffmul, light.intensity, light.rgb255));
+		
+	}
+	
+	return true;
+}
+
+u32 AddGPUTileLightSet(const std::vector<GPULight> & lights) {
+	
+	// ApplyTileLights(): the static color plus half of each light
+	GPULightSet set;
+	set.ambient = Color3f::black;
+	set.vertexColorWeight = 1.f;
+	set.diffuse = 0.5f;
+	set.factor = Color3f::white;
+	set.term = Color3f::black;
+	
+	return GRenderer->addGPULightSet(set, lights.data(), lights.size());
 }

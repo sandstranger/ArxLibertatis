@@ -67,7 +67,9 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 struct EERIE_LIGHT;
 struct EERIEPOLY;
+struct EERIE_3D_BBOX;
 struct SMY_VERTEX;
+struct GPULight;
 class Entity;
 
 typedef util::HandleType<struct LightHandleTag, s32> LightHandle;
@@ -180,6 +182,9 @@ struct ShaderLight {
 	Color3f rgb;
 	Color3f rgb255;
 	
+	//! The light these values were copied from
+	const EERIE_LIGHT * source = nullptr;
+	
 	constexpr ShaderLight() arx_noexcept_default
 	
 };
@@ -198,6 +203,35 @@ ColorRGBA ApplyLight(ShaderLight lights[], size_t lightsCount, const Vec3f & pos
                      const ColorMod & colorMod, float materialDiffuse = 1.f);
 
 void ApplyTileLights(EERIEPOLY * ep, Vec2s index);
+
+/*!
+ * Let the GPU evaluate ApplyLight() for these lights
+ *
+ * \return a light set for Renderer::drawLitTriangles() or InvalidGPULightSet if the
+ *         lighting has to be done on the CPU.
+ */
+u32 AddGPULightSet(const ShaderLight lights[], size_t lightsCount, const ColorMod & colorMod,
+                   float materialDiffuse);
+
+/*!
+ * Collect the culled dynamic lights that ApplyTileLights() could add to polygons
+ * inside the box, for lighting them on the GPU instead
+ *
+ * Without infravision the result matches ApplyTileLights() for the polygons, except for
+ * the tile-based culling of ComputeTileLights().
+ *
+ * \return false if the GPU cannot do this, the polygons must be lit with ApplyTileLights() then.
+ */
+bool CollectGPUTileLights(const EERIE_3D_BBOX & bbox, std::vector<GPULight> & lights);
+
+/*!
+ * Let the GPU evaluate ApplyTileLights() for the lights collected by CollectGPUTileLights(),
+ * on top of the static vertex colors
+ *
+ * \return a light set for Renderer::setGPULightSet() or InvalidGPULightSet if there is no
+ *         space left for it.
+ */
+u32 AddGPUTileLightSet(const std::vector<GPULight> & lights);
 
 void TreatBackgroundDynlights();
 
