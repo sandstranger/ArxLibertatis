@@ -51,7 +51,6 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "graphics/BaseGraphicsTypes.h"
 #include "graphics/GraphicsTypes.h"
-#include "graphics/Renderer.h"
 #include "math/Types.h"
 #include "platform/Platform.h"
 #include "util/HandleContainer.h"
@@ -90,19 +89,6 @@ struct Room {
 	std::vector<unsigned short> indexBuffer;
 	std::unique_ptr<VertexBuffer<SMY_VERTEX>> pVertexBuffer;
 	std::vector<TextureContainer *> ppTextureContainer;
-	
-	//! Bounds of the vertices in pVertexBuffer
-	EERIE_3D_BBOX bbox;
-	
-	/*!
-	 * pVertexBuffer holds the colors the GPU adds dynamic lights to: the static lighting for
-	 * opaque polygons and white for glowing ones (not colors lit by ApplyTileLights()).
-	 */
-	bool staticVertexColors = false;
-	
-	//! The GPU adds gpuLights to the opaque polygons in this frame (see ARX_SCENE_Update())
-	bool gpuLighting = false;
-	std::vector<GPULight> gpuLights;
 	
 };
 

@@ -24,11 +24,8 @@ static const void * glArrayClientStateRef = nullptr;
 #ifdef ANDROID
 static const void * glArrayClientStateOffset = nullptr;
 static GLuint glBoundIndexBuffer = GL_NONE;
-//! Enabled vertex attribute arrays, one bit per GLESVertexAttribute
-static u32 glEnabledVertexAttributes = 0;
-#else
-static int glArrayClientStateTexCount = 1;
 #endif
+static int glArrayClientStateTexCount = 1;
 static GLuint glBoundBuffer = GL_NONE;
 
 #ifdef ANDROID
@@ -36,30 +33,16 @@ void resetVertexArrayState() {
 	glArrayClientState = GL_NoArray;
 	glArrayClientStateRef = nullptr;
 	glArrayClientStateOffset = nullptr;
+	// Every vertex layout has UV0; mark UV1/UV2 as previously enabled so
+	// the first single-UV layout disables their stale arrays after a resize.
+	glArrayClientStateTexCount = 3;
 	glBoundBuffer = GL_NONE;
 	glBoundIndexBuffer = GL_NONE;
 	glBindBuffer(GL_ARRAY_BUFFER, GL_NONE);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, GL_NONE);
-	// A recreated context or the MSAA copy may have left any array enabled
-	for(GLuint attribute = 0; attribute < GLESAttributeCount; ++attribute) {
+	for(GLuint attribute = 0; attribute < 5; ++attribute) {
 		glDisableVertexAttribArray(attribute);
 	}
-	glEnabledVertexAttributes = 0;
-}
-
-//! Enable exactly the vertex attribute arrays in mask, only changing what differs
-static void setEnabledVertexAttributes(u32 mask) {
-	u32 changed = mask ^ glEnabledVertexAttributes;
-	for(GLuint attribute = 0; changed != 0; ++attribute, changed >>= 1) {
-		if(changed & 1) {
-			if(mask & (u32(1) << attribute)) {
-				glEnableVertexAttribArray(attribute);
-			} else {
-				glDisableVertexAttribArray(attribute);
-			}
-		}
-	}
-	glEnabledVertexAttributes = mask;
 }
 
 void bindIndexBuffer(GLuint buffer) {
@@ -81,8 +64,9 @@ std::vector<GLuint> glIntIndexBuffer;
 
 void setVertexArrayTexCoord(int index, const void * coord, size_t stride) {
 #ifdef ANDROID
-	// The array is enabled by switchVertexArray()
-	glVertexAttribPointer(GLuint(GLESAttributeTexCoord0 + index), 2, GL_FLOAT, GL_FALSE, GLsizei(stride), coord);
+	const GLuint attribute = GLuint(index + 2);
+	glEnableVertexAttribArray(attribute);
+	glVertexAttribPointer(attribute, 2, GL_FLOAT, GL_FALSE, GLsizei(stride), coord);
 #else
 	glClientActiveTexture(GL_TEXTURE0 + index);
 	if(index > 0) glEnableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -90,8 +74,7 @@ void setVertexArrayTexCoord(int index, const void * coord, size_t stride) {
 #endif
 }
 
-bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount, const void * vertexOffset,
-                       u32 extraAttributes) {
+bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount, const void * vertexOffset) {
 
 #ifdef ANDROID
 	// A VBO can be reused with different base offsets for indexed draws.
@@ -101,31 +84,27 @@ bool switchVertexArray(GLArrayClientState type, const void * ref, int texcount, 
 	   && glArrayClientStateOffset == vertexOffset) {
 		return false;
 	}
-
-	// Arrays the layout does not use are disabled: an enabled array keeps pointing into
-	// its buffer, which may be deleted or orphaned.
-	arx_assert(texcount >= 1 && texcount <= 3);
-	u32 mask = glesAttributeBit(GLESAttributePosition) | glesAttributeBit(GLESAttributeColor);
-	for(int i = 0; i < texcount; i++) {
-		mask |= glesAttributeBit(GLESVertexAttribute(GLESAttributeTexCoord0 + i));
-	}
-	setEnabledVertexAttributes(mask | extraAttributes);
 #else
 	ARX_UNUSED(vertexOffset);
-	ARX_UNUSED(extraAttributes);
 	if(glArrayClientState == type && glArrayClientStateRef == ref) {
 		return false;
 	}
+#endif
 
 	if(glArrayClientState != type) {
 		arx_assert(texcount >= 1);
+#ifdef ANDROID
+		for(int i = texcount; i < glArrayClientStateTexCount; ++i) {
+			glDisableVertexAttribArray(GLuint(i + 2));
+		}
+#else
 		for(int i = texcount; i < glArrayClientStateTexCount; i++) {
 			glClientActiveTexture(GL_TEXTURE0 + i);
 			glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 		}
+#endif
 		glArrayClientStateTexCount = texcount;
 	}
-#endif
 
 	glArrayClientState = type;
 	glArrayClientStateRef = ref;

@@ -184,10 +184,6 @@ public:
 	util::HandleVector<RoomHandle, SMY_ARXMAT> m_roomBatches;
 	std::vector<TexturedVertex> m_modelBatch[5];
 	
-	//! Opaque model triangles lit by the GPU, see Renderer::drawLitTriangles()
-	std::vector<TexturedVertex> m_modelBatchLit;
-	std::vector<TexturedVertexLighting> m_modelBatchLighting;
-	
 };
 
 DECLARE_FLAGS_OPERATORS(TextureContainer::TCFlags)

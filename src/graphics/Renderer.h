@@ -31,56 +31,12 @@
 #include "util/Flags.h"
 
 struct TexturedVertex;
-struct TexturedVertexLighting;
 struct SMY_VERTEX;
 struct SMY_VERTEX3;
 class TextureContainer;
 class Image;
 class Texture;
 template <class Vertex> class VertexBuffer;
-
-/*!
- * A light for dynamic lighting evaluated by the GPU
- *
- * \see Renderer::addGPULightSet()
- */
-struct GPULight {
-	
-	//! Identity of the light: lights with the same key and values are stored once
-	const void * key = nullptr;
-	
-	Vec3f pos = Vec3f(0.f);
-	float fallStart = 0.f;
-	float fallEnd = 0.f;
-	float fallDiffMul = 0.f;
-	
-	//! Light color on the 0-255 scale with the intensity already applied
-	Color3f color = Color3f::black;
-	
-};
-
-/*!
- * Parameters of one dynamic lighting evaluation on the GPU, per vertex:
- *
- *   c = ambient + vertexColorWeight * vertexColor * 255
- *       + sum(light.color * max(dot(normal, toLight), 0) * attenuation * diffuse)
- *   color = floor(clamp(c * factor + term, 0, 255)) / 255, alpha 1
- *
- * with attenuation 1 up to fallStart and max((fallEnd - d) * fallDiffMul, 0) beyond.
- */
-struct GPULightSet {
-	
-	Color3f ambient = Color3f::black;
-	//! 1 to start from the vertex color (static lighting), 0 to ignore it
-	float vertexColorWeight = 0.f;
-	float diffuse = 1.f;
-	Color3f factor = Color3f::white;
-	Color3f term = Color3f::black;
-	
-};
-
-//! No light set: the vertex color is used unchanged
-inline constexpr u32 InvalidGPULightSet = ~u32(0);
 
 enum BlendingFactor {
 	BlendZero,              //!< Zero
@@ -447,56 +403,6 @@ public:
 	 */
 	virtual void uploadIndexRanges(const IndexRange * ranges, size_t count) {
 		ARX_UNUSED(ranges), ARX_UNUSED(count);
-	}
-	
-	/*!
-	 * Dynamic lighting evaluated by the vertex shader
-	 *
-	 * \return the maximum number of lights in one light set, 0 if the renderer never
-	 *         evaluates lighting: all lighting has to be done on the CPU then.
-	 */
-	[[nodiscard]] virtual size_t getMaxGPULightSetSize() const { return 0; }
-	
-	//! \return how many distinct lights all light sets since resetGPULightSets() can use
-	[[nodiscard]] virtual size_t getMaxGPULights() const { return 0; }
-	
-	//! \return how many light sets can be added after resetGPULightSets()
-	[[nodiscard]] virtual size_t getMaxGPULightSets() const { return 0; }
-	
-	/*!
-	 * Forget all light sets
-	 *
-	 * Geometry that references the old sets must not be drawn anymore.
-	 */
-	virtual void resetGPULightSets() { }
-	
-	/*!
-	 * Add a light set for the draws until the next resetGPULightSets()
-	 *
-	 * The light values are copied.
-	 *
-	 * \return the light set or InvalidGPULightSet if there is no space left for it,
-	 *         the lighting has to be done on the CPU then.
-	 */
-	[[nodiscard]] virtual u32 addGPULightSet(const GPULightSet & set, const GPULight * lights, size_t count) {
-		ARX_UNUSED(set), ARX_UNUSED(lights), ARX_UNUSED(count);
-		return InvalidGPULightSet;
-	}
-	
-	/*!
-	 * Light the following draws of SMY_VERTEX vertex buffers with a light set,
-	 * InvalidGPULightSet draws them unlit again.
-	 */
-	virtual void setGPULightSet(u32 set) { ARX_UNUSED(set); }
-	
-	/*!
-	 * Draw a triangle list lit by the GPU, the vertex colors are not used
-	 *
-	 * Only available if getMaxGPULightSetSize() is not 0.
-	 */
-	virtual void drawLitTriangles(const TexturedVertex * vertices, const TexturedVertexLighting * lighting,
-	                              size_t count) {
-		ARX_UNUSED(vertices), ARX_UNUSED(lighting), ARX_UNUSED(count);
 	}
 	
 	virtual bool getSnapshot(Image & image) = 0;
