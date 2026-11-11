@@ -378,8 +378,8 @@ void OpenGLRenderer::initialize() {
 		        << (m_hasMapBufferRange ? "unsynchronized glMapBufferRange + orphaning"
 		                                : "client memory streaming");
 
-		// MSAA depth: 16 bits, half the memory of 24-bit depth for every sample
-		m_glesDepthFormat = GL_DEPTH_COMPONENT16;
+		m_glesDepthFormat = (m_glesIsES3 || gl.has("GL_OES_depth24")) ? GL_DEPTH_COMPONENT24_OES
+		                                                               : GL_DEPTH_COMPONENT16;
 		
 		// Attachment invalidation at the end of render passes
 		m_hasInvalidateFramebuffer = m_glesIsES3 && glInvalidateFramebuffer;
@@ -1726,7 +1726,7 @@ void OpenGLRenderer::flushState() {
 #ifdef ANDROID
 namespace {
 
-//! MSAA sample count: always 2x when the driver supports more than 1 sample, never its maximum
+//! MSAA sample count, resolved in tile memory by GL_EXT_multisampled_render_to_texture
 const GLsizei glesMSAASamples = 2;
 
 //! Texture unit for copying the resolved MSAA image, above the renderer's texture stages
@@ -3068,8 +3068,7 @@ bool OpenGLRenderer::updateMultisampleFramebuffer() {
 
 	destroyMultisampleFramebuffer();
 
-	// 2x even if the driver supports 4x or more (wanted requires a maximum of at least 2)
-	const GLsizei samples = glesMSAASamples;
+	const GLsizei samples = std::min(GLsizei(m_glesMaxMSAASamples), glesMSAASamples);
 
 	if(m_glesMSAAResolveBlit) {
 
