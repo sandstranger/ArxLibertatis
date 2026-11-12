@@ -62,4 +62,16 @@ private:
 	friend class GLTextureStage;
 };
 
+// Scratch memory of the texture uploads (the ETC2 transcode), see GLTexture.cpp.
+
+// Gives it and the texture RAM cache back to the system without waiting for a lock: for the low
+// memory event of another thread and the out of memory handler. Returns the bytes freed.
+size_t releaseTextureUploadMemory();
+
+// Once per frame: frees the scratch memory when no texture was uploaded for a while.
+void trimTextureUploadMemoryIfIdle();
+
+// std::set_new_handler: a failed allocation frees the texture caches and is tried again.
+void installTextureMemoryNewHandler();
+
 #endif // ARX_GRAPHICS_OPENGL_GLTEXTURE_H

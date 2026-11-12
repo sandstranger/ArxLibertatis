@@ -1030,18 +1030,23 @@ void SDL2Window::processEvents(bool waitForEvent) {
 
 #ifdef ANDROID   
 extern void ClearRamCache();   
+extern size_t releaseTextureUploadMemory();
     
 int SDLCALL SDL2Window::EventFilter(void* userdata, SDL_Event* event){   
     auto* sdl2Window = static_cast<SDL2Window*>(userdata);
     switch (event->type)
     {
         case SDL_APP_LOWMEMORY:
+            // SDL sends it from the Java thread: the upload scratch memory is freed unless the
+            // render thread is converting a texture right now
             ClearRamCache();
+            releaseTextureUploadMemory();
             break;
         case SDL_APP_WILLENTERBACKGROUND:
             SetMute(true);
             sdl2Window->onFocus(false);            
             ClearRamCache();
+            releaseTextureUploadMemory();
             break;
         case SDL_APP_DIDENTERFOREGROUND:
             SetMute(false);

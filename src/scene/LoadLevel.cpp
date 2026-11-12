@@ -101,8 +101,47 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "util/Range.h"
 #include "util/String.h"
 
+#ifdef ANDROID
+#include <cstdio>
+#endif
+
 
 extern bool bGCroucheToggle;
+
+#ifdef ANDROID
+// What the process and the device have after a level load, in the log: on ARMv7 the address
+// space (VmSize, 3 GB at most) runs out before the RAM does.
+static void logMemoryStatus() {
+
+	long rssKb = -1;
+	long sizeKb = -1;
+	if(FILE * file = std::fopen("/proc/self/status", "r")) {
+		char line[256];
+		while(std::fgets(line, sizeof(line), file)) {
+			std::sscanf(line, "VmSize: %ld kB", &sizeKb);
+			std::sscanf(line, "VmRSS: %ld kB", &rssKb);
+		}
+		std::fclose(file);
+	}
+
+	long totalKb = -1;
+	long availableKb = -1;
+	if(FILE * file = std::fopen("/proc/meminfo", "r")) {
+		char line[256];
+		while(std::fgets(line, sizeof(line), file)) {
+			std::sscanf(line, "MemTotal: %ld kB", &totalKb);
+			std::sscanf(line, "MemAvailable: %ld kB", &availableKb);
+		}
+		std::fclose(file);
+	}
+
+	LogInfo << "Memory: process " << rssKb / 1024 << " MB resident, " << sizeKb / 1024
+	        << " MB address space; device " << availableKb / 1024 << " of " << totalKb / 1024
+	        << " MB available";
+}
+#else
+static void logMemoryStatus() { }
+#endif
 
 Entity * LoadInter_Ex(const res::path & classPath, EntityInstance instance,
                       const Vec3f & pos, const Anglef & angle) {
@@ -505,6 +544,7 @@ bool DanaeLoadLevel(AreaId area, bool loadEntities) {
 	if(buffer.empty()) {
 		USE_PLAYERCOLLISIONS = true;
 		LogInfo << "Done loading level";
+		logMemoryStatus();
 		return true;
 	}
 	
@@ -532,6 +572,7 @@ bool DanaeLoadLevel(AreaId area, bool loadEntities) {
 	USE_PLAYERCOLLISIONS = true;
 	
 	LogInfo << "Done loading level";
+	logMemoryStatus();
 
 	return true;
 	

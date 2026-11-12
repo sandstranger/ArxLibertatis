@@ -153,6 +153,8 @@ void OpenGLRenderer::initialize() {
 	// only, even when the driver created a newer context (Mali and Adreno always do).
 	m_glesIsES3 = gl.isES() && gl.is(3, 0) && !g_useGLES2_0;
 	LogInfo << "OpenGL ES feature level: " << (m_glesIsES3 ? "3.0" : "2.0");
+	// A failed allocation frees the texture caches first, see GLTexture.cpp.
+	installTextureMemoryNewHandler();
 #endif
 	
 	LogInfo << "Using OpenGL " << gl.versionString();
@@ -2999,6 +3001,10 @@ void OpenGLRenderer::endFrame() {
 	} else {
 		invalidateAttachments(true, false, true);
 	}
+
+#ifdef ANDROID
+	trimTextureUploadMemoryIfIdle();
+#endif
 
 }
 
