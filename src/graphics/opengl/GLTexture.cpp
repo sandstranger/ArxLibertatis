@@ -147,8 +147,7 @@ static void TextureMemoryNewHandler() {
     const size_t freed = releaseTextureUploadMemory();
 
 #ifdef ANDROID
-    __android_log_print(ANDROID_LOG_WARN, "arx", "Out of memory: %zu bytes of texture caches freed",
-                        freed);
+    SDL_Log( "Out of memory: %zu bytes of texture caches freed",freed);
 #endif
 
     if (freed == 0) {
