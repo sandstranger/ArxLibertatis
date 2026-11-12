@@ -24,10 +24,12 @@
 #include "graphics/opengl/OpenGLRenderer.h"
 #include "graphics/opengl/OpenGLUtil.h"
 #include "io/fs/FilePath.h"
+#include "io/log/Logger.h"
 
 #include <vector>
 #include <string>
 #include <mutex>
+#include <new>
 #include <cstring>
 
 #include "TextureCache.h"
@@ -35,11 +37,8 @@
 #include "ProcessRGB.hpp"
 #include "SDL_log.h"
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__) || defined(_M_ARM64)
-
-#include "arm_neon.h"
-#include "io/log/Logger.h"
-
+#ifdef ANDROID
+#include <android/log.h>
 #endif
 
 #ifdef ANDROID
@@ -48,14 +47,20 @@ extern bool g_useGLES2_0;
 static constexpr bool g_useGLES2_0 = false;
 #endif
 
-static std::vector<uint8_t> s_decodeBuffer;
-static std::vector<uint8_t> s_etc2Buffer;
-static std::vector<uint8_t> s_etc2CacheBuffer;
+// Scratch memory of the ETC2 transcode, guarded by s_textureBuffersMutex. It grows to the largest
+// texture being converted. It used to reserve 80 MB at the first upload and keep it for good, a good
+// part of what a 32 bit process has; now it goes back to the system when the uploads stop for a
+// while (trimTextureUploadMemoryIfIdle) and on low memory (releaseTextureUploadMemory).
+static std::vector<uint8_t> s_decodeBuffer;   // the base level, BGRA padded to whole blocks
+static std::vector<uint8_t> s_mipRgbaBuffer;  // the next mip level
+static std::vector<uint8_t> s_etc2Buffer;     // the compressed mip chain, compressed or from a cache
 static std::mutex s_textureBuffersMutex;
-static std::once_flag s_textureBuffersInitFlag;
+// Set while this thread uses the buffers: the out of memory handler runs in the thread whose
+// allocation failed and must not free them under the upload.
+static thread_local bool s_usingTextureBuffers = false;
+// Frames since the last ETC2 upload, render thread only.
+static unsigned s_framesSinceTextureUpload = 0;
 static bool s_enableETC2TextureSupport = true;
-
-static std::vector<uint8_t> s_mipRgbaBuffer;
 
 extern "C" {
 
@@ -76,81 +81,166 @@ void setTextureData(
 
 }
 
-static inline void EnsureTextureBuffersInited() {
+namespace {
 
-    std::call_once(s_textureBuffersInitFlag, [] {
+struct TextureBuffersUser {
+    TextureBuffersUser() { s_usingTextureBuffers = true; }
+    ~TextureBuffersUser() { s_usingTextureBuffers = false; }
+};
 
-        s_decodeBuffer.reserve(
-                32 * 1024 * 1024
-        );
+} // anonymous namespace
 
-        s_etc2Buffer.reserve(
-                16 * 1024 * 1024
-        );
+static size_t FreeTextureBuffersLocked() {
 
-        s_etc2CacheBuffer.reserve(
-                16 * 1024 * 1024
-        );
+    const size_t bytes = s_decodeBuffer.capacity() +
+                         s_mipRgbaBuffer.capacity() +
+                         s_etc2Buffer.capacity();
 
-        s_mipRgbaBuffer.reserve(
-                16 * 1024 * 1024
-        );
+    // swap: clear() and resize(0) keep the capacity
+    std::vector<uint8_t>().swap(s_decodeBuffer);
+    std::vector<uint8_t>().swap(s_mipRgbaBuffer);
+    std::vector<uint8_t>().swap(s_etc2Buffer);
 
-    });
+    return bytes;
 }
 
-static inline void SwapRB_NEON(
-        uint8_t *dpic,
-        size_t pixelCount) {
+size_t releaseTextureUploadMemory() {
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+    size_t freed = 0;
 
-    size_t i = 0;
-
-    for (; i <= pixelCount - 16; i += 16) {
-
-        uint8x16x4_t pixels =
-                vld4q_u8(
-                        &dpic[i * 4]
-                );
-
-        uint8x16_t temp =
-                pixels.val[0];
-
-        pixels.val[0] =
-                pixels.val[2];
-
-        pixels.val[2] =
-                temp;
-
-        vst4q_u8(
-                &dpic[i * 4],
-                pixels
-        );
+    if (!s_usingTextureBuffers) {
+        std::unique_lock<std::mutex> lock(s_textureBuffersMutex, std::try_to_lock);
+        if (lock.owns_lock()) {
+            freed += FreeTextureBuffersLocked();
+        }
     }
 
-    for (; i < pixelCount; i++) {
+    freed += TextureCache::Instance().TryClearRamCache();
 
-        std::swap(
-                dpic[i * 4 + 0],
-                dpic[i * 4 + 2]
-        );
+    return freed;
+}
+
+void trimTextureUploadMemoryIfIdle() {
+
+    // 120 frames (2-4 seconds) without a texture upload: the level is loaded, the scratch memory goes
+    // back to the system. A texture loaded later grows it again, only as large as that texture needs.
+    const unsigned IDLE_FRAMES = 120;
+
+    if (s_framesSinceTextureUpload > IDLE_FRAMES) {
+        return;
     }
 
-#else
-
-    for (size_t i = 0; i < pixelCount; i++) {
-
-        std::swap(
-                dpic[i * 4 + 0],
-                dpic[i * 4 + 2]
-        );
+    if (++s_framesSinceTextureUpload <= IDLE_FRAMES) {
+        return;
     }
 
+    std::unique_lock<std::mutex> lock(s_textureBuffersMutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        FreeTextureBuffersLocked();
+    }
+}
+
+// A failed operator new gives back what the texture caches hold and tries again; when there is
+// nothing left to give, std::bad_alloc as without a handler. The handler must not allocate.
+static void TextureMemoryNewHandler() {
+
+    const size_t freed = releaseTextureUploadMemory();
+
+#ifdef ANDROID
+    __android_log_print(ANDROID_LOG_WARN, "arx", "Out of memory: %zu bytes of texture caches freed",
+                        freed);
 #endif
+
+    if (freed == 0) {
+        throw std::bad_alloc();
+    }
 }
 
-static inline bool ConvertRawToRgba(
+void installTextureMemoryNewHandler() {
+    std::set_new_handler(TextureMemoryNewHandler);
+}
+
+// Exactly the size needed, without copying what the buffer had: resize() grows a vector to at
+// least twice its capacity (16 MB for a 9 MB texture after an 8 MB one) and copies the old contents.
+static uint8_t *EnsureBuffer(std::vector<uint8_t> &buffer, size_t size) {
+
+    if (buffer.size() < size) {
+
+        if (buffer.capacity() < size) {
+            std::vector<uint8_t>().swap(buffer);
+        }
+
+        buffer.resize(size);
+    }
+
+    return buffer.data();
+}
+
+static inline size_t BytesPerPixel(Image::Format format) {
+
+    switch (format) {
+        case Image::Format_R8G8B8A8:
+        case Image::Format_B8G8R8A8:
+            return 4;
+        case Image::Format_R8G8B8:
+        case Image::Format_B8G8R8:
+            return 3;
+        case Image::Format_L8A8:
+            return 2;
+        case Image::Format_L8:
+        case Image::Format_A8:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+// Every pixel opaque: the image takes ETC2 RGB8, 4 bits per pixel, instead of RGBA8 EAC with 8, whose
+// EAC half would only say 255 everywhere. The colors are the same, it is the same ETC2 color block.
+static bool IsOpaque(const unsigned char *src, Image::Format format, size_t pixelCount) {
+
+    size_t stride;
+    size_t offset;
+
+    switch (format) {
+        case Image::Format_R8G8B8:
+        case Image::Format_B8G8R8:
+        case Image::Format_L8:
+            return true;
+        case Image::Format_R8G8B8A8:
+        case Image::Format_B8G8R8A8:
+            stride = 4;
+            offset = 3;
+            break;
+        case Image::Format_L8A8:
+            stride = 2;
+            offset = 1;
+            break;
+        case Image::Format_A8:
+            stride = 1;
+            offset = 0;
+            break;
+        default:
+            return false;
+    }
+
+    const unsigned char *alpha = src + offset;
+    unsigned char all = 255;
+
+    for (size_t i = 0; i < pixelCount; ++i) {
+        all &= alpha[i * stride];
+        if ((i & 1023) == 1023 && all != 255) {
+            return false;
+        }
+    }
+
+    return all == 255;
+}
+
+// To BGRA, the byte order etcpak reads. The mip levels stay in that order down to the last one (the
+// box filter treats the channels alike): the two red/blue swaps over every level before and after its
+// compression are gone.
+static inline bool ConvertRawToBgra(
         const unsigned char *src,
         uint8_t *dst,
         Image::Format format,
@@ -158,218 +248,107 @@ static inline bool ConvertRawToRgba(
         int height,
         int dstStridePixels) {
 
-    const size_t strideBytes =
-            static_cast<size_t>(
-                    dstStridePixels
-            ) * 4;
+    const size_t strideBytes = static_cast<size_t>(dstStridePixels) * 4;
+    const size_t srcPixelBytes = BytesPerPixel(format);
+    const size_t srcStrideBytes = static_cast<size_t>(width) * srcPixelBytes;
 
-    switch (format) {
+    if (srcPixelBytes == 0) {
+        return false;
+    }
 
-        case Image::Format_R8G8B8A8:
+    for (int y = 0; y < height; ++y) {
 
-            for (int y = 0; y < height; ++y) {
+        const unsigned char *s = src + static_cast<size_t>(y) * srcStrideBytes;
+        uint8_t *d = dst + static_cast<size_t>(y) * strideBytes;
 
-                memcpy(
-                        dst +
-                        static_cast<size_t>(y) *
-                        strideBytes,
+        switch (format) {
 
-                        src +
-                        static_cast<size_t>(y) *
-                        width * 4,
+            case Image::Format_B8G8R8A8:
+                memcpy(d, s, static_cast<size_t>(width) * 4);
+                break;
 
-                        static_cast<size_t>(width) * 4
-                );
-            }
-
-            break;
-
-        case Image::Format_B8G8R8A8:
-
-            for (int y = 0; y < height; ++y) {
-
-                const unsigned char *srow =
-                        src +
-                        static_cast<size_t>(y) *
-                        width * 4;
-
-                uint8_t *drow =
-                        dst +
-                        static_cast<size_t>(y) *
-                        strideBytes;
-
-                for (int x = 0; x < width; ++x) {
-
-                    drow[x * 4 + 0] =
-                            srow[x * 4 + 2];
-
-                    drow[x * 4 + 1] =
-                            srow[x * 4 + 1];
-
-                    drow[x * 4 + 2] =
-                            srow[x * 4 + 0];
-
-                    drow[x * 4 + 3] =
-                            srow[x * 4 + 3];
+            case Image::Format_R8G8B8A8:
+                for (int x = 0; x < width; ++x, s += 4, d += 4) {
+                    d[0] = s[2];
+                    d[1] = s[1];
+                    d[2] = s[0];
+                    d[3] = s[3];
                 }
-            }
+                break;
 
-            break;
-
-        case Image::Format_R8G8B8:
-
-            for (int y = 0; y < height; ++y) {
-
-                const unsigned char *srow =
-                        src +
-                        static_cast<size_t>(y) *
-                        width * 3;
-
-                uint8_t *drow =
-                        dst +
-                        static_cast<size_t>(y) *
-                        strideBytes;
-
-                for (int x = 0; x < width; ++x) {
-
-                    drow[x * 4 + 0] =
-                            srow[x * 3 + 0];
-
-                    drow[x * 4 + 1] =
-                            srow[x * 3 + 1];
-
-                    drow[x * 4 + 2] =
-                            srow[x * 3 + 2];
-
-                    drow[x * 4 + 3] =
-                            255;
+            case Image::Format_R8G8B8:
+                for (int x = 0; x < width; ++x, s += 3, d += 4) {
+                    d[0] = s[2];
+                    d[1] = s[1];
+                    d[2] = s[0];
+                    d[3] = 255;
                 }
-            }
+                break;
 
-            break;
-
-        case Image::Format_B8G8R8:
-
-            for (int y = 0; y < height; ++y) {
-
-                const unsigned char *srow =
-                        src +
-                        static_cast<size_t>(y) *
-                        width * 3;
-
-                uint8_t *drow =
-                        dst +
-                        static_cast<size_t>(y) *
-                        strideBytes;
-
-                for (int x = 0; x < width; ++x) {
-
-                    drow[x * 4 + 0] =
-                            srow[x * 3 + 2];
-
-                    drow[x * 4 + 1] =
-                            srow[x * 3 + 1];
-
-                    drow[x * 4 + 2] =
-                            srow[x * 3 + 0];
-
-                    drow[x * 4 + 3] =
-                            255;
+            case Image::Format_B8G8R8:
+                for (int x = 0; x < width; ++x, s += 3, d += 4) {
+                    d[0] = s[0];
+                    d[1] = s[1];
+                    d[2] = s[2];
+                    d[3] = 255;
                 }
-            }
+                break;
 
-            break;
-
-        case Image::Format_L8:
-
-            for (int y = 0; y < height; ++y) {
-
-                const unsigned char *srow =
-                        src +
-                        static_cast<size_t>(y) *
-                        width;
-
-                uint8_t *drow =
-                        dst +
-                        static_cast<size_t>(y) *
-                        strideBytes;
-
-                for (int x = 0; x < width; ++x) {
-
-                    const uint8_t v =
-                            srow[x];
-
-                    drow[x * 4 + 0] = v;
-                    drow[x * 4 + 1] = v;
-                    drow[x * 4 + 2] = v;
-                    drow[x * 4 + 3] = 255;
+            case Image::Format_L8:
+                for (int x = 0; x < width; ++x, s += 1, d += 4) {
+                    d[0] = s[0];
+                    d[1] = s[0];
+                    d[2] = s[0];
+                    d[3] = 255;
                 }
-            }
+                break;
 
-            break;
-
-        case Image::Format_A8:
-
-            for (int y = 0; y < height; ++y) {
-
-                const unsigned char *srow =
-                        src +
-                        static_cast<size_t>(y) *
-                        width;
-
-                uint8_t *drow =
-                        dst +
-                        static_cast<size_t>(y) *
-                        strideBytes;
-
-                for (int x = 0; x < width; ++x) {
-
-                    drow[x * 4 + 0] = 255;
-                    drow[x * 4 + 1] = 255;
-                    drow[x * 4 + 2] = 255;
-                    drow[x * 4 + 3] =
-                            srow[x];
+            case Image::Format_A8:
+                for (int x = 0; x < width; ++x, s += 1, d += 4) {
+                    d[0] = 255;
+                    d[1] = 255;
+                    d[2] = 255;
+                    d[3] = s[0];
                 }
-            }
+                break;
 
-            break;
-
-        case Image::Format_L8A8:
-
-            for (int y = 0; y < height; ++y) {
-
-                const unsigned char *srow =
-                        src +
-                        static_cast<size_t>(y) *
-                        width * 2;
-
-                uint8_t *drow =
-                        dst +
-                        static_cast<size_t>(y) *
-                        strideBytes;
-
-                for (int x = 0; x < width; ++x) {
-
-                    const uint8_t l =
-                            srow[x * 2 + 0];
-
-                    const uint8_t a =
-                            srow[x * 2 + 1];
-
-                    drow[x * 4 + 0] = l;
-                    drow[x * 4 + 1] = l;
-                    drow[x * 4 + 2] = l;
-                    drow[x * 4 + 3] = a;
+            case Image::Format_L8A8:
+                for (int x = 0; x < width; ++x, s += 2, d += 4) {
+                    d[0] = s[0];
+                    d[1] = s[0];
+                    d[2] = s[0];
+                    d[3] = s[1];
                 }
-            }
+                break;
 
-            break;
-
-        default:
-            return false;
+            default:
+                return false;
+        }
     }
 
     return true;
+}
+
+// The padding up to whole 4x4 blocks repeats the edge pixels. The base level had zeros there: the
+// compressor spent the few colors of the edge blocks on black texels that are never shown.
+static void PadToBlocks(uint8_t *pixels, int logicalW, int logicalH, int paddedW, int paddedH) {
+
+    const size_t strideBytes = static_cast<size_t>(paddedW) * 4;
+
+    if (paddedW > logicalW) {
+        for (int y = 0; y < logicalH; ++y) {
+            uint8_t *row = pixels + static_cast<size_t>(y) * strideBytes;
+            const uint8_t *last = row + static_cast<size_t>(logicalW - 1) * 4;
+            for (int x = logicalW; x < paddedW; ++x) {
+                memcpy(row + static_cast<size_t>(x) * 4, last, 4);
+            }
+        }
+    }
+
+    const uint8_t *lastRow = pixels + static_cast<size_t>(logicalH - 1) * strideBytes;
+    for (int y = logicalH; y < paddedH; ++y) {
+        memcpy(pixels + static_cast<size_t>(y) * strideBytes, lastRow, strideBytes);
+    }
 }
 
 static inline int Align4(int x) {
@@ -391,83 +370,39 @@ struct Etc2MipLevel {
 static inline void ComputeMipChain(
         int baseLogicalW,
         int baseLogicalH,
+        size_t blockBytes,
         std::vector<Etc2MipLevel> &outLevels) {
 
     outLevels.clear();
 
-    int logicalW =
-            baseLogicalW;
-
-    int logicalH =
-            baseLogicalH;
+    int logicalW = baseLogicalW;
+    int logicalH = baseLogicalH;
 
     size_t offset = 0;
 
     for (;;) {
 
-        const int paddedW =
-                Align4(logicalW);
-
-        const int paddedH =
-                Align4(logicalH);
-
-        const size_t blocksX =
-                static_cast<size_t>(
-                        paddedW
-                ) / 4;
-
-        const size_t blocksY =
-                static_cast<size_t>(
-                        paddedH
-                ) / 4;
-
-        const size_t compressedSize =
-                blocksX *
-                blocksY *
-                16;
-
         Etc2MipLevel level;
 
-        level.logicalW =
-                logicalW;
+        level.logicalW = logicalW;
+        level.logicalH = logicalH;
+        level.paddedW = Align4(logicalW);
+        level.paddedH = Align4(logicalH);
+        level.offset = offset;
+        level.compressedSize = static_cast<size_t>(level.paddedW / 4) *
+                               static_cast<size_t>(level.paddedH / 4) *
+                               blockBytes;
 
-        level.logicalH =
-                logicalH;
+        outLevels.push_back(level);
 
-        level.paddedW =
-                paddedW;
+        offset += level.compressedSize;
 
-        level.paddedH =
-                paddedH;
-
-        level.offset =
-                offset;
-
-        level.compressedSize =
-                compressedSize;
-
-        outLevels.push_back(
-                level
-        );
-
-        offset +=
-                compressedSize;
-
-        if (logicalW == 1 &&
-            logicalH == 1) {
-
+        if (logicalW == 1 && logicalH == 1) {
             break;
         }
 
-        logicalW =
-                (logicalW > 1)
-                ? (logicalW >> 1)
-                : 1;
-
-        logicalH =
-                (logicalH > 1)
-                ? (logicalH >> 1)
-                : 1;
+        logicalW = (logicalW > 1) ? (logicalW >> 1) : 1;
+        logicalH = (logicalH > 1) ? (logicalH >> 1) : 1;
     }
 }
 
@@ -483,166 +418,119 @@ static inline void DownsampleAndPad2x2(
         int dstPaddedW,
         int dstPaddedH) {
 
-    const size_t srcStrideBytes =
-            static_cast<size_t>(
-                    srcPaddedW
-            ) * 4;
-
-    const size_t dstStrideBytes =
-            static_cast<size_t>(
-                    dstPaddedW
-            ) * 4;
+    const size_t srcStrideBytes = static_cast<size_t>(srcPaddedW) * 4;
+    const size_t dstStrideBytes = static_cast<size_t>(dstPaddedW) * 4;
 
     for (int y = 0; y < dstLogicalH; ++y) {
 
-        const int sy0 =
-                y * 2;
+        const int sy0 = y * 2;
+        const int sy1 = (sy0 + 1 < srcLogicalH) ? (sy0 + 1) : (srcLogicalH - 1);
 
-        const int sy1 =
-                (sy0 + 1 < srcLogicalH)
-                ? (sy0 + 1)
-                : (srcLogicalH - 1);
+        const uint8_t *row0 = src + static_cast<size_t>(sy0) * srcStrideBytes;
+        const uint8_t *row1 = src + static_cast<size_t>(sy1) * srcStrideBytes;
 
-        const uint8_t *row0 =
-                src +
-                static_cast<size_t>(sy0) *
-                srcStrideBytes;
-
-        const uint8_t *row1 =
-                src +
-                static_cast<size_t>(sy1) *
-                srcStrideBytes;
-
-        uint8_t *dstRow =
-                dst +
-                static_cast<size_t>(y) *
-                dstStrideBytes;
+        uint8_t *dstRow = dst + static_cast<size_t>(y) * dstStrideBytes;
 
         for (int x = 0; x < dstLogicalW; ++x) {
 
-            const int sx0 =
-                    x * 2;
+            const int sx0 = x * 2;
+            const int sx1 = (sx0 + 1 < srcLogicalW) ? (sx0 + 1) : (srcLogicalW - 1);
 
-            const int sx1 =
-                    (sx0 + 1 < srcLogicalW)
-                    ? (sx0 + 1)
-                    : (srcLogicalW - 1);
+            const uint8_t *p00 = row0 + static_cast<size_t>(sx0) * 4;
+            const uint8_t *p01 = row0 + static_cast<size_t>(sx1) * 4;
+            const uint8_t *p10 = row1 + static_cast<size_t>(sx0) * 4;
+            const uint8_t *p11 = row1 + static_cast<size_t>(sx1) * 4;
 
-            const uint8_t *p00 =
-                    row0 +
-                    static_cast<size_t>(sx0) *
-                    4;
+            uint8_t *out = dstRow + static_cast<size_t>(x) * 4;
 
-            const uint8_t *p01 =
-                    row0 +
-                    static_cast<size_t>(sx1) *
-                    4;
-
-            const uint8_t *p10 =
-                    row1 +
-                    static_cast<size_t>(sx0) *
-                    4;
-
-            const uint8_t *p11 =
-                    row1 +
-                    static_cast<size_t>(sx1) *
-                    4;
-
-            uint8_t *out =
-                    dstRow +
-                    static_cast<size_t>(x) *
-                    4;
-
-            out[0] = static_cast<uint8_t>(
-                    (
-                            static_cast<uint32_t>(p00[0]) +
-                            static_cast<uint32_t>(p01[0]) +
-                            static_cast<uint32_t>(p10[0]) +
-                            static_cast<uint32_t>(p11[0]) +
-                            2
-                    ) >> 2
-            );
-
-            out[1] = static_cast<uint8_t>(
-                    (
-                            static_cast<uint32_t>(p00[1]) +
-                            static_cast<uint32_t>(p01[1]) +
-                            static_cast<uint32_t>(p10[1]) +
-                            static_cast<uint32_t>(p11[1]) +
-                            2
-                    ) >> 2
-            );
-
-            out[2] = static_cast<uint8_t>(
-                    (
-                            static_cast<uint32_t>(p00[2]) +
-                            static_cast<uint32_t>(p01[2]) +
-                            static_cast<uint32_t>(p10[2]) +
-                            static_cast<uint32_t>(p11[2]) +
-                            2
-                    ) >> 2
-            );
-
-            out[3] = static_cast<uint8_t>(
-                    (
-                            static_cast<uint32_t>(p00[3]) +
-                            static_cast<uint32_t>(p01[3]) +
-                            static_cast<uint32_t>(p10[3]) +
-                            static_cast<uint32_t>(p11[3]) +
-                            2
-                    ) >> 2
-            );
-        }
-
-        if (dstPaddedW > dstLogicalW) {
-
-            const uint8_t *last =
-                    dstRow +
-                    static_cast<size_t>(
-                            dstLogicalW - 1
-                    ) * 4;
-
-            for (int x = dstLogicalW;
-                 x < dstPaddedW;
-                 ++x) {
-
-                uint8_t *out =
-                        dstRow +
-                        static_cast<size_t>(x) *
-                        4;
-
-                out[0] = last[0];
-                out[1] = last[1];
-                out[2] = last[2];
-                out[3] = last[3];
+            for (int c = 0; c < 4; ++c) {
+                out[c] = static_cast<uint8_t>(
+                        (static_cast<uint32_t>(p00[c]) + static_cast<uint32_t>(p01[c]) +
+                         static_cast<uint32_t>(p10[c]) + static_cast<uint32_t>(p11[c]) + 2) >> 2);
             }
         }
     }
 
-    if (dstPaddedH > dstLogicalH) {
+    PadToBlocks(dst, dstLogicalW, dstLogicalH, dstPaddedW, dstPaddedH);
+}
 
-        const uint8_t *lastRow =
-                dst +
-                static_cast<size_t>(
-                        dstLogicalH - 1
-                ) *
-                dstStrideBytes;
+// Compresses the mip chain into s_etc2Buffer, s_textureBuffersMutex held.
+static bool CompressEtc2MipChain(
+        const unsigned char *srcData,
+        Image::Format format,
+        const std::vector<Etc2MipLevel> &levels,
+        int numLevels,
+        GLenum etc2Format,
+        size_t totalCompressedSize) {
 
-        for (int y = dstLogicalH;
-             y < dstPaddedH;
-             ++y) {
+    const Etc2MipLevel &base = levels[0];
 
-            memcpy(
-                    dst +
-                    static_cast<size_t>(y) *
-                    dstStrideBytes,
+    const size_t baseSize = static_cast<size_t>(base.paddedW) *
+                            static_cast<size_t>(base.paddedH) * 4;
 
-                    lastRow,
+    // Level 1 is the largest one after the base: the two buffers take turns, every later level
+    // fits in either of them.
+    const size_t nextSize = (numLevels > 1)
+            ? static_cast<size_t>(levels[1].paddedW) * static_cast<size_t>(levels[1].paddedH) * 4
+            : 0;
 
-                    dstStrideBytes
+    uint8_t *cur = EnsureBuffer(s_decodeBuffer, baseSize);
+    uint8_t *nxt = (nextSize > 0) ? EnsureBuffer(s_mipRgbaBuffer, nextSize) : nullptr;
+    uint8_t *etc2Blob = EnsureBuffer(s_etc2Buffer, totalCompressedSize);
+
+    if (!ConvertRawToBgra(srcData, cur, format, base.logicalW, base.logicalH, base.paddedW)) {
+        return false;
+    }
+
+    PadToBlocks(cur, base.logicalW, base.logicalH, base.paddedW, base.paddedH);
+
+    for (int i = 0; i < numLevels; ++i) {
+
+        const Etc2MipLevel &level = levels[i];
+
+        const uint32_t blocks = static_cast<uint32_t>(
+                static_cast<size_t>(level.paddedW / 4) * static_cast<size_t>(level.paddedH / 4));
+
+        if (etc2Format == GL_COMPRESSED_RGB8_ETC2) {
+            CompressEtc2Rgb(
+                    reinterpret_cast<const uint32_t *>(cur),
+                    reinterpret_cast<uint64_t *>(etc2Blob + level.offset),
+                    blocks,
+                    static_cast<uint32_t>(level.paddedW),
+                    true
+            );
+        } else {
+            CompressEtc2Rgba(
+                    reinterpret_cast<const uint32_t *>(cur),
+                    reinterpret_cast<uint64_t *>(etc2Blob + level.offset),
+                    blocks,
+                    static_cast<uint32_t>(level.paddedW),
+                    true
             );
         }
+
+        if (i + 1 >= numLevels) {
+            break;
+        }
+
+        const Etc2MipLevel &next = levels[i + 1];
+
+        DownsampleAndPad2x2(
+                cur, level.logicalW, level.logicalH, level.paddedW,
+                nxt, next.logicalW, next.logicalH, next.paddedW, next.paddedH
+        );
+
+        std::swap(cur, nxt);
     }
+
+    return true;
+}
+
+static void SetTextureSwizzle(GLint r, GLint g, GLint b, GLint a) {
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, r);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, g);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, b);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, a);
 }
 
 /*
@@ -662,14 +550,7 @@ static bool UploadAsEtc2(
         int height,
         const unsigned char *srcData,
         Image::Format format,
-        const char *textureName,
         bool wantMipmaps) {
-
-    EnsureTextureBuffersInited();
-
-    std::lock_guard<std::mutex> lock(
-            s_textureBuffersMutex
-    );
 
     if (renderer == nullptr ||
         tex == GL_NONE ||
@@ -680,420 +561,114 @@ static bool UploadAsEtc2(
         return false;
     }
 
+    const size_t bytesPerPixel = BytesPerPixel(format);
+
+    if (bytesPerPixel == 0) {
+        return false;
+    }
+
+    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t rawSourceSize = pixelCount * bytesPerPixel;
+
+    const GLenum etc2Format = IsOpaque(srcData, format, pixelCount)
+            ? GL_COMPRESSED_RGB8_ETC2
+            : GL_COMPRESSED_RGBA8_ETC2_EAC;
+
+    const size_t blockBytes = (etc2Format == GL_COMPRESSED_RGB8_ETC2) ? 8 : 16;
+
     std::vector<Etc2MipLevel> levels;
 
-    ComputeMipChain(
-            width,
-            height,
-            levels
-    );
+    ComputeMipChain(width, height, blockBytes, levels);
 
-    const int numLevels =
-            wantMipmaps
-            ? static_cast<int>(
-                    levels.size()
-            )
-            : 1;
+    const int numLevels = wantMipmaps ? static_cast<int>(levels.size()) : 1;
 
     size_t totalCompressedSize = 0;
 
-    for (int i = 0;
-         i < numLevels;
-         ++i) {
-
-        totalCompressedSize +=
-                levels[i].compressedSize;
+    for (int i = 0; i < numLevels; ++i) {
+        totalCompressedSize += levels[i].compressedSize;
     }
 
-    const Etc2MipLevel &base =
-            levels[0];
+    // Computed once for both caches, it reads every byte of the image (64 bit multiplies, slow on
+    // ARMv7); it was computed three times per texture. A texture without its mip levels is another
+    // entry: with one key for both, the disk cache threw the entry away whenever the other kind of
+    // the same image was loaded.
+    uint64_t hash = ComputeTextureHash(srcData, rawSourceSize, width, height,
+                                       static_cast<int>(etc2Format));
 
-    const size_t baseDecodeSize =
-            static_cast<size_t>(
-                    base.paddedW
-            ) *
-            static_cast<size_t>(
-                    base.paddedH
-            ) *
-            4;
-
-    size_t rawSourceSize = 0;
-
-    switch (format) {
-
-        case Image::Format_R8G8B8A8:
-        case Image::Format_B8G8R8A8:
-
-            rawSourceSize =
-                    static_cast<size_t>(width) *
-                    static_cast<size_t>(height) *
-                    4;
-
-            break;
-
-        case Image::Format_R8G8B8:
-        case Image::Format_B8G8R8:
-
-            rawSourceSize =
-                    static_cast<size_t>(width) *
-                    static_cast<size_t>(height) *
-                    3;
-
-            break;
-
-        case Image::Format_L8:
-        case Image::Format_A8:
-
-            rawSourceSize =
-                    static_cast<size_t>(width) *
-                    static_cast<size_t>(height);
-
-            break;
-
-        case Image::Format_L8A8:
-
-            rawSourceSize =
-                    static_cast<size_t>(width) *
-                    static_cast<size_t>(height) *
-                    2;
-
-            break;
-
-        default:
-
-            rawSourceSize =
-                    static_cast<size_t>(width) *
-                    static_cast<size_t>(height) *
-                    4;
-
-            break;
+    if (numLevels == 1 && levels.size() > 1) {
+        hash ^= 0x9E3779B97F4A7C15ULL;
     }
 
-    const uint64_t hash =
-            ComputeTextureHash(
-                    srcData,
-                    rawSourceSize,
-                    width,
-                    height,
-                    GL_COMPRESSED_RGBA8_ETC2_EAC
-            );
+    std::lock_guard<std::mutex> lock(s_textureBuffersMutex);
 
-    bool cacheHit = false;
+    TextureBuffersUser bufferUser;
 
-    uint8_t *etc2Blob = nullptr;
+    s_framesSinceTextureUpload = 0;
+
+    // The caches read into the buffer the compression writes, one buffer less.
+    EnsureBuffer(s_etc2Buffer, totalCompressedSize);
 
     size_t cachedSize = 0;
 
-    cacheHit =
-            TextureCache::Instance().
-                    TryGetFromRamCache(
-                    hash,
-                    s_etc2CacheBuffer,
-                    &cachedSize
-            );
-
-    // The image hash intentionally does not include the mipmap flag. A
-    // previous request for the same image may therefore have cached only
-    // the base level. Do not read beyond that RAM-cache entry when this
-    // upload needs a longer mip chain.
-    if (cacheHit && cachedSize < totalCompressedSize) {
-        cacheHit = false;
-    }
+    bool cacheHit =
+            TextureCache::Instance().TryGetFromRamCache(hash, s_etc2Buffer, &cachedSize) &&
+            cachedSize == totalCompressedSize;
 
     if (!cacheHit) {
 
         cacheHit =
-                TextureCache::Instance().
-                        TryGetCachedETC2(
-                        textureName
-                        ? textureName
-                        : "",
-
-                        srcData,
-                        rawSourceSize,
+                TextureCache::Instance().TryGetCachedETC2(
+                        hash,
                         width,
                         height,
-                        GL_COMPRESSED_RGBA8_ETC2_EAC,
+                        static_cast<int>(etc2Format),
                         numLevels,
-                        s_etc2CacheBuffer,
+                        s_etc2Buffer,
                         &cachedSize
-                );
+                ) &&
+                cachedSize == totalCompressedSize;
 
         if (cacheHit) {
 
-            if (cachedSize !=
-                totalCompressedSize) {
-
-                cacheHit = false;
-
-            } else {
-
-                TextureCache::Instance().
-                        SaveToRamCache(
-                        hash,
-
-                        reinterpret_cast<std::byte *>(
-                                s_etc2CacheBuffer.data()
-                        ),
-
-                        cachedSize,
-
-                        width,
-                        height,
-                        GL_COMPRESSED_RGBA8_ETC2_EAC
-                );
-            }
+            TextureCache::Instance().SaveToRamCache(
+                    hash,
+                    s_etc2Buffer.data(),
+                    cachedSize,
+                    width,
+                    height,
+                    etc2Format
+            );
         }
     }
 
-    if (cacheHit) {
+    if (!cacheHit) {
 
-        etc2Blob =
-                s_etc2CacheBuffer.data();
-
-    } else {
-
-        if (s_etc2Buffer.size() <
-            totalCompressedSize) {
-
-            s_etc2Buffer.resize(
-                    totalCompressedSize
-            );
-        }
-
-        etc2Blob =
-                s_etc2Buffer.data();
-
-        if (s_decodeBuffer.size() <
-            baseDecodeSize) {
-
-            s_decodeBuffer.resize(
-                    baseDecodeSize
-            );
-        }
-
-        size_t maxNextMipSize = 4;
-
-        for (int i = 1;
-             i < numLevels;
-             ++i) {
-
-            const Etc2MipLevel &L =
-                    levels[i];
-
-            const size_t size =
-                    static_cast<size_t>(
-                            L.paddedW
-                    ) *
-                    static_cast<size_t>(
-                            L.paddedH
-                    ) *
-                    4;
-
-            if (size > maxNextMipSize) {
-                maxNextMipSize = size;
-            }
-        }
-
-        if (s_mipRgbaBuffer.size() <
-            maxNextMipSize) {
-
-            s_mipRgbaBuffer.resize(
-                    maxNextMipSize
-            );
-        }
-
-        uint8_t *cur =
-                s_decodeBuffer.data();
-
-        uint8_t *nxt =
-                s_mipRgbaBuffer.data();
-
-        memset(
-                cur,
-                0,
-                baseDecodeSize
-        );
-
-        if (!ConvertRawToRgba(
-                srcData,
-                cur,
-                format,
-                width,
-                height,
-                base.paddedW)) {
-
+        if (!CompressEtc2MipChain(srcData, format, levels, numLevels, etc2Format,
+                                  totalCompressedSize)) {
             return false;
         }
 
-        int curLogicalW =
-                base.logicalW;
-
-        int curLogicalH =
-                base.logicalH;
-
-        int curPaddedW =
-                base.paddedW;
-
-        int curPaddedH =
-                base.paddedH;
-
-        for (int i = 0;
-             i < numLevels;
-             ++i) {
-
-            const Etc2MipLevel &L =
-                    levels[i];
-
-            const size_t pixelCount =
-                    static_cast<size_t>(
-                            L.paddedW
-                    ) *
-                    static_cast<size_t>(
-                            L.paddedH
-                    );
-
-            const uint32_t blocks =
-                    static_cast<uint32_t>(
-                            (
-                                    static_cast<size_t>(
-                                            L.paddedW
-                                    ) / 4
-                            ) *
-                            (
-                                    static_cast<size_t>(
-                                            L.paddedH
-                                    ) / 4
-                            )
-                    );
-
-            SwapRB_NEON(
-                    cur,
-                    pixelCount
-            );
-
-            CompressEtc2Rgba(
-                    reinterpret_cast<const uint32_t *>(
-                            cur
-                    ),
-
-                    reinterpret_cast<uint64_t *>(
-                            etc2Blob +
-                            L.offset
-                    ),
-
-                    blocks,
-
-                    static_cast<uint32_t>(
-                            L.paddedW
-                    ),
-
-                    true
-            );
-
-            SwapRB_NEON(
-                    cur,
-                    pixelCount
-            );
-
-            if (i + 1 >= numLevels) {
-                break;
-            }
-
-            const Etc2MipLevel &next =
-                    levels[i + 1];
-
-            const size_t nextSize =
-                    static_cast<size_t>(
-                            next.paddedW
-                    ) *
-                    static_cast<size_t>(
-                            next.paddedH
-                    ) *
-                    4;
-
-            if (s_mipRgbaBuffer.size() <
-                nextSize) {
-
-                s_mipRgbaBuffer.resize(
-                        nextSize
-                );
-
-                nxt =
-                        s_mipRgbaBuffer.data();
-            }
-
-            memset(
-                    nxt,
-                    0,
-                    nextSize
-            );
-
-            DownsampleAndPad2x2(
-                    cur,
-
-                    curLogicalW,
-                    curLogicalH,
-                    curPaddedW,
-
-                    nxt,
-
-                    next.logicalW,
-                    next.logicalH,
-                    next.paddedW,
-                    next.paddedH
-            );
-
-            std::swap(
-                    cur,
-                    nxt
-            );
-
-            curLogicalW =
-                    next.logicalW;
-
-            curLogicalH =
-                    next.logicalH;
-
-            curPaddedW =
-                    next.paddedW;
-
-            curPaddedH =
-                    next.paddedH;
-
-            (void)curPaddedH;
-        }
-
-        TextureCache::Instance().
-                SaveToRamCache(
+        TextureCache::Instance().SaveToRamCache(
                 hash,
-                etc2Blob,
+                s_etc2Buffer.data(),
                 totalCompressedSize,
                 width,
                 height,
-                GL_COMPRESSED_RGBA8_ETC2_EAC
+                etc2Format
         );
 
-        TextureCache::Instance().
-                SaveToCacheAsync(
-                textureName
-                ? textureName
-                : "",
-
-                srcData,
-                rawSourceSize,
-
+        TextureCache::Instance().SaveToCacheAsync(
+                hash,
                 width,
                 height,
-
-                GL_COMPRESSED_RGBA8_ETC2_EAC,
-
+                static_cast<int>(etc2Format),
                 numLevels,
-
-                etc2Blob,
+                s_etc2Buffer.data(),
                 totalCompressedSize
         );
     }
+
+    const uint8_t *etc2Blob = s_etc2Buffer.data();
 
     glBindTexture(
             GL_TEXTURE_2D,
@@ -1123,7 +698,7 @@ static bool UploadAsEtc2(
                 GL_TEXTURE_2D,
                 i,
 
-                GL_COMPRESSED_RGBA8_ETC2_EAC,
+                etc2Format,
 
                 static_cast<GLsizei>(
                         L.logicalW
@@ -1175,6 +750,9 @@ static bool UploadAsEtc2(
         }
     }
 
+    // the texture object may have had a one or two channel image before
+    SetTextureSwizzle(GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA);
+
     glTexParameteri(
             GL_TEXTURE_2D,
             GL_TEXTURE_MIN_FILTER,
@@ -1198,18 +776,6 @@ static bool UploadAsEtc2(
                 renderer->getMaxAnisotropy()
         );
     }
-
-    glTexParameteri(
-            GL_TEXTURE_2D,
-            GL_TEXTURE_BASE_LEVEL,
-            0
-    );
-
-    glTexParameteri(
-            GL_TEXTURE_2D,
-            GL_TEXTURE_MAX_LEVEL,
-            numLevels - 1
-    );
 
     return true;
 }
@@ -1446,7 +1012,6 @@ void GLTexture::upload() {
                 storedH,
                 srcData,
                 m_format,
-                nullptr,
                 wantsMip)) {
 
             glTexParameteri(
@@ -1468,80 +1033,119 @@ void GLTexture::upload() {
     }
 
 #ifdef ANDROID
-    // GLES 3 removed the legacy LUMINANCE/ALPHA/INTENSITY and BGR formats.
-    // Normalize every decoded source image to RGBA so both ES 2 and ES 3 use
-    // the same well-defined upload path.
+    // GLES has no BGR transfer and no intensity textures: by now B8G8R8(A8) images are R8G8B8(A8)
+    // and intensity ones L8A8, see above. RGBA and RGB images go up as they are, every image was
+    // copied to RGBA before. On GLES 3 one and two channel images go to GL_R8 / GL_RG8 and the
+    // swizzle gives what the RGBA copy had: the font pages (A8, uploaded again for new glyphs) take
+    // a quarter of the memory and no copy.
     Image glesImage;
-    glesImage.create(m_image.getWidth(), m_image.getHeight(), Image::Format_R8G8B8A8);
-    const unsigned char * source = m_image.getData();
-    unsigned char * destination = glesImage.getData();
-    const size_t pixelCount = m_image.getWidth() * m_image.getHeight();
+    const Image *uploadImage = &m_image;
+    GLint internal = GL_NONE;
+    GLenum format = GL_NONE;
+    GLint swizzle[4] = { GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA };
+    const Image::Format sourceFormat = m_image.getFormat();
 
-    for(size_t i = 0; i < pixelCount; ++i) {
-        const unsigned char * src = source;
-        unsigned char * dst = destination;
-        if(isIntensity()) {
-            const unsigned char intensity = src[0];
-            dst[0] = intensity;
-            dst[1] = intensity;
-            dst[2] = intensity;
-            dst[3] = intensity;
-        } else switch(m_image.getFormat()) {
-            case Image::Format_L8: {
-                const unsigned char luminance = src[0];
-                dst[0] = luminance;
-                dst[1] = luminance;
-                dst[2] = luminance;
-                dst[3] = 255;
-                break;
+    if (!isIntensity() && sourceFormat == Image::Format_R8G8B8A8) {
+        internal = g_useGLES2_0 ? GL_RGBA : GL_RGBA8;
+        format = GL_RGBA;
+    } else if (!isIntensity() && sourceFormat == Image::Format_R8G8B8) {
+        internal = g_useGLES2_0 ? GL_RGB : GL_RGB8;
+        format = GL_RGB;
+    } else if (!g_useGLES2_0 && !isIntensity() && sourceFormat == Image::Format_L8A8) {
+        internal = GL_RG8;
+        format = GL_RG;
+        swizzle[0] = swizzle[1] = swizzle[2] = GL_RED;
+        swizzle[3] = GL_GREEN;
+    } else if (!g_useGLES2_0 && !isIntensity() && sourceFormat == Image::Format_L8) {
+        internal = GL_R8;
+        format = GL_RED;
+        swizzle[0] = swizzle[1] = swizzle[2] = GL_RED;
+        swizzle[3] = GL_ONE;
+    } else if (!g_useGLES2_0 && !isIntensity() && sourceFormat == Image::Format_A8) {
+        internal = GL_R8;
+        format = GL_RED;
+        swizzle[0] = swizzle[1] = swizzle[2] = GL_ONE;
+        swizzle[3] = GL_RED;
+    } else {
+        // OpenGL ES 2.0 feature level: the RGBA copy as before.
+        glesImage.create(m_image.getWidth(), m_image.getHeight(), Image::Format_R8G8B8A8);
+        const unsigned char * source = m_image.getData();
+        unsigned char * destination = glesImage.getData();
+        const size_t pixelCount = m_image.getWidth() * m_image.getHeight();
+
+        for(size_t i = 0; i < pixelCount; ++i) {
+            const unsigned char * src = source;
+            unsigned char * dst = destination;
+            if(isIntensity()) {
+                const unsigned char intensity = src[0];
+                dst[0] = intensity;
+                dst[1] = intensity;
+                dst[2] = intensity;
+                dst[3] = intensity;
+            } else switch(sourceFormat) {
+                case Image::Format_L8: {
+                    const unsigned char luminance = src[0];
+                    dst[0] = luminance;
+                    dst[1] = luminance;
+                    dst[2] = luminance;
+                    dst[3] = 255;
+                    break;
+                }
+                case Image::Format_A8:
+                    dst[0] = dst[1] = dst[2] = 255;
+                    dst[3] = src[0];
+                    break;
+                case Image::Format_L8A8: {
+                    const unsigned char luminance = src[0];
+                    dst[0] = luminance;
+                    dst[1] = luminance;
+                    dst[2] = luminance;
+                    dst[3] = src[1];
+                    break;
+                }
+                case Image::Format_R8G8B8:
+                    dst[0] = src[0];
+                    dst[1] = src[1];
+                    dst[2] = src[2];
+                    dst[3] = 255;
+                    break;
+                case Image::Format_B8G8R8:
+                    dst[0] = src[2];
+                    dst[1] = src[1];
+                    dst[2] = src[0];
+                    dst[3] = 255;
+                    break;
+                case Image::Format_R8G8B8A8:
+                    dst[0] = src[0];
+                    dst[1] = src[1];
+                    dst[2] = src[2];
+                    dst[3] = src[3];
+                    break;
+                case Image::Format_B8G8R8A8:
+                    dst[0] = src[2];
+                    dst[1] = src[1];
+                    dst[2] = src[0];
+                    dst[3] = src[3];
+                    break;
+                default:
+                    LogError << "Unsupported source texture format for OpenGL ES";
+                    return;
             }
-            case Image::Format_A8:
-                dst[0] = dst[1] = dst[2] = 255;
-                dst[3] = src[0];
-                break;
-            case Image::Format_L8A8: {
-                const unsigned char luminance = src[0];
-                dst[0] = luminance;
-                dst[1] = luminance;
-                dst[2] = luminance;
-                dst[3] = src[1];
-                break;
-            }
-            case Image::Format_R8G8B8:
-                dst[0] = src[0];
-                dst[1] = src[1];
-                dst[2] = src[2];
-                dst[3] = 255;
-                break;
-            case Image::Format_B8G8R8:
-                dst[0] = src[2];
-                dst[1] = src[1];
-                dst[2] = src[0];
-                dst[3] = 255;
-                break;
-            case Image::Format_R8G8B8A8:
-                dst[0] = src[0];
-                dst[1] = src[1];
-                dst[2] = src[2];
-                dst[3] = src[3];
-                break;
-            case Image::Format_B8G8R8A8:
-                dst[0] = src[2];
-                dst[1] = src[1];
-                dst[2] = src[0];
-                dst[3] = src[3];
-                break;
-            default:
-                LogError << "Unsupported source texture format for OpenGL ES";
-                return;
+            source += m_image.getNumChannels();
+            destination += 4;
         }
-        source += m_image.getNumChannels();
-        destination += 4;
+
+        uploadImage = &glesImage;
+        internal = g_useGLES2_0 ? GL_RGBA : GL_RGBA8;
+        format = GL_RGBA;
     }
 
-    const Image &textureImage = glesImage;
-    GLint internal = g_useGLES2_0 ? GL_RGBA : GL_RGBA8;
-    GLenum format = GL_RGBA;
+    if (!g_useGLES2_0) {
+        // also back to the identity when the texture object had a one or two channel image
+        SetTextureSwizzle(swizzle[0], swizzle[1], swizzle[2], swizzle[3]);
+    }
+
+    const Image &textureImage = *uploadImage;
 #else
     GLint internalUnsized;
     GLint internalSized;

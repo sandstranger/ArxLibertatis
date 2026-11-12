@@ -57,6 +57,14 @@
 	#define ARX_PLATFORM ARX_PLATFORM_UNKNOWN
 #endif
 
+// A 32 bit process on Android (armeabi-v7a): devices with 1-2 GB of RAM and at most 3 GB of address
+// space. Caches and scratch buffers are sized for that.
+#if defined(__ANDROID__) && !defined(__LP64__)
+	#define ARX_LOW_MEMORY 1
+#else
+	#define ARX_LOW_MEMORY 0
+#endif
+
 /* ---------------------------------------------------------
                           Compilers
 ------------------------------------------------------------*/
