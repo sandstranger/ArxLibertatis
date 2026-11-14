@@ -396,20 +396,36 @@ void OpenGLRenderer::initialize() {
 		m_glesMaxMSAASamples = 0;
 		m_glesMSAAResolveBlit = false;
 		m_glesMSAABlitANGLE = false;
+		/*
+		 * ANGLE on Vulkan lists GL_EXT_multisampled_render_to_texture on some GPUs (Adreno) even
+		 * where the Vulkan driver lacks VK_EXT_multisampled_render_to_single_sampled, and then
+		 * emulates it with a hidden multisampled image: resolved at the end of each render pass and
+		 * "unresolved" with a full-screen draw when a pass starts by loading. That path also copies
+		 * the resolved texture into the window afterwards (one more full-screen pass). The blit
+		 * resolve below goes straight into the window as a resolve attachment of the open render
+		 * pass, so under ANGLE it comes first whenever it is available.
+		 */
+		const char * glRendererName = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+		const char * glVersionName = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+		const bool angle = (glRendererName && std::strstr(glRendererName, "ANGLE"))
+		                   || (glVersionName && std::strstr(glVersionName, "ANGLE"));
+		const bool es3Blit = m_glesIsES3 && glRenderbufferStorageMultisample && glBlitFramebuffer
+		                     && glGetFramebufferAttachmentParameteriv;
+		const bool angleBlit = gl.has("GL_ANGLE_framebuffer_multisample") && gl.has("GL_ANGLE_framebuffer_blit")
+		                       && gl.has("GL_OES_rgb8_rgba8")
+		                       && glRenderbufferStorageMultisampleANGLE && glBlitFramebufferANGLE;
 		if(gl.has("GL_EXT_multisampled_render_to_texture")
-		   && glFramebufferTexture2DMultisampleEXT && glRenderbufferStorageMultisampleEXT) {
+		   && glFramebufferTexture2DMultisampleEXT && glRenderbufferStorageMultisampleEXT
+		   && !(angle && (es3Blit || angleBlit))) {
 			GLint maxSamples = 0;
 			glGetIntegerv(GL_MAX_SAMPLES_EXT, &maxSamples);
 			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
-		} else if(m_glesIsES3 && glRenderbufferStorageMultisample && glBlitFramebuffer
-		          && glGetFramebufferAttachmentParameteriv) {
+		} else if(es3Blit) {
 			GLint maxSamples = 0;
 			glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
 			m_glesMaxMSAASamples = std::max(0, int(maxSamples));
 			m_glesMSAAResolveBlit = true;
-		} else if(gl.has("GL_ANGLE_framebuffer_multisample") && gl.has("GL_ANGLE_framebuffer_blit")
-		          && gl.has("GL_OES_rgb8_rgba8")
-		          && glRenderbufferStorageMultisampleANGLE && glBlitFramebufferANGLE) {
+		} else if(angleBlit) {
 			// OpenGL ES 2.0 feature level under ANGLE: the same multisampled framebuffer and
 			// resolve through GL_ANGLE_framebuffer_multisample and GL_ANGLE_framebuffer_blit.
 			GLint maxSamples = 0;
@@ -445,7 +461,7 @@ void OpenGLRenderer::initialize() {
 				m_glesWindowColorFormat = GL_RGBA8_OES;
 			}
 		}
-		LogInfo << "GLES render passes: "
+		LogInfo << "GLES render passes" << (angle ? " (ANGLE)" : "") << ": "
 		        << (m_hasInvalidateFramebuffer ? "glInvalidateFramebuffer"
 		            : m_hasDiscardFramebuffer ? "glDiscardFramebufferEXT" : "no invalidation")
 		        << ", MSAA: "
@@ -1593,7 +1609,25 @@ void OpenGLRenderer::flushState() {
 		}
 		m_glstate = m_state;
 	}
-	m_glesAlphaCutout = m_state.getAlphaCutout();
+	/*
+	 * A program with discard keeps tile-based GPUs from resolving depth/stencil early for the
+	 * whole draw (Mali forward pixel kill and early ZS, Adreno LRZ). The cutout variant is only
+	 * used where a fully transparent texel would otherwise change something:
+	 *  - opaque cutouts (threshold 0.5): the discard is the alpha test itself;
+	 *  - alpha-to-coverage into the multisampled framebuffer: alpha 0 has no coverage, neither
+	 *    color nor depth is written - no discard;
+	 *  - blended cutouts (threshold 0): needed when depth is written, or when the blend adds
+	 *    the color whatever its alpha; SrcAlpha with One or InvSrcAlpha and no depth write leave
+	 *    the framebuffer as it was for alpha 0 - no discard.
+	 */
+	bool cutoutDiscard = m_state.getAlphaCutout();
+	if(cutoutDiscard && alphaToCoverage && m_glesMSAAFramebuffer) {
+		cutoutDiscard = false;
+	} else if(cutoutDiscard && m_glesAlphaThreshold == 0.f && !m_state.getDepthWrite()
+	          && srcFactor == BlendSrcAlpha && (dstFactor == BlendOne || dstFactor == BlendInvSrcAlpha)) {
+		cutoutDiscard = false;
+	}
+	m_glesAlphaCutout = cutoutDiscard;
 	// GL_TEXTURE0 is always the active unit outside of GLTextureStage::apply().
 	for(size_t i = 0; i < m_TextureStages.size() && i <= maxTextureStage; ++i) {
 		GetTextureStage(i)->apply();
