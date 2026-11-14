@@ -249,6 +249,17 @@ private:
 	bool initializeGLESProgram();
 	void shutdownGLESProgram();
 	void prepareGLESProgram(bool transformed, bool lit);
+
+	// RAM cache of linked programs (see acquireGLESProgram() in OpenGLRenderer.cpp)
+	struct GLESProgram;
+	GLESProgram * acquireGLESProgram(size_t variant);
+	bool buildGLESProgramVariant(size_t variant);
+	std::string glesProgramDefines(size_t variant) const;
+	void touchGLESProgram(size_t variant);
+	void unlinkGLESProgram(size_t variant);
+	void evictGLESProgram(size_t variant);
+	void trimGLESPrograms(u64 minIdleFrames);
+	void logGLESProgramCacheStats(const char * when) const;
 	
 	//! Whether the next draw of this vertex type is lit by the GPU
 	template <class Vertex>
@@ -280,10 +291,20 @@ private:
 	 * kill on Mali for every draw that uses it, so opaque geometry must not share a
 	 * program with alpha-tested geometry.
 	 * Each program keeps its own uniform values, so the caches are per program.
+	 *
+	 * The slots are a bounded RAM cache of live program objects: a slot only holds a
+	 * GL program while it is resident. Resident slots form an LRU list (indices into
+	 * m_glesPrograms, no allocations); evicted programs are deleted with glDeleteProgram()
+	 * and rebuilt from the disk binary cache or from source on their next use, with all
+	 * uniform locations and cached uniform values reset.
 	 */
 	struct GLESProgram {
 		GLuint id = 0;
 		bool cacheValid = false;
+		int lruPrev = -1; //!< more recently used slot
+		int lruNext = -1; //!< less recently used slot
+		u64 lastUsedFrame = 0;
+		size_t estimatedBytes = 0; //!< estimate only, see glesProgramEstimate()
 		GLint uniformMVP = -1;
 		GLint uniformFogPlane = -1;
 		GLint uniformFogParams = -1;
@@ -320,6 +341,32 @@ private:
 	
 	GLESProgram m_glesPrograms[GLESProgramVariantCount];
 	GLuint m_glesBoundProgram = 0;
+
+	// Program RAM cache state
+	bool m_glesProgramAvailable[GLESProgramVariantCount] = {}; //!< variant may be built on this context
+	bool m_glesProgramFailed[GLESProgramVariantCount] = {};    //!< build failed, not retried
+	int m_glesProgramMRU = -1;
+	int m_glesProgramLRU = -1;
+	size_t m_glesProgramCount = 0;
+	size_t m_glesProgramBytes = 0;
+	u64 m_glesFrame = 0;
+	// Disk binary cache, kept for rebuilding evicted programs after initialization
+	bool m_glesProgramCacheEnabled = false;
+	std::string m_glesProgramCacheDirectory;
+	u64 m_glesProgramCacheDriverHash = 0;
+	struct GLESProgramCacheStats {
+		size_t hits = 0;
+		size_t misses = 0;
+		size_t evictions = 0;
+		size_t diskLoads = 0;
+		size_t diskFailures = 0; //!< cached binary present but unusable (rebuilt from source)
+		size_t compiles = 0;
+		size_t buildFailures = 0;
+		size_t peakCount = 0;
+		size_t peakBytes = 0;
+		size_t overLimit = 0;    //!< trims that could not reach the limits (working set too large)
+	};
+	GLESProgramCacheStats m_glesProgramStats;
 	bool m_hasCoreMapBufferRange = false;
 	std::vector<GLint> m_glesProgramBinaryFormats;
 	bool m_hasInvalidateFramebuffer = false;

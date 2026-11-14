@@ -1737,6 +1737,30 @@ const GLuint glesCopyTextureUnit = 3;
 //! Number of texture stages compiled into each stage bucket of the shader variants
 const int glesStageCounts[3] = { 0, 1, 3 };
 
+/*
+ * Limits of the RAM cache of linked programs. Both apply independently: the number of
+ * live program objects, and their estimated size. OpenGL ES has no query for the memory a
+ * linked program takes inside the driver; the estimate is the length of its program binary
+ * (GL_PROGRAM_BINARY_LENGTH, the serialized form, available with program binary support on
+ * the OpenGL ES 3.0 feature level) or a fixed per-program value where that is not available.
+ * It is used for budgeting only and is not the driver's actual allocation.
+ */
+#if ARX_LOW_MEMORY
+const size_t glesProgramCacheMaxPrograms = 16;
+const size_t glesProgramCacheMaxBytes = 2 * 1024 * 1024;
+#else
+const size_t glesProgramCacheMaxPrograms = 32;
+const size_t glesProgramCacheMaxBytes = 8 * 1024 * 1024;
+#endif
+const size_t glesProgramDefaultEstimate = 64 * 1024;
+
+/*
+ * A program is only evicted after it has not been used for this many frames. A working set
+ * larger than the limits then stays resident (the cache runs over its limits, counted in
+ * the statistics) instead of being deleted and rebuilt within the same few frames.
+ */
+const u64 glesProgramMinIdleFrames = 180;
+
 GLuint compileGLESShader(GLenum type, const std::string & source) {
 	GLuint shader = glCreateShader(type);
 	if(!shader) {
@@ -1790,6 +1814,7 @@ struct GLESProgramCache {
 	std::vector<std::string> usedFiles;
 	size_t loaded = 0;
 	size_t compiled = 0;
+	size_t failed = 0; //!< binaries that existed but could not be used
 };
 
 u64 hashBytes(u64 hash, const void * data, size_t size) {
@@ -1814,7 +1839,7 @@ std::string glesProgramCacheFile(u64 key) {
 	return name;
 }
 
-GLuint loadCachedGLESProgram(const GLESProgramCache & cache, const std::string & file, u64 key) {
+GLuint loadCachedGLESProgram(GLESProgramCache & cache, const std::string & file, u64 key) {
 
 	const std::string path = cache.directory + "/" + file;
 	FILE * stream = std::fopen(path.c_str(), "rb");
@@ -1822,6 +1847,7 @@ GLuint loadCachedGLESProgram(const GLESProgramCache & cache, const std::string &
 		return 0;
 	}
 
+	cache.failed++; // undone below when the binary is usable
 	GLESProgramCacheHeader header;
 	std::vector<char> binary;
 	// Only formats the driver lists may be passed to glProgramBinary(): anything else is
@@ -1855,6 +1881,7 @@ GLuint loadCachedGLESProgram(const GLESProgramCache & cache, const std::string &
 		return 0;
 	}
 
+	cache.failed--;
 	return program;
 }
 
@@ -1921,15 +1948,19 @@ void cleanGLESProgramCache(const GLESProgramCache & cache) {
 	closedir(directory);
 }
 
+u64 glesProgramCacheKey(u64 driverHash, const std::string & vertexSource, const std::string & fragmentSource) {
+	u64 key = hashBytes(driverHash, vertexSource.data(), vertexSource.size());
+	key = hashBytes(key, "", 1);
+	return hashBytes(key, fragmentSource.data(), fragmentSource.size());
+}
+
 GLuint buildGLESProgram(const std::string & vertexSource, const std::string & fragmentSource,
                         GLESProgramCache * cache) {
 
 	u64 key = 0;
 	std::string file;
 	if(cache) {
-		key = hashBytes(cache->driverHash, vertexSource.data(), vertexSource.size());
-		key = hashBytes(key, "", 1);
-		key = hashBytes(key, fragmentSource.data(), fragmentSource.size());
+		key = glesProgramCacheKey(cache->driverHash, vertexSource, fragmentSource);
 		file = glesProgramCacheFile(key);
 		cache->usedFiles.push_back(file);
 		if(GLuint program = loadCachedGLESProgram(*cache, file, key)) {
@@ -2289,8 +2320,12 @@ bool OpenGLRenderer::initializeGLESProgram() {
 
 	shutdownGLESProgram();
 
-	// Compile and link everything up front, never while rendering. On the OpenGL ES 3.0
-	// feature level the linked programs are cached on disk when a cache directory is set.
+	// Programs live in a bounded RAM cache (acquireGLESProgram()). The variants a scene needs
+	// most are built here, never while rendering; the others are built on first use. On the
+	// OpenGL ES 3.0 feature level linked programs are cached on disk when a cache directory is
+	// set, so a rebuild after an eviction is a binary load rather than a compile.
+	m_glesProgramStats = GLESProgramCacheStats();
+	m_glesProgramCacheEnabled = false;
 	GLESProgramCache cacheStorage;
 	GLESProgramCache * cache = nullptr;
 	if(m_glesIsES3 && !m_glesProgramBinaryFormats.empty() && !g_glesProgramCacheDir.empty()) {
@@ -2304,15 +2339,12 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		}
 		cacheStorage.driverHash = driverHash;
 		cache = &cacheStorage;
+		m_glesProgramCacheEnabled = true;
+		m_glesProgramCacheDirectory = cacheStorage.directory;
+		m_glesProgramCacheDriverHash = driverHash;
 	}
 
 	const std::string prefix = g_useGLES2_0 ? glesShaderPrefix100 : glesShaderPrefix300;
-
-	const char * samplerNames[3] = { "uTexture0", "uTexture1", "uTexture2" };
-	const char * stageANames[3] = { "uStageA0", "uStageA1", "uStageA2" };
-	const char * stageBNames[3] = { "uStageB0", "uStageB1", "uStageB2" };
-	const char * stageCNames[3] = { "uStageC0", "uStageC1", "uStageC2" };
-	const char * lodBiasNames[3] = { "uLodBias0", "uLodBias1", "uLodBias2" };
 
 	// Lighting variants are an optimization: if they fail, the CPU lights everything
 	bool lighting = m_glesIsES3 && m_glesLightingSupported;
@@ -2320,68 +2352,72 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	m_glesLightSetBufferSize = 0;
 
 	for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
-
 		const bool lit = (variant & GLESProgramLighting) != 0;
-		if(lit && !lighting) {
+		m_glesProgramAvailable[variant] = !lit || lighting;
+		m_glesProgramFailed[variant] = false;
+	}
+
+	// Prewarm: the variants of an ordinary scene, most frequent first, within the count
+	// limit. The gamma bit follows the current brightness setting.
+	const size_t gammaBit = (std::abs(m_glesGamma - 1.f) > 0.001f) ? size_t(GLESProgramGamma) : 0;
+	std::vector<size_t> prewarm;
+	const size_t buckets[3] = { 1, 2, 0 };
+	for(size_t fog = 0; fog < 2; fog++) {
+		for(size_t bucket : buckets) {
+			for(size_t cutout = 0; cutout < 2; cutout++) {
+				size_t variant = (bucket << GLESProgramStageBucketShift) | gammaBit;
+				variant |= (fog == 0) ? size_t(GLESProgramFog) : 0; // fogged world geometry first
+				variant |= cutout ? size_t(GLESProgramAlphaCutout) : 0;
+				prewarm.push_back(variant);
+				if(lighting && bucket != 0) {
+					prewarm.push_back(variant | GLESProgramLighting);
+				}
+			}
+		}
+	}
+
+	size_t built = 0;
+	for(size_t variant : prewarm) {
+		if(built >= glesProgramCacheMaxPrograms) {
+			break;
+		}
+		const bool lit = (variant & GLESProgramLighting) != 0;
+		if(!m_glesProgramAvailable[variant]) {
 			continue;
 		}
-
-		std::string defines = prefix;
-		defines += "#define ARX_STAGES ";
-		defines += std::to_string(glesStageCounts[variant >> GLESProgramStageBucketShift]);
-		defines += "\n";
-		if(variant & GLESProgramAlphaCutout) {
-			defines += "#define ARX_ALPHA_CUTOUT 1\n";
-		}
-		if(variant & GLESProgramFog) {
-			defines += "#define ARX_FOG 1\n";
-		}
-		if(variant & GLESProgramGamma) {
-			defines += "#define ARX_GAMMA 1\n";
+		if(buildGLESProgramVariant(variant)) {
+			built++;
+			continue;
 		}
 		if(lit) {
-			defines += "#define ARX_LIGHTING 1\n";
-			defines += "#define ARX_MAX_LIGHTS " + std::to_string(m_glesMaxLights) + "\n";
-			defines += "#define ARX_MAX_LIGHT_SETS " + std::to_string(m_glesMaxLightSets) + "\n";
-		}
-
-		GLuint id = buildGLESProgram(defines + glesVertexShader, defines + glesFragmentShader, cache);
-		if(lit && (!id || !setupGLESLightingProgram(id))) {
+			// A lit program that does not build or lacks its uniform blocks: CPU lighting
 			LogWarning << "GLES lighting programs are not available, lighting on the CPU";
-			if(id) {
-				glDeleteProgram(id);
-			}
 			lighting = false;
+			m_glesLighting = false;
+			for(size_t other = 0; other < GLESProgramVariantCount; other++) {
+				if(other & GLESProgramLighting) {
+					if(m_glesPrograms[other].id) {
+						evictGLESProgram(other);
+					}
+					m_glesProgramAvailable[other] = false;
+				}
+			}
 			continue;
 		}
-		if(!id) {
-			shutdownGLESProgram();
-			return false;
-		}
+		shutdownGLESProgram();
+		return false;
+	}
 
-		GLESProgram & program = m_glesPrograms[variant];
-		program = GLESProgram();
-		program.id = id;
-		program.uniformMVP = glGetUniformLocation(id, "uMVP");
-		program.uniformFogPlane = glGetUniformLocation(id, "uFogPlane");
-		program.uniformFogParams = glGetUniformLocation(id, "uFogParams");
-		program.uniformFogColor = glGetUniformLocation(id, "uFogColor");
-		program.uniformAlphaThreshold = glGetUniformLocation(id, "uAlphaThreshold");
-		program.uniformInvGamma = glGetUniformLocation(id, "uInvGamma");
-		program.uniformGammaInverted = glGetUniformLocation(id, "uGammaInverted");
-		glUseProgram(id);
-		m_glesBoundProgram = id;
-		for(GLint i = 0; i < 3; ++i) {
-			GLint sampler = glGetUniformLocation(id, samplerNames[i]);
-			if(sampler >= 0) {
-				glUniform1i(sampler, i);
+	// Binary files of every variant this context can build stay in the disk cache, prewarmed or not
+	if(cache) {
+		for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
+			if(m_glesProgramAvailable[variant]) {
+				const std::string defines = glesProgramDefines(variant);
+				const u64 key = glesProgramCacheKey(cache->driverHash, defines + glesVertexShader,
+				                                    defines + glesFragmentShader);
+				cache->usedFiles.push_back(glesProgramCacheFile(key));
 			}
-			program.uniformStageA[i] = glGetUniformLocation(id, stageANames[i]);
-			program.uniformStageB[i] = glGetUniformLocation(id, stageBNames[i]);
-			program.uniformStageC[i] = glGetUniformLocation(id, stageCNames[i]);
-			program.uniformLodBias[i] = glGetUniformLocation(id, lodBiasNames[i]);
 		}
-
 	}
 
 	// Copy of the resolved MSAA image into the window surface. Only the
@@ -2417,10 +2453,13 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		lighting = false;
 	}
 	if(!lighting) {
+		m_glesLighting = false;
 		for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
-			if((variant & GLESProgramLighting) && m_glesPrograms[variant].id) {
-				glDeleteProgram(m_glesPrograms[variant].id);
-				m_glesPrograms[variant] = GLESProgram();
+			if(variant & GLESProgramLighting) {
+				if(m_glesPrograms[variant].id) {
+					evictGLESProgram(variant);
+				}
+				m_glesProgramAvailable[variant] = false;
 			}
 		}
 		shutdownGLESLighting();
@@ -2433,13 +2472,261 @@ bool OpenGLRenderer::initializeGLESProgram() {
 
 	if(cache) {
 		cleanGLESProgramCache(*cache);
-		LogInfo << "GLES program cache: " << cache->loaded << " loaded, " << cache->compiled
-		        << " compiled (" << cache->directory << ")";
+		LogInfo << "GLES program cache: " << m_glesProgramStats.diskLoads << " loaded, "
+		        << m_glesProgramStats.compiles << " compiled (" << cache->directory << ")";
 	} else if(m_glesIsES3 && !g_glesProgramCacheDir.empty()) {
 		LogInfo << "GLES program cache disabled: the driver has no program binary formats";
 	}
+	LogInfo << "GLES programs: " << m_glesProgramCount << " prewarmed, RAM cache limit "
+	        << glesProgramCacheMaxPrograms << " programs / " << (glesProgramCacheMaxBytes / 1024)
+	        << " KiB (estimated)";
 
 	return true;
+}
+
+std::string OpenGLRenderer::glesProgramDefines(size_t variant) const {
+
+	std::string defines = g_useGLES2_0 ? glesShaderPrefix100 : glesShaderPrefix300;
+	defines += "#define ARX_STAGES ";
+	defines += std::to_string(glesStageCounts[variant >> GLESProgramStageBucketShift]);
+	defines += "\n";
+	if(variant & GLESProgramAlphaCutout) {
+		defines += "#define ARX_ALPHA_CUTOUT 1\n";
+	}
+	if(variant & GLESProgramFog) {
+		defines += "#define ARX_FOG 1\n";
+	}
+	if(variant & GLESProgramGamma) {
+		defines += "#define ARX_GAMMA 1\n";
+	}
+	if(variant & GLESProgramLighting) {
+		defines += "#define ARX_LIGHTING 1\n";
+		defines += "#define ARX_MAX_LIGHTS " + std::to_string(m_glesMaxLights) + "\n";
+		defines += "#define ARX_MAX_LIGHT_SETS " + std::to_string(m_glesMaxLightSets) + "\n";
+	}
+	return defines;
+}
+
+/*!
+ * Builds the program of a variant into its slot and makes it the most recently used one:
+ * from the disk binary cache when possible, else from source. Uniform locations, sampler
+ * units and uniform block bindings are set up again, the uniform value cache starts empty,
+ * so a rebuilt program behaves exactly like one that was never evicted.
+ */
+bool OpenGLRenderer::buildGLESProgramVariant(size_t variant) {
+
+	arx_assert(variant < GLESProgramVariantCount && !m_glesPrograms[variant].id);
+
+	GLESProgramCache cacheStorage;
+	GLESProgramCache * cache = nullptr;
+	if(m_glesProgramCacheEnabled) {
+		cacheStorage.directory = m_glesProgramCacheDirectory;
+		cacheStorage.driverHash = m_glesProgramCacheDriverHash;
+		cacheStorage.formats = &m_glesProgramBinaryFormats;
+		cache = &cacheStorage;
+	}
+
+	const std::string defines = glesProgramDefines(variant);
+	GLuint id = buildGLESProgram(defines + glesVertexShader, defines + glesFragmentShader, cache);
+	if(cache) {
+		m_glesProgramStats.diskLoads += cache->loaded;
+		m_glesProgramStats.diskFailures += cache->failed;
+		m_glesProgramStats.compiles += cache->compiled;
+	} else if(id) {
+		m_glesProgramStats.compiles++;
+	}
+	if(id && (variant & GLESProgramLighting)) {
+		// The light buffers are sized for the uniform blocks when they are created: a program
+		// built later must not need bigger ones (all lit variants declare the same blocks).
+		const size_t lightSize = m_glesLightBufferSize;
+		const size_t setSize = m_glesLightSetBufferSize;
+		const bool buffersCreated = m_glesLightBuffer != 0;
+		if(!setupGLESLightingProgram(id)
+		   || (buffersCreated && (m_glesLightBufferSize > lightSize || m_glesLightSetBufferSize > setSize))) {
+			m_glesLightBufferSize = lightSize;
+			m_glesLightSetBufferSize = setSize;
+			glDeleteProgram(id);
+			id = 0;
+		}
+	}
+	if(!id) {
+		m_glesProgramStats.buildFailures++;
+		return false;
+	}
+
+	GLESProgram & program = m_glesPrograms[variant];
+	program = GLESProgram();
+	program.id = id;
+	program.uniformMVP = glGetUniformLocation(id, "uMVP");
+	program.uniformFogPlane = glGetUniformLocation(id, "uFogPlane");
+	program.uniformFogParams = glGetUniformLocation(id, "uFogParams");
+	program.uniformFogColor = glGetUniformLocation(id, "uFogColor");
+	program.uniformAlphaThreshold = glGetUniformLocation(id, "uAlphaThreshold");
+	program.uniformInvGamma = glGetUniformLocation(id, "uInvGamma");
+	program.uniformGammaInverted = glGetUniformLocation(id, "uGammaInverted");
+
+	const char * samplerNames[3] = { "uTexture0", "uTexture1", "uTexture2" };
+	const char * stageANames[3] = { "uStageA0", "uStageA1", "uStageA2" };
+	const char * stageBNames[3] = { "uStageB0", "uStageB1", "uStageB2" };
+	const char * stageCNames[3] = { "uStageC0", "uStageC1", "uStageC2" };
+	const char * lodBiasNames[3] = { "uLodBias0", "uLodBias1", "uLodBias2" };
+	glUseProgram(id);
+	m_glesBoundProgram = id;
+	for(GLint i = 0; i < 3; ++i) {
+		GLint sampler = glGetUniformLocation(id, samplerNames[i]);
+		if(sampler >= 0) {
+			glUniform1i(sampler, i);
+		}
+		program.uniformStageA[i] = glGetUniformLocation(id, stageANames[i]);
+		program.uniformStageB[i] = glGetUniformLocation(id, stageBNames[i]);
+		program.uniformStageC[i] = glGetUniformLocation(id, stageCNames[i]);
+		program.uniformLodBias[i] = glGetUniformLocation(id, lodBiasNames[i]);
+	}
+
+	// Size estimate for the byte limit (see glesProgramCacheMaxBytes)
+	GLint length = 0;
+	if(!m_glesProgramBinaryFormats.empty()) {
+		glGetProgramiv(id, GL_PROGRAM_BINARY_LENGTH, &length);
+	}
+	program.estimatedBytes = (length > 0) ? size_t(length) : glesProgramDefaultEstimate;
+
+	// Most recently used
+	program.lastUsedFrame = m_glesFrame;
+	program.lruPrev = -1;
+	program.lruNext = m_glesProgramMRU;
+	if(m_glesProgramMRU >= 0) {
+		m_glesPrograms[m_glesProgramMRU].lruPrev = int(variant);
+	}
+	m_glesProgramMRU = int(variant);
+	if(m_glesProgramLRU < 0) {
+		m_glesProgramLRU = int(variant);
+	}
+	m_glesProgramCount++;
+	m_glesProgramBytes += program.estimatedBytes;
+	m_glesProgramStats.peakCount = std::max(m_glesProgramStats.peakCount, m_glesProgramCount);
+	m_glesProgramStats.peakBytes = std::max(m_glesProgramStats.peakBytes, m_glesProgramBytes);
+
+	return true;
+}
+
+void OpenGLRenderer::unlinkGLESProgram(size_t variant) {
+
+	GLESProgram & program = m_glesPrograms[variant];
+	if(program.lruPrev >= 0) {
+		m_glesPrograms[program.lruPrev].lruNext = program.lruNext;
+	} else {
+		m_glesProgramMRU = program.lruNext;
+	}
+	if(program.lruNext >= 0) {
+		m_glesPrograms[program.lruNext].lruPrev = program.lruPrev;
+	} else {
+		m_glesProgramLRU = program.lruPrev;
+	}
+	program.lruPrev = program.lruNext = -1;
+}
+
+void OpenGLRenderer::touchGLESProgram(size_t variant) {
+
+	GLESProgram & program = m_glesPrograms[variant];
+	program.lastUsedFrame = m_glesFrame;
+	if(m_glesProgramMRU == int(variant)) {
+		return;
+	}
+	unlinkGLESProgram(variant);
+	program.lruNext = m_glesProgramMRU;
+	if(m_glesProgramMRU >= 0) {
+		m_glesPrograms[m_glesProgramMRU].lruPrev = int(variant);
+	}
+	m_glesProgramMRU = int(variant);
+	if(m_glesProgramLRU < 0) {
+		m_glesProgramLRU = int(variant);
+	}
+}
+
+/*!
+ * Deletes the GL program of a resident variant. A program that is the current one is
+ * unbound first, so m_glesBoundProgram never names a deleted object: a later program the
+ * driver gives the same name to is bound with glUseProgram() like any other.
+ */
+void OpenGLRenderer::evictGLESProgram(size_t variant) {
+
+	GLESProgram & program = m_glesPrograms[variant];
+	if(!program.id) {
+		return;
+	}
+	unlinkGLESProgram(variant);
+	if(m_glesBoundProgram == program.id) {
+		glUseProgram(0);
+		m_glesBoundProgram = 0;
+	}
+	glDeleteProgram(program.id);
+	m_glesProgramCount--;
+	m_glesProgramBytes -= program.estimatedBytes;
+	program = GLESProgram(); // uniform locations and cached values go with the object
+}
+
+//! Evicts least recently used programs idle for at least minIdleFrames until both limits hold
+void OpenGLRenderer::trimGLESPrograms(u64 minIdleFrames) {
+
+	if(m_glesProgramCount <= glesProgramCacheMaxPrograms && m_glesProgramBytes <= glesProgramCacheMaxBytes) {
+		return;
+	}
+	size_t evicted = 0;
+	while(m_glesProgramLRU >= 0
+	      && (m_glesProgramCount > glesProgramCacheMaxPrograms || m_glesProgramBytes > glesProgramCacheMaxBytes)) {
+		const size_t variant = size_t(m_glesProgramLRU);
+		if(m_glesFrame - m_glesPrograms[variant].lastUsedFrame < minIdleFrames) {
+			// Everything further up the list was used even more recently
+			m_glesProgramStats.overLimit++;
+			break;
+		}
+		evictGLESProgram(variant);
+		m_glesProgramStats.evictions++;
+		evicted++;
+	}
+	if(evicted) {
+		LogDebug("GLES program cache: evicted " << evicted << ", " << m_glesProgramCount << " programs / "
+		         << (m_glesProgramBytes / 1024) << " KiB resident");
+	}
+}
+
+/*!
+ * The program of a variant, built if it is not resident (disk binary cache, else source).
+ * A lookup is an index into m_glesPrograms; a hit moves the slot to the front of the LRU list.
+ */
+OpenGLRenderer::GLESProgram * OpenGLRenderer::acquireGLESProgram(size_t variant) {
+
+	GLESProgram & program = m_glesPrograms[variant];
+	if(program.id) {
+		m_glesProgramStats.hits++;
+		touchGLESProgram(variant);
+		return &program;
+	}
+
+	if(!m_glesProgramAvailable[variant] || m_glesProgramFailed[variant]) {
+		return nullptr;
+	}
+
+	m_glesProgramStats.misses++;
+	if(!buildGLESProgramVariant(variant)) {
+		m_glesProgramFailed[variant] = true;
+		LogError << "Could not build GLES program variant " << variant;
+		return nullptr;
+	}
+	LogDebug("GLES program variant " << variant << " built while rendering");
+
+	trimGLESPrograms(glesProgramMinIdleFrames);
+	return &program;
+}
+
+void OpenGLRenderer::logGLESProgramCacheStats(const char * when) const {
+	const GLESProgramCacheStats & s = m_glesProgramStats;
+	LogInfo << "GLES program cache (" << when << "): " << s.hits << " hits, " << s.misses << " misses, "
+	        << s.evictions << " evictions, " << s.diskLoads << " disk loads, " << s.diskFailures
+	        << " unusable binaries, " << s.compiles << " compiles, " << s.buildFailures << " failures, "
+	        << m_glesProgramCount << " resident (peak " << s.peakCount << "), "
+	        << (m_glesProgramBytes / 1024) << " KiB estimated (peak " << (s.peakBytes / 1024) << " KiB), "
+	        << s.overLimit << " trims over limit";
 }
 
 void OpenGLRenderer::shutdownGLESProgram() {
@@ -2451,12 +2738,24 @@ void OpenGLRenderer::shutdownGLESProgram() {
 		m_glesBoundProgram = 0;
 	}
 
-	for(GLESProgram & program : m_glesPrograms) {
+	if(m_glesProgramStats.hits || m_glesProgramStats.misses) {
+		logGLESProgramCacheStats("shutdown");
+	}
+
+	// Context destroyed or renderer shut down: every program object of this context goes,
+	// nothing of the LRU state survives into the next context.
+	for(size_t variant = 0; variant < GLESProgramVariantCount; variant++) {
+		GLESProgram & program = m_glesPrograms[variant];
 		if(program.id) {
 			glDeleteProgram(program.id);
 		}
 		program = GLESProgram();
+		m_glesProgramAvailable[variant] = false;
+		m_glesProgramFailed[variant] = false;
 	}
+	m_glesProgramMRU = m_glesProgramLRU = -1;
+	m_glesProgramCount = 0;
+	m_glesProgramBytes = 0;
 
 	if(m_glesCopyProgram) {
 		glDeleteProgram(m_glesCopyProgram);
@@ -2501,10 +2800,11 @@ void OpenGLRenderer::prepareGLESProgram(bool transformed, bool lit) {
 		variant |= GLESProgramLighting;
 	}
 
-	GLESProgram & program = m_glesPrograms[variant];
-	if(!program.id) {
+	GLESProgram * resident = acquireGLESProgram(variant);
+	if(!resident) {
 		return;
 	}
+	GLESProgram & program = *resident;
 
 	if(m_glesBoundProgram != program.id) {
 		glUseProgram(program.id);
@@ -2995,6 +3295,10 @@ void OpenGLRenderer::beginFrame() {
 }
 
 void OpenGLRenderer::endFrame() {
+
+	// Programs that have not been used for a while leave the RAM cache when it is over its limits
+	m_glesFrame++;
+	trimGLESPrograms(glesProgramMinIdleFrames);
 
 	if(m_glesMSAAFramebuffer) {
 		resolveMultisampleFramebuffer();
