@@ -434,6 +434,10 @@ void OpenGLRenderer::initialize() {
 			m_glesMSAAResolveBlit = true;
 			m_glesMSAABlitANGLE = true;
 		}
+		// Never more than 4x, whatever the driver offers (ANGLE's Vulkan backend reports 8x on
+		// Mali): on a tiler every sample costs tile memory and resolve work, and 8x shrinks the
+		// tiles for no visible gain.
+		m_glesMaxMSAASamples = std::min(m_glesMaxMSAASamples, 4);
 		if(m_glesMaxMSAASamples > 1) {
 			// The blit resolve can only become a resolve attachment if the multisampled color
 			// format matches the window surface, and the resolved texture of
