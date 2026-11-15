@@ -2127,17 +2127,24 @@ layout(std140) uniform ArxLightSets {
     ArxLightSet uLightSets[ARX_MAX_LIGHT_SETS];
 };
 mediump vec4 arxLighting() {
-    int set = int(aLightSet);
+    // Every index and the loop are bounded by constants: whatever a vertex reads (a light set
+    // past the ones uploaded for this scene holds whatever the fresh buffer memory held), the
+    // shader stays a short one. An unbounded count made a vertex job run for a second, until
+    // the GPU stopped it - and the GPU did nothing else meanwhile, the system's UI neither.
+    int set = int(min(aLightSet, uint(ARX_MAX_LIGHT_SETS - 1)));
     highp vec4 ambient = uLightSets[set].ambient;
     highp vec4 factor = uLightSets[set].factor;
     highp vec4 term = uLightSets[set].term;
     // The static lighting of the background is stored as bytes, restore the exact values
     highp vec3 vertexColor = aColor.rgb;
     highp vec3 color = ambient.rgb + floor(vertexColor * 255.0 + 0.5) * ambient.w;
-    int count = int(term.w);
-    for(int i = 0; i < count; i++) {
+    int count = clamp(int(term.w), 0, ARX_MAX_LIGHT_SET_SIZE);
+    for(int i = 0; i < ARX_MAX_LIGHT_SET_SIZE; i++) {
+        if(i >= count) {
+            break;
+        }
         highp uint word = uLightSets[set].lights[i >> 4][(i >> 2) & 3];
-        int light = int((word >> uint((i & 3) * 8)) & 255u);
+        int light = min(int((word >> uint((i & 3) * 8)) & 255u), ARX_MAX_LIGHTS - 1);
         highp vec4 position = uLights[light].position;
         highp vec3 toLight = position.xyz - aWorldPosition;
         highp float distance2 = dot(toLight, toLight);
@@ -2526,6 +2533,7 @@ std::string OpenGLRenderer::glesProgramDefines(size_t variant) const {
 		defines += "#define ARX_LIGHTING 1\n";
 		defines += "#define ARX_MAX_LIGHTS " + std::to_string(m_glesMaxLights) + "\n";
 		defines += "#define ARX_MAX_LIGHT_SETS " + std::to_string(m_glesMaxLightSets) + "\n";
+		defines += "#define ARX_MAX_LIGHT_SET_SIZE " + std::to_string(glesMaxLightSetSize) + "\n";
 	}
 	return defines;
 }
