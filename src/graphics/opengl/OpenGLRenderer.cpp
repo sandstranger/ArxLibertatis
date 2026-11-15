@@ -1772,28 +1772,17 @@ const GLuint glesCopyTextureUnit = 3;
 const int glesStageCounts[3] = { 0, 1, 3 };
 
 /*
- * Limits of the RAM cache of linked programs. Both apply independently: the number of
- * live program objects, and their estimated size. OpenGL ES has no query for the memory a
- * linked program takes inside the driver; the estimate is the length of its program binary
- * (GL_PROGRAM_BINARY_LENGTH, the serialized form, available with program binary support on
- * the OpenGL ES 3.0 feature level) or a fixed per-program value where that is not available.
- * It is used for budgeting only and is not the driver's actual allocation.
+ * Linked programs are not evicted: a built variant stays until the renderer shuts down.
+ *
+ * There are only GLESProgramVariantCount of them, an ordinary scene uses 15-20, and all of them
+ * resident take a few MB with a native driver and some 10-20 MB under ANGLE - next to the level's
+ * textures, even on ARMv7. What an eviction saved was paid back with a hitch every time the
+ * variant came back: a program binary load, and under ANGLE new Vulkan shader modules and
+ * pipelines for it. With the ARMv7 limits (16 programs, 2 MB estimated, which ANGLE's large
+ * binaries filled with a handful) variants were rebuilt every few seconds: the freezes.
+ * The estimate below (GL_PROGRAM_BINARY_LENGTH, or this fixed value) is for the statistics only.
  */
-#if ARX_LOW_MEMORY
-const size_t glesProgramCacheMaxPrograms = 16;
-const size_t glesProgramCacheMaxBytes = 2 * 1024 * 1024;
-#else
-const size_t glesProgramCacheMaxPrograms = 32;
-const size_t glesProgramCacheMaxBytes = 8 * 1024 * 1024;
-#endif
 const size_t glesProgramDefaultEstimate = 64 * 1024;
-
-/*
- * A program is only evicted after it has not been used for this many frames. A working set
- * larger than the limits then stays resident (the cache runs over its limits, counted in
- * the statistics) instead of being deleted and rebuilt within the same few frames.
- */
-const u64 glesProgramMinIdleFrames = 180;
 
 GLuint compileGLESShader(GLenum type, const std::string & source) {
 	GLuint shader = glCreateShader(type);
@@ -2354,10 +2343,10 @@ bool OpenGLRenderer::initializeGLESProgram() {
 
 	shutdownGLESProgram();
 
-	// Programs live in a bounded RAM cache (acquireGLESProgram()). The variants a scene needs
-	// most are built here, never while rendering; the others are built on first use. On the
-	// OpenGL ES 3.0 feature level linked programs are cached on disk when a cache directory is
-	// set, so a rebuild after an eviction is a binary load rather than a compile.
+	// Programs are built once and stay resident (acquireGLESProgram(), see glesProgramDefaultEstimate).
+	// The variants of an ordinary scene are built here, never while rendering; the others on their
+	// first use. On the OpenGL ES 3.0 feature level linked programs are cached on disk when a cache
+	// directory is set, so building one is a binary load rather than a compile.
 	m_glesProgramStats = GLESProgramCacheStats();
 	m_glesProgramCacheEnabled = false;
 	GLESProgramCache cacheStorage;
@@ -2412,9 +2401,6 @@ bool OpenGLRenderer::initializeGLESProgram() {
 
 	size_t built = 0;
 	for(size_t variant : prewarm) {
-		if(built >= glesProgramCacheMaxPrograms) {
-			break;
-		}
 		const bool lit = (variant & GLESProgramLighting) != 0;
 		if(!m_glesProgramAvailable[variant]) {
 			continue;
@@ -2511,9 +2497,8 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	} else if(m_glesIsES3 && !g_glesProgramCacheDir.empty()) {
 		LogInfo << "GLES program cache disabled: the driver has no program binary formats";
 	}
-	LogInfo << "GLES programs: " << m_glesProgramCount << " prewarmed, RAM cache limit "
-	        << glesProgramCacheMaxPrograms << " programs / " << (glesProgramCacheMaxBytes / 1024)
-	        << " KiB (estimated)";
+	LogInfo << "GLES programs: " << built << " prewarmed (" << (m_glesProgramBytes / 1024)
+	        << " KiB estimated), built programs stay resident";
 
 	return true;
 }
@@ -2617,7 +2602,7 @@ bool OpenGLRenderer::buildGLESProgramVariant(size_t variant) {
 		program.uniformLodBias[i] = glGetUniformLocation(id, lodBiasNames[i]);
 	}
 
-	// Size estimate for the byte limit (see glesProgramCacheMaxBytes)
+	// Size estimate for the statistics (see glesProgramDefaultEstimate)
 	GLint length = 0;
 	if(!m_glesProgramBinaryFormats.empty()) {
 		glGetProgramiv(id, GL_PROGRAM_BINARY_LENGTH, &length);
@@ -2699,31 +2684,6 @@ void OpenGLRenderer::evictGLESProgram(size_t variant) {
 	program = GLESProgram(); // uniform locations and cached values go with the object
 }
 
-//! Evicts least recently used programs idle for at least minIdleFrames until both limits hold
-void OpenGLRenderer::trimGLESPrograms(u64 minIdleFrames) {
-
-	if(m_glesProgramCount <= glesProgramCacheMaxPrograms && m_glesProgramBytes <= glesProgramCacheMaxBytes) {
-		return;
-	}
-	size_t evicted = 0;
-	while(m_glesProgramLRU >= 0
-	      && (m_glesProgramCount > glesProgramCacheMaxPrograms || m_glesProgramBytes > glesProgramCacheMaxBytes)) {
-		const size_t variant = size_t(m_glesProgramLRU);
-		if(m_glesFrame - m_glesPrograms[variant].lastUsedFrame < minIdleFrames) {
-			// Everything further up the list was used even more recently
-			m_glesProgramStats.overLimit++;
-			break;
-		}
-		evictGLESProgram(variant);
-		m_glesProgramStats.evictions++;
-		evicted++;
-	}
-	if(evicted) {
-		LogDebug("GLES program cache: evicted " << evicted << ", " << m_glesProgramCount << " programs / "
-		         << (m_glesProgramBytes / 1024) << " KiB resident");
-	}
-}
-
 /*!
  * The program of a variant, built if it is not resident (disk binary cache, else source).
  * A lookup is an index into m_glesPrograms; a hit moves the slot to the front of the LRU list.
@@ -2749,7 +2709,6 @@ OpenGLRenderer::GLESProgram * OpenGLRenderer::acquireGLESProgram(size_t variant)
 	}
 	LogDebug("GLES program variant " << variant << " built while rendering");
 
-	trimGLESPrograms(glesProgramMinIdleFrames);
 	return &program;
 }
 
@@ -3330,9 +3289,7 @@ void OpenGLRenderer::beginFrame() {
 
 void OpenGLRenderer::endFrame() {
 
-	// Programs that have not been used for a while leave the RAM cache when it is over its limits
 	m_glesFrame++;
-	trimGLESPrograms(glesProgramMinIdleFrames);
 
 	if(m_glesMSAAFramebuffer) {
 		resolveMultisampleFramebuffer();

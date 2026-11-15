@@ -258,7 +258,6 @@ private:
 	void touchGLESProgram(size_t variant);
 	void unlinkGLESProgram(size_t variant);
 	void evictGLESProgram(size_t variant);
-	void trimGLESPrograms(u64 minIdleFrames);
 	void logGLESProgramCacheStats(const char * when) const;
 	
 	//! Whether the next draw of this vertex type is lit by the GPU
