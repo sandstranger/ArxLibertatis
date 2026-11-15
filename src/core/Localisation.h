@@ -57,4 +57,11 @@ std::string_view getLocalised(std::string_view name, std::string_view default_va
 
 long getLocalisedKeyCount(std::string_view sectionname);
 
+/*!
+ * Every non-ASCII character used by the loaded localisation, once each, as UTF-8
+ *
+ * The fonts preload these glyphs, the ASCII ones they always do.
+ */
+std::string_view getLocalisedCharacters();
+
 #endif // ARX_CORE_LOCALISATION_H

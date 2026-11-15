@@ -204,6 +204,12 @@ bool Font::insertGlyph(Char character) {
 	return true;
 }
 
+void Font::preloadGlyphs(std::string_view text) {
+	if(insertMissingGlyphs(text.data(), text.data() + text.size())) {
+		m_textures->upload();
+	}
+}
+
 bool Font::insertMissingGlyphs(const char * begin, const char * end) {
 	
 	Char chr;

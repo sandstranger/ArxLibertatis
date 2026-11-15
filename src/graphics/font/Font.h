@@ -207,6 +207,19 @@ private:
 	 * \return true if the glyph textures were changed
 	 */
 	bool insertGlyph(Char character);
+
+public:
+
+	/*!
+	 * Rasterize the characters of this UTF-8 text that have no glyph yet and upload them
+	 *
+	 * For fonts created before play: glyphs inserted while drawing cost a texture upload in
+	 * the middle of a frame.
+	 */
+	void preloadGlyphs(std::string_view text);
+
+private:
+	
 	
 	/*!
 	 * Inserts any missing glyphs for the characters in the UTF-8 string [begin, end)

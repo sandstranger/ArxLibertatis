@@ -275,6 +275,9 @@ static Font * createFont(const res::path & fontFace, std::string_view configSize
 	Font * newFont = FontCache::getFont(fontFace, fontSize, unsigned(fontWeight));
 	if(!newFont) {
 		LogError << "Error loading font: " << fontFace << " of size " << fontSize;
+	} else {
+		// The glyphs of the language now, not one texture upload in the middle of a frame each
+		newFont->preloadGlyphs(getLocalisedCharacters());
 	}
 	
 	return newFont;

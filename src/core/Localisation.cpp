@@ -45,6 +45,8 @@
 namespace {
 
 IniReader g_localisation;
+std::string g_localisedCharacters; //!< getLocalisedCharacters(), empty until needed
+bool g_localisedCharactersValid = false;
 
 Language getLanguageInfo(std::string_view id) {
 	
@@ -332,6 +334,8 @@ bool initLocalisation() {
 	LogDebug("Starting localization");
 	
 	g_localisation.clear();
+	g_localisedCharacters.clear();
+	g_localisedCharactersValid = false;
 	
 	PakFile * file = nullptr;
 	if(!config.interface.language.empty()) {
@@ -396,6 +400,32 @@ bool initLocalisation() {
 
 long getLocalisedKeyCount(std::string_view sectionname) {
 	return g_localisation.getKeyCount(sectionname);
+}
+
+std::string_view getLocalisedCharacters() {
+	
+	if(!g_localisedCharactersValid) {
+		std::set<util::Unicode> characters;
+		for(const auto & section : g_localisation) {
+			for(const IniKey & key : section.second) {
+				const std::string & value = key.getValue();
+				const char * end = value.data() + value.size();
+				util::Unicode chr;
+				for(const char * it = value.data(); (chr = util::UTF8::read(it, end)) != util::INVALID_CHAR; ) {
+					if(chr >= 0x80) {
+						characters.insert(chr);
+					}
+				}
+			}
+		}
+		g_localisedCharacters.clear();
+		for(util::Unicode chr : characters) {
+			util::UTF8::write(std::back_inserter(g_localisedCharacters), chr);
+		}
+		g_localisedCharactersValid = true;
+	}
+	
+	return g_localisedCharacters;
 }
 
 std::string_view getLocalised(std::string_view name) {

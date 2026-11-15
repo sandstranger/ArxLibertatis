@@ -77,6 +77,7 @@ protected:
 		
 		std::unique_ptr<Texture> texture;
 		bool dirty;
+		bool uploaded = false; //!< texture holds an upload, draws may have used it
 	};
 	
 private:

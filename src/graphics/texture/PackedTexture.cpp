@@ -36,12 +36,32 @@ void PackedTexture::clear() {
 	m_textures.clear();
 }
 
+/*
+ * A page that changes after it was uploaded is uploaded into a new texture.
+ *
+ * Text is drawn many times a frame and new glyphs are inserted while drawing, so the page
+ * changing has usually been drawn from earlier in the same frame. A tile-based GPU behind
+ * GLES (ANGLE's Vulkan backend, Mali) cannot rewrite a texture the open render pass reads:
+ * it ends the pass - every tile of color, depth and multisampled data is written to memory -
+ * and starts a new one that loads them all back, a frame time spike for each new glyph. A
+ * texture no draw has used is updated before the pass instead; the old one is deleted, which
+ * the driver defers until the GPU no longer reads it.
+ */
 void PackedTexture::upload() {
 	for(auto & tree : util::dereference(m_textures)) {
-		if(tree.dirty) {
-			tree.texture->upload();
-			tree.dirty = false;
+		if(!tree.dirty) {
+			continue;
 		}
+		if(tree.uploaded) {
+			std::unique_ptr<Texture> fresh(GRenderer->createTexture());
+			if(fresh && fresh->create(m_textureSize, m_textureSize, m_textureFormat)) {
+				fresh->getImage() = tree.texture->getImage();
+				tree.texture = std::move(fresh);
+			}
+		}
+		tree.texture->upload();
+		tree.uploaded = true;
+		tree.dirty = false;
 	}
 }
 
