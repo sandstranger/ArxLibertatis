@@ -33,7 +33,6 @@
 #include "graphics/opengl/OpenGLRenderer.h"
 #include "graphics/opengl/OpenGLUtil.h"
 
-#include "core/FrameSpikes.h"
 #include "io/log/Logger.h"
 
 template <class Vertex>
@@ -217,8 +216,7 @@ public:
 		bindBuffer(m_buffer);
 		
 		setVertexArray<Vertex>(m_renderer, nullptr, this);
-
-		frameSpikes::Scope spikeDraw(frameSpikes::Draws);
+		
 		glDrawArrays(arxToGlPrimitiveType[primitive], m_offset + offset, count);
 		
 	}
@@ -471,7 +469,6 @@ public:
 		m_shadow.resize(capacity());
 		bindBuffer(GL_NONE);
 		setVertexArray<Vertex>(m_renderer, m_shadow.data(), this);
-		frameSpikes::Scope spikeDraw(frameSpikes::Draws);
 		glDrawArrays(arxToGlPrimitiveType[primitive], GLint(offset), GLsizei(count));
 		
 	}

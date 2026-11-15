@@ -19,7 +19,6 @@
 
 #include "graphics/opengl/GLTexture.h"
 
-#include "core/FrameSpikes.h"
 #include "graphics/Math.h"
 #include "graphics/opengl/GLTextureStage.h"
 #include "graphics/opengl/OpenGLRenderer.h"
@@ -848,8 +847,6 @@ void GLTexture::upload() {
     arx_assert(
             tex != GL_NONE
     );
-
-    frameSpikes::Scope spikeUpload(frameSpikes::TextureUploads);
 
     glBindTexture(
             GL_TEXTURE_2D,

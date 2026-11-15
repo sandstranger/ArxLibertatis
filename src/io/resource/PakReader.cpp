@@ -27,7 +27,6 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 
-#include "core/FrameSpikes.h"
 #include "io/log/Logger.h"
 #include "io/Blast.h"
 #include "io/resource/PakEntry.h"
@@ -112,9 +111,7 @@ public:
 };
 
 std::string UncompressedFile::read() const {
-
-	frameSpikes::Scope spikeRead(frameSpikes::ResourceReads);
-
+	
 	m_archive.seekg(m_offset);
 	
 	std::string buffer;
@@ -243,9 +240,7 @@ size_t blastInFile(void * Param, const unsigned char ** buf) {
 }
 
 std::string CompressedFile::read() const {
-
-	frameSpikes::Scope spikeRead(frameSpikes::ResourceReads);
-
+	
 	m_archive.seekg(m_offset);
 	
 	std::string buffer;
@@ -409,7 +404,6 @@ public:
 };
 
 std::string PlainFile::read() const {
-	frameSpikes::Scope spikeRead(frameSpikes::ResourceReads);
 	return fs::read(m_path);
 }
 

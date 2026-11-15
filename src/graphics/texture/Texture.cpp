@@ -20,13 +20,9 @@
 #include "graphics/texture/Texture.h"
 
 #include "core/Config.h"
-#include "core/FrameSpikes.h"
 
 bool Texture::create(const res::path & filename, TextureFlags flags) {
-
-	// read, decoded and uploaded: a texture first needed in the middle of the gameplay
-	frameSpikes::Scope spikeLoad(frameSpikes::TextureLoads);
-
+	
 	m_filename = filename;
 	m_flags = flags;
 	

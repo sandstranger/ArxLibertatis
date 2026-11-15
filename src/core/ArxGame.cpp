@@ -64,7 +64,6 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/Config.h"
 #include "core/Core.h"
 #include "core/FpsCounter.h"
-#include "core/FrameSpikes.h"
 #include "core/GameTime.h"
 #include "core/Localisation.h"
 #include "core/SaveGame.h"
@@ -1195,10 +1194,7 @@ void ArxGame::run() {
  * \brief Draws the scene.
  */
 void ArxGame::doFrame() {
-
-	// A frame much longer than the ones before it is logged with what it spent its time on
-	frameSpikes::Frame spikeFrame;
-
+	
 	if(config.video.fpsLimit && !benchmark::isEnabled()) {
 		
 		PlatformInstant now = platform::getTime();
@@ -1223,7 +1219,6 @@ void ArxGame::doFrame() {
 		m_frameDelta = arx::clamp(m_frameDelta + targetDuration - lastDuration, min, targetDuration);
 		
 		if(m_frameDelta > 0) {
-			frameSpikes::PhaseScope spikePhase(frameSpikes::Sleep);
 			Thread::sleep(m_frameDelta);
 		}
 		
@@ -1248,10 +1243,7 @@ void ArxGame::doFrame() {
 
 	// Take delivery of everything the other player sent before this frame reads
 	// any of it, so a frame never sees half of an update.
-	{
-		frameSpikes::PhaseScope spikePhase(frameSpikes::Poll);
-		coop::poll();
-	}
+	coop::poll();
 
 	/*
 	 * A joining player is asked who they are, once, on their first arrival.
@@ -1290,10 +1282,7 @@ void ArxGame::doFrame() {
 
 	updateTime();
 
-	{
-		frameSpikes::PhaseScope spikePhase(frameSpikes::Input);
-		updateInput();
-	}
+	updateInput();
 
 	if(m_wasResized) {
 		LogDebug("was resized");
@@ -1305,7 +1294,6 @@ void ArxGame::doFrame() {
 
 	// Manages Splash Screens if needed
 	if(HandleGameFlowTransitions()) {
-		frameSpikes::PhaseScope spikePhase(frameSpikes::Swap);
 		m_MainWindow->showFrame();
 		return;
 	}
@@ -1327,14 +1315,12 @@ void ArxGame::doFrame() {
 		LogWarning << "[coop-chain] consuming travel: area " << g_teleportToArea
 		           << " target '" << TELEPORT_TO_POSITION << "'";
 		CHANGE_LEVEL_ICON = NoChangeLevel;
-		frameSpikes::note("level change");
 		ARX_CHANGELEVEL_Change(g_teleportToArea, TELEPORT_TO_POSITION, float(TELEPORT_TO_ANGLE));
 		g_teleportToArea = { };
 		TELEPORT_TO_POSITION.clear();
 	}
 
 	if(LOADQUEST_SLOT != SavegameHandle() && LOADQUEST_SLOT.handleData() < long(savegames.size())) {
-		frameSpikes::note("savegame load");
 		ARX_LoadGame(savegames[LOADQUEST_SLOT]);
 		LOADQUEST_SLOT = SavegameHandle();
 	}
@@ -1353,14 +1339,12 @@ void ArxGame::doFrame() {
 			save.name = name;
 			save.area = area;
 			save.savefile = g_saveToLoad;
-			frameSpikes::note("savegame load");
 			ARX_LoadGame(save);
 		}
 		g_saveToLoad.clear();
 	}
 	
 	if(GInput->actionNowPressed(CONTROLS_CUST_QUICKLOAD)) {
-		frameSpikes::note("quickload");
 		ARX_QuickLoad();
 	}
 
@@ -1376,7 +1360,6 @@ void ArxGame::doFrame() {
 		if(GInput->actionNowPressed(CONTROLS_CUST_QUICKSAVE) && ARXmenu.mode() == Mode_InGame) {
 			g_hudRoot.quickSaveIconGui.show();
 			GRenderer->getSnapshot(savegame_thumbnail, config.interface.thumbnailSize.x, config.interface.thumbnailSize.y);
-			frameSpikes::note("quicksave");
 			ARX_QuickSave();
 			g_platformTime.updateFrame();
 		}
@@ -1385,21 +1368,16 @@ void ArxGame::doFrame() {
 	
 	if(g_requestLevelInit) {
 		g_requestLevelInit = false;
-		frameSpikes::note("level init");
 		levelInit();
 	} else {
 		cinematicLaunchWaiting();
 		render();
-		frameSpikes::PhaseScope spikePhase(frameSpikes::Swap);
 		m_MainWindow->showFrame();
 	}
 
 	// Publish this frame's results last, so what the other player receives is
 	// the world as it stands after everything has moved, not halfway through.
-	{
-		frameSpikes::PhaseScope spikePhase(frameSpikes::Flush);
-		coop::flush();
-	}
+	coop::flush();
 
 	/*
 	 * Render probe. A black screen has four usual suspects - nothing drawn, a
@@ -2313,14 +2291,8 @@ void ArxGame::render() {
 		cinematicRender();
 	} else {
 		benchmark::begin(cinematicBorder.CINEMA_DECAL != 0.f ? benchmark::Cutscene : benchmark::Scene);
-		{
-			frameSpikes::PhaseScope spikePhase(frameSpikes::Update);
-			updateLevel();
-		}
-		{
-			frameSpikes::PhaseScope spikePhase(frameSpikes::Scene);
-			renderLevel();
-		}
+		updateLevel();
+		renderLevel();
 		#ifdef ARX_DEBUG
 		if(g_debugToggles[9]) {
 			renderLevel();
