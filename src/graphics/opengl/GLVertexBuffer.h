@@ -994,7 +994,7 @@ public:
 		if(m_fences[m_position]) {
 			GLenum ret = GL_UNSIGNALED;
 			while(ret != GL_ALREADY_SIGNALED && ret != GL_CONDITION_SATISFIED) {
-				ret = glClientWaitSync(m_fences[m_position], GL_SYNC_FLUSH_COMMANDS_BIT, 1);
+				ret = glClientWaitSync(m_fences[m_position], 0, 1);
 			}
 			glDeleteSync(m_fences[m_position]);
 			m_fences[m_position] = 0;
