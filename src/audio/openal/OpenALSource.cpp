@@ -32,6 +32,7 @@
 #include "audio/Stream.h"
 #include "audio/Sample.h"
 #include "audio/Mixer.h"
+#include "core/FrameSpikes.h"
 #include "graphics/Math.h"
 #include "io/resource/ResourcePath.h"
 #include "io/log/Logger.h"
@@ -296,8 +297,10 @@ static size_t stereoToMono(char * data, size_t size) {
 }
 
 aalError OpenALSource::fillBuffer(size_t i, size_t size) {
-	
+
 	arx_assert(m_loadCount > 0);
+
+	frameSpikes::Scope spikeDecode(frameSpikes::SoundDecode);
 	
 	size_t left = std::min(size, m_sample->getLength() - m_written);
 	if(m_loadCount == 1) {

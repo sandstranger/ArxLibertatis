@@ -46,6 +46,7 @@
 
 #include "core/Application.h"
 #include "core/Config.h"
+#include "core/FrameSpikes.h"
 #include "gui/Credits.h"
 #include "graphics/opengl/GLDebug.h"
 #include "graphics/opengl/GLTexture.h"
@@ -1432,6 +1433,9 @@ void OpenGLRenderer::drawIndexedElements(Primitive primitive, const void * indic
 	}
 	arx_assert(nindices <= size_t(std::numeric_limits<GLsizei>::max()));
 	arx_assert(baseVertex <= size_t(std::numeric_limits<GLint>::max()));
+
+	// ANGLE makes a new Vulkan pipeline inside the draw that first needs it
+	frameSpikes::Scope spikeDraw(frameSpikes::Draws);
 	
 	const GLenum mode = arxToGlPrimitiveType[primitive];
 	const GLsizei count = GLsizei(nindices);
@@ -2536,6 +2540,8 @@ bool OpenGLRenderer::buildGLESProgramVariant(size_t variant) {
 
 	arx_assert(variant < GLESProgramVariantCount && !m_glesPrograms[variant].id);
 
+	frameSpikes::Scope spikeBuild(frameSpikes::ProgramBuilds);
+
 	GLESProgramCache cacheStorage;
 	GLESProgramCache * cache = nullptr;
 	if(m_glesProgramCacheEnabled) {
@@ -3242,7 +3248,10 @@ void OpenGLRenderer::drawLitTriangles(const TexturedVertex * vertices, const Tex
 			                       vertexAttributeOffset(nullptr, offsetof(TexturedVertexLighting, lightSet)));
 		}
 
-		glDrawArrays(GL_TRIANGLES, GLint(offset), GLsizei(batch));
+		{
+			frameSpikes::Scope spikeDraw(frameSpikes::Draws);
+			glDrawArrays(GL_TRIANGLES, GLint(offset), GLsizei(batch));
+		}
 
 		m_glesLitOffset = offset + batch;
 		vertices += batch;
@@ -3692,7 +3701,10 @@ void OpenGLRenderer::copyMultisampleColor() {
 	glEnableVertexAttribArray(0);
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
 
-	glDrawArrays(GL_TRIANGLES, 0, 3);
+	{
+		frameSpikes::Scope spikeDraw(frameSpikes::Draws);
+		glDrawArrays(GL_TRIANGLES, 0, 3);
+	}
 
 	// Only the color is presented
 	invalidateAttachments(true, false, true);
