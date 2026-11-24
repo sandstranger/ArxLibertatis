@@ -499,6 +499,10 @@ public:
 		ARX_UNUSED(vertices), ARX_UNUSED(lighting), ARX_UNUSED(count);
 	}
 	
+	/*!
+	 * Read the frame being rendered: call it once the frame is drawn and before the window
+	 * presents it. After that the window has no defined contents (ANGLE reads black).
+	 */
 	virtual bool getSnapshot(Image & image) = 0;
 	virtual bool getSnapshot(Image & image, size_t width, size_t height) = 0;
 	

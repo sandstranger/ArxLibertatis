@@ -107,6 +107,7 @@ bool g_ironman = false;
 
 static bool s_menuPlayerMouseLook = false;
 static bool s_hasMenuPlayerMouseLook = false;
+static bool s_launchFromGame = false; //!< Escape in game, see ARX_Menu_FrameRendered()
 
 void ARX_Menu_Resources_Release() {
 
@@ -220,14 +221,8 @@ void ARX_Menu_Manage() {
 					g_itemToUse = nullptr;
 					ARX_SOUND_PlayInterface(g_snd.MENU_CLICK, Random::getf(0.9f, 1.1f));
 				} else {
-					GRenderer->getSnapshot(savegame_thumbnail, config.interface.thumbnailSize.x, config.interface.thumbnailSize.y);
-					
-					g_gameTime.pause(GameTime::PauseMenu);
-					
-					ARX_MENU_Launch(true);
-					MenuFader_start(Fade_Out, -1); // TODO: does this fader even work ?
-
-					ARX_PLAYER_PutPlayerInNormalStance(true);
+					// Opened once this frame is rendered, which becomes the save thumbnail
+					s_launchFromGame = true;
 				}
 			}
 			break;
@@ -264,6 +259,28 @@ void ARX_Menu_Manage() {
 		default:
 			break;
 	}
+}
+
+void ARX_Menu_FrameRendered() {
+	
+	if(!s_launchFromGame) {
+		return;
+	}
+	s_launchFromGame = false;
+	
+	if(ARXmenu.mode() != Mode_InGame) {
+		return;
+	}
+	
+	// The frame Escape was pressed in shows the game: it is still in the framebuffer
+	GRenderer->getSnapshot(savegame_thumbnail, config.interface.thumbnailSize.x, config.interface.thumbnailSize.y);
+	
+	g_gameTime.pause(GameTime::PauseMenu);
+	
+	ARX_MENU_Launch(true);
+	MenuFader_start(Fade_Out, -1); // TODO: does this fader even work ?
+	
+	ARX_PLAYER_PutPlayerInNormalStance(true);
 }
 
 void ARX_Menu_Render() {

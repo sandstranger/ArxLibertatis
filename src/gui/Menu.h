@@ -106,6 +106,13 @@ void ARX_IronmanSave();
 void ARX_IronmanDied();
 
 void ARX_Menu_Manage();
+
+/*!
+ * Opens the menu Escape asked for during the frame. Called once the frame is rendered and
+ * before it is presented: its thumbnail for saving is taken from that frame.
+ */
+void ARX_Menu_FrameRendered();
+
 void ARX_Menu_Render();
 void ARX_MENU_Launch(bool allowResume);
 void ARX_Menu_Resources_Release();

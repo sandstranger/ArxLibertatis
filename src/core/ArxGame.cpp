@@ -202,6 +202,10 @@ static const PlatformDuration runeDrawPointInterval = 16ms; // ~60fps
 static bool s_playerMouseLookBeforeFocusLoss = false;
 static bool s_hasPlayerMouseLookBeforeFocusLoss = false;
 
+// Done once the frame is rendered, with it as the screenshot (see ArxGame::doFrame())
+static bool s_quickSaveRequested = false;
+static bool s_screenshotRequested = false;
+
 extern CircularVertexBuffer<TexturedVertex> * pDynamicVertexBuffer_TLVERTEX; // VB using TLVERTEX format.
 extern CircularVertexBuffer<SMY_VERTEX3> * pDynamicVertexBuffer;
 
@@ -1358,10 +1362,8 @@ void ArxGame::doFrame() {
 	) {
 		
 		if(GInput->actionNowPressed(CONTROLS_CUST_QUICKSAVE) && ARXmenu.mode() == Mode_InGame) {
-			g_hudRoot.quickSaveIconGui.show();
-			GRenderer->getSnapshot(savegame_thumbnail, config.interface.thumbnailSize.x, config.interface.thumbnailSize.y);
-			ARX_QuickSave();
-			g_platformTime.updateFrame();
+			// Saved once this frame is rendered, see below
+			s_quickSaveRequested = true;
 		}
 		
 	}
@@ -1372,6 +1374,26 @@ void ArxGame::doFrame() {
 	} else {
 		cinematicLaunchWaiting();
 		render();
+		/*
+		 * Screenshots are taken from the frame just rendered, before it is presented: after
+		 * the swap the window has no defined contents (ANGLE reads black). So the quick save,
+		 * the menu and F10 asked for during the frame are done here, with this frame.
+		 */
+		if(s_quickSaveRequested) {
+			s_quickSaveRequested = false;
+			if(ARXmenu.mode() == Mode_InGame) {
+				GRenderer->getSnapshot(savegame_thumbnail, config.interface.thumbnailSize.x,
+				                       config.interface.thumbnailSize.y);
+				g_hudRoot.quickSaveIconGui.show();
+				ARX_QuickSave();
+				g_platformTime.updateFrame();
+			}
+		}
+		ARX_Menu_FrameRendered();
+		if(s_screenshotRequested) {
+			s_screenshotRequested = false;
+			GetSnapShot();
+		}
 		m_MainWindow->showFrame();
 	}
 
@@ -1821,7 +1843,8 @@ void ArxGame::updateInput() {
 	}
 	
 	if(GInput->isKeyPressedNowPressed(Keyboard::Key_F10)) {
-		GetSnapShot();
+		// Taken once this frame is rendered, see ArxGame::doFrame()
+		s_screenshotRequested = true;
 	}
 
 	if(GInput->actionNowPressed(CONTROLS_CUST_DEBUG)) {
