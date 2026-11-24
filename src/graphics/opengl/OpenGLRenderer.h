@@ -429,6 +429,8 @@ private:
 	bool m_glesSnapshotKept = false;     //!< m_glesSnapshotColor holds the last frame
 	bool m_glesSnapshotVerified = false; //!< A blit from the window gave no GL error
 	bool m_glesSnapshotFailed = false;   //!< Read the window instead for this context
+	bool m_glesSnapshotBlitNV = false;   //!< OpenGL ES 2.0 feature level: GL_NV_framebuffer_blit
+	GLenum m_glesSnapshotFormat = GL_RGBA8;
 	
 	// Program and vertices for copying the resolved MSAA image to the window
 	GLuint m_glesCopyProgram = 0;

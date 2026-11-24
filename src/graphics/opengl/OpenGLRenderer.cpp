@@ -474,6 +474,17 @@ void OpenGLRenderer::initialize() {
 		            : m_glesMSAAResolveBlit ? "multisampled framebuffer + glBlitFramebuffer resolve"
 		            : "GL_EXT_multisampled_render_to_texture");
 		
+		// Save game thumbnails are copied out of the window with a scaled blit before the swap
+		// (see keepFrameForSnapshot()). The OpenGL ES 2.0 feature level needs
+		// GL_NV_framebuffer_blit for it (GL_ANGLE_framebuffer_blit cannot scale), without it
+		// thumbnails read the window after the swap, which only native drivers keep.
+		m_glesSnapshotBlitNV = !m_glesIsES3 && gl.has("GL_NV_framebuffer_blit") && glBlitFramebufferNV;
+		m_glesSnapshotFormat = (m_glesIsES3 || gl.has("GL_OES_rgb8_rgba8")) ? GL_RGBA8_OES : GL_RGB565;
+		LogInfo << "GLES save game thumbnails: "
+		        << (m_glesIsES3 && glBlitFramebuffer ? "glBlitFramebuffer copy of the window"
+		            : m_glesSnapshotBlitNV ? "glBlitFramebufferNV copy of the window"
+		            : "read from the window after the swap");
+		
 		// Program binaries for the shader cache (OpenGL ES 3.0 feature level only)
 		m_glesProgramBinaryFormats.clear();
 		if(m_glesIsES3 && glGetProgramBinary && glProgramBinary && glProgramParameteri) {
@@ -3789,8 +3800,9 @@ void OpenGLRenderer::keepFrameForSnapshot() {
 		return;
 	}
 
-	// Scaled blits need OpenGL ES 3.0, snapshots read the window otherwise
-	if(!m_glesIsES3 || !glBlitFramebuffer || m_glesSnapshotFailed) {
+	// Scaled blits need OpenGL ES 3.0 or GL_NV_framebuffer_blit, snapshots read the window otherwise
+	const bool coreBlit = m_glesIsES3 && glBlitFramebuffer;
+	if((!coreBlit && !m_glesSnapshotBlitNV) || m_glesSnapshotFailed) {
 		return;
 	}
 
@@ -3824,7 +3836,11 @@ void OpenGLRenderer::keepFrameForSnapshot() {
 	if(m_scissor.isValid()) {
 		glDisable(GL_SCISSOR_TEST);
 	}
-	glBlitFramebuffer(0, 0, source.x, source.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+	if(coreBlit) {
+		glBlitFramebuffer(0, 0, source.x, source.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+	} else {
+		glBlitFramebufferNV(0, 0, source.x, source.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+	}
 	if(m_scissor.isValid()) {
 		glEnable(GL_SCISSOR_TEST);
 	}
@@ -3853,7 +3869,7 @@ bool OpenGLRenderer::createSnapshotFramebuffer(Vec2i size) {
 
 	glGenRenderbuffers(1, &m_glesSnapshotColor);
 	glBindRenderbuffer(GL_RENDERBUFFER, m_glesSnapshotColor);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, size.x, size.y);
+	glRenderbufferStorage(GL_RENDERBUFFER, m_glesSnapshotFormat, size.x, size.y);
 	glBindRenderbuffer(GL_RENDERBUFFER, GL_NONE);
 
 	glGenFramebuffers(1, &m_glesSnapshotFramebuffer);
