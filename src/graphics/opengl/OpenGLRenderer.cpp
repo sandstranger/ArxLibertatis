@@ -660,6 +660,12 @@ void OpenGLRenderer::reinit() {
 	m_glesMSAAResolveFramebuffer = 0;
 	m_glesMSAAColorBlitVerified = false;
 	m_glesMSAAColorBlitFailed = false;
+	m_glesSnapshotFramebuffer = 0;
+	m_glesSnapshotColor = 0;
+	m_glesSnapshotSize = Vec2i(0);
+	m_glesSnapshotKept = false;
+	m_glesSnapshotVerified = false;
+	m_glesSnapshotFailed = false;
 	m_glesIndexBuffer = 0;
 	m_glesIndexBufferCapacity = 0;
 	m_glesIndexBufferOffset = 0;
@@ -792,6 +798,7 @@ void OpenGLRenderer::shutdown() {
 	arx_assert(isInitialized());
 #ifdef ANDROID
 	destroyMultisampleFramebuffer();
+	destroySnapshotFramebuffer();
 	m_glesImmediateVertices.reset();
 	if(m_glesIndexBuffer) {
 		unbindIndexBuffer(m_glesIndexBuffer);
@@ -1471,26 +1478,17 @@ void OpenGLRenderer::drawIndexedElements(Primitive primitive, const void * indic
 
 #endif // ANDROID
 
-bool OpenGLRenderer::getSnapshot(Image & image) {
-	
-	Vec2i size = mainApp->getWindow()->getSize();
+#ifdef ANDROID
+//! Read the bound read framebuffer into an RGB image, bottom row first
+static void readFramebufferRGB(Image & image, Vec2i size) {
 	
 	image.create(size_t(size.x), size_t(size.y), Image::Format_R8G8B8);
-#ifdef ANDROID
+	
 	// GLES 2 only guarantees RGBA readback. Strip alpha after reading to keep
 	// the renderer's existing RGB Image contract.
 	Image rgba;
 	rgba.create(size_t(size.x), size_t(size.y), Image::Format_R8G8B8A8);
-	// Multisampled framebuffers cannot be read: use the window, which holds the last
-	// resolved frame, like when rendering without MSAA.
-	const bool readWindow = m_glesMSAAResolveBlit && m_glesMSAAFramebuffer;
-	if(readWindow) {
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, GL_NONE);
-	}
 	glReadPixels(0, 0, size.x, size.y, GL_RGBA, GL_UNSIGNED_BYTE, rgba.getData());
-	if(readWindow) {
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_glesMSAAFramebuffer);
-	}
 	const unsigned char * src = rgba.getData();
 	unsigned char * dst = image.getData();
 	for(size_t i = 0, pixels = size_t(size.x) * size_t(size.y); i < pixels; ++i) {
@@ -1500,7 +1498,29 @@ bool OpenGLRenderer::getSnapshot(Image & image) {
 		src += 4;
 		dst += 3;
 	}
+	
+}
+#endif
+
+bool OpenGLRenderer::getSnapshot(Image & image) {
+	
+	Vec2i size = mainApp->getWindow()->getSize();
+	
+#ifdef ANDROID
+	// Multisampled framebuffers cannot be read: use the window, like when rendering
+	// without MSAA. Between frames it only holds the last frame if the driver keeps
+	// its contents across the swap - native drivers do, ANGLE does not (black image).
+	// Thumbnails do not depend on that, see keepFrameForSnapshot().
+	const bool readWindow = m_glesMSAAResolveBlit && m_glesMSAAFramebuffer;
+	if(readWindow) {
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, GL_NONE);
+	}
+	readFramebufferRGB(image, size);
+	if(readWindow) {
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_glesMSAAFramebuffer);
+	}
 #else
+	image.create(size_t(size.x), size_t(size.y), Image::Format_R8G8B8);
 	glReadPixels(0, 0, size.x, size.y, GL_RGB, GL_UNSIGNED_BYTE, image.getData());
 #endif
 	
@@ -1511,10 +1531,21 @@ bool OpenGLRenderer::getSnapshot(Image & image) {
 
 bool OpenGLRenderer::getSnapshot(Image & image, size_t width, size_t height) {
 	
-	// TODO handle scaling on the GPU so we don't need to download the whole image
-	
 	Image fullsize;
-	getSnapshot(fullsize);
+	
+#ifdef ANDROID
+	if(m_glesSnapshotKept) {
+		// The copy of the last frame endFrame() made before the swap, already scaled down
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_glesSnapshotFramebuffer);
+		readFramebufferRGB(fullsize, m_glesSnapshotSize);
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_glesMSAAFramebuffer);
+		fullsize.flipY();
+	} else
+#endif
+	{
+		// TODO handle scaling on the GPU so we don't need to download the whole image
+		getSnapshot(fullsize);
+	}
 	
 	image.resizeFrom(fullsize, width, height);
 	
@@ -3294,7 +3325,8 @@ void OpenGLRenderer::beginFrame() {
 	m_glesPassCleared = 0;
 
 	// Binds the framebuffer for this frame. Its previous contents stay valid until the
-	// first draw or clear, for snapshots taken between frames.
+	// first draw or clear, for snapshots taken between frames (the resolved texture of
+	// GL_EXT_multisampled_render_to_texture; the window is copied by endFrame()).
 	updateMultisampleFramebuffer();
 
 }
@@ -3308,6 +3340,8 @@ void OpenGLRenderer::endFrame() {
 	} else {
 		invalidateAttachments(true, false, true);
 	}
+
+	keepFrameForSnapshot();
 
 #ifdef ANDROID
 	trimTextureUploadMemoryIfIdle();
@@ -3729,6 +3763,132 @@ void OpenGLRenderer::copyMultisampleColor() {
 	if(viewport.width() > 0 && viewport.height() > 0) {
 		glViewport(viewport.left, size.y - viewport.bottom, viewport.width(), viewport.height());
 	}
+
+}
+
+/*
+ * Save game thumbnails are taken between frames and show the frame that was presented
+ * last. With EGL_BUFFER_DESTROYED the window has no defined contents after the swap:
+ * native drivers happen to hand back an older buffer with its image intact, but ANGLE
+ * acquires its Vulkan swapchain images with undefined contents, which read as black.
+ * So when the frame ends up in the window, a thumbnail-sized copy of it is kept before
+ * the swap. A scaled blit only reads the texels it filters: a few hundred KB per frame,
+ * in a pass of its own after the frame's render pass is stored anyway.
+ * GL_EXT_multisampled_render_to_texture keeps the frame in its resolved texture instead.
+ */
+void OpenGLRenderer::keepFrameForSnapshot() {
+
+	if(m_glesMSAAFramebuffer && !m_glesMSAAResolveBlit) {
+		// Snapshots read the resolved texture
+		m_glesSnapshotKept = false;
+		return;
+	}
+
+	if(!m_glesPassStarted && m_glesPassCleared == 0) {
+		// Nothing was rendered into the window this frame: keep the previous copy
+		return;
+	}
+
+	// Scaled blits need OpenGL ES 3.0, snapshots read the window otherwise
+	if(!m_glesIsES3 || !glBlitFramebuffer || m_glesSnapshotFailed) {
+		return;
+	}
+
+	const Vec2i source = mainApp->getWindow()->getSize();
+	const Vec2i size = config.interface.thumbnailSize;
+	if(source.x <= 0 || source.y <= 0 || size.x <= 0 || size.y <= 0) {
+		return;
+	}
+	if(size != m_glesSnapshotSize && !createSnapshotFramebuffer(size)) {
+		return;
+	}
+
+	// The blit replaces the whole copy: nothing has to be loaded from memory
+	glBindFramebuffer(GL_FRAMEBUFFER, m_glesSnapshotFramebuffer);
+	invalidateAttachments(false, true, false);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, GL_NONE);
+
+	const bool verify = !m_glesSnapshotVerified;
+	if(verify) {
+		// Validate the first blit from this window: errors of earlier calls must not count
+		for(int i = 0; i < 8; i++) {
+			const GLenum error = glGetError();
+			if(error == GL_NO_ERROR) {
+				break;
+			}
+			LogWarning << "GL error " << error << " before the first snapshot blit";
+		}
+	}
+
+	// The scissor test would limit the blit
+	if(m_scissor.isValid()) {
+		glDisable(GL_SCISSOR_TEST);
+	}
+	glBlitFramebuffer(0, 0, source.x, source.y, 0, 0, size.x, size.y, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+	if(m_scissor.isValid()) {
+		glEnable(GL_SCISSOR_TEST);
+	}
+
+	glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+
+	if(verify) {
+		const GLenum error = glGetError();
+		if(error != GL_NO_ERROR) {
+			LogWarning << "Snapshot: glBlitFramebuffer from the window failed (GL error " << error
+			           << "), save game thumbnails read the window";
+			destroySnapshotFramebuffer();
+			m_glesSnapshotFailed = true;
+			return;
+		}
+		m_glesSnapshotVerified = true;
+	}
+
+	m_glesSnapshotKept = true;
+
+}
+
+bool OpenGLRenderer::createSnapshotFramebuffer(Vec2i size) {
+
+	destroySnapshotFramebuffer();
+
+	glGenRenderbuffers(1, &m_glesSnapshotColor);
+	glBindRenderbuffer(GL_RENDERBUFFER, m_glesSnapshotColor);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, size.x, size.y);
+	glBindRenderbuffer(GL_RENDERBUFFER, GL_NONE);
+
+	glGenFramebuffers(1, &m_glesSnapshotFramebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, m_glesSnapshotFramebuffer);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_glesSnapshotColor);
+	const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	glBindFramebuffer(GL_FRAMEBUFFER, GL_NONE);
+	if(status != GL_FRAMEBUFFER_COMPLETE) {
+		LogWarning << "Snapshot framebuffer is incomplete (status " << status
+		           << "), save game thumbnails read the window";
+		destroySnapshotFramebuffer();
+		m_glesSnapshotFailed = true;
+		return false;
+	}
+
+	m_glesSnapshotSize = size;
+	m_glesSnapshotVerified = false;
+
+	return true;
+}
+
+void OpenGLRenderer::destroySnapshotFramebuffer() {
+
+	// Never left bound: deleting it does not change the framebuffer bindings
+	if(m_glesSnapshotFramebuffer) {
+		glDeleteFramebuffers(1, &m_glesSnapshotFramebuffer);
+		m_glesSnapshotFramebuffer = 0;
+	}
+	if(m_glesSnapshotColor) {
+		glDeleteRenderbuffers(1, &m_glesSnapshotColor);
+		m_glesSnapshotColor = 0;
+	}
+
+	m_glesSnapshotSize = Vec2i(0);
+	m_glesSnapshotKept = false;
 
 }
 

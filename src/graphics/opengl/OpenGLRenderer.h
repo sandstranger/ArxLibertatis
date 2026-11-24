@@ -279,6 +279,9 @@ private:
 	void resolveMultisampleFramebuffer();
 	bool blitMultisampleColor();
 	void copyMultisampleColor();
+	void keepFrameForSnapshot();
+	bool createSnapshotFramebuffer(Vec2i size);
+	void destroySnapshotFramebuffer();
 
 	/*!
 	 * One linked program per shader variant.
@@ -418,6 +421,14 @@ private:
 	GLuint m_glesMSAAResolveFramebuffer = 0;
 	bool m_glesMSAAColorBlitVerified = false; //!< A blit into the window gave no GL error
 	bool m_glesMSAAColorBlitFailed = false;   //!< Use the copy program for this context
+	
+	// Thumbnail-sized copy of the last frame presented from the window (see keepFrameForSnapshot())
+	GLuint m_glesSnapshotFramebuffer = 0;
+	GLuint m_glesSnapshotColor = 0;
+	Vec2i m_glesSnapshotSize = Vec2i(0);
+	bool m_glesSnapshotKept = false;     //!< m_glesSnapshotColor holds the last frame
+	bool m_glesSnapshotVerified = false; //!< A blit from the window gave no GL error
+	bool m_glesSnapshotFailed = false;   //!< Read the window instead for this context
 	
 	// Program and vertices for copying the resolved MSAA image to the window
 	GLuint m_glesCopyProgram = 0;
