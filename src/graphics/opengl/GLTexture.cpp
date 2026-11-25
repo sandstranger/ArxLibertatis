@@ -26,6 +26,7 @@
 #include "io/fs/FilePath.h"
 #include "io/log/Logger.h"
 
+#include <atomic>
 #include <vector>
 #include <string>
 #include <mutex>
@@ -60,25 +61,55 @@ static std::mutex s_textureBuffersMutex;
 static thread_local bool s_usingTextureBuffers = false;
 // Frames since the last ETC2 upload, render thread only.
 static unsigned s_framesSinceTextureUpload = 0;
-static bool s_enableETC2TextureSupport = true;
+// Set by the launcher through setTextureData() (JNA, on the java side's thread). The texture cache is started on the render
+// thread with the next texture upload: started on the java side's thread it raced the render thread's use of it.
+static std::atomic<bool> s_enableETC2TextureSupport(true);
+static std::mutex s_textureCacheDirMutex;
+static std::string s_textureCacheDir;
+static std::atomic<bool> s_textureCacheStartRequested(false);
 
 extern "C" {
 
+// (an int: JNA passes a java 'boolean' as a 32 bit int, not as a C++ 'bool')
 __attribute__((used))
 __attribute__((visibility("default")))
 void setTextureData(
-        const bool enableEtc2TextureSupport,
+        const int enableEtc2TextureSupport,
         const char *pathToTextureCacheDir) {
 
     s_enableETC2TextureSupport =
-            enableEtc2TextureSupport;
+            (enableEtc2TextureSupport != 0);
 
-    TextureCache::Instance().Init(
-            pathToTextureCacheDir,
-            30ULL * 1024ULL * 1024ULL * 1024ULL
-    );
+    {
+        std::lock_guard<std::mutex> lock(s_textureCacheDirMutex);
+        s_textureCacheDir = (pathToTextureCacheDir) ? pathToTextureCacheDir : "";  // (JNA passes null for a null String)
+    }
+
+    s_textureCacheStartRequested = true;
 }
 
+}
+
+// Render thread: starts the texture cache setTextureData() asked for, if it has not been yet
+static void startRequestedTextureCache() {
+
+    if (!s_textureCacheStartRequested.load(std::memory_order_relaxed) ||
+        !s_textureCacheStartRequested.exchange(false)) {
+        return;
+    }
+
+    std::string dir;
+    {
+        std::lock_guard<std::mutex> lock(s_textureCacheDirMutex);
+        dir = s_textureCacheDir;
+    }
+
+    if (!dir.empty()) {
+        TextureCache::Instance().Init(
+                dir.c_str(),
+                30ULL * 1024ULL * 1024ULL * 1024ULL
+        );
+    }
 }
 
 namespace {
@@ -955,6 +986,8 @@ void GLTexture::upload() {
                     m_format ==
                     Image::Format_L8A8
             );
+
+    startRequestedTextureCache();
 
     // ETC2 only for textures loaded from files. Textures built at runtime (font glyph
     // atlases, procedural images) change while the game runs: compressing them on the

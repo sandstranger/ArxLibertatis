@@ -231,8 +231,8 @@ EntityDragResult findSpotForDraggedEntity(Vec3f origin, Vec3f dir, Entity * enti
 #ifdef ANDROID
 extern "C" {
 __attribute__((used)) __attribute__((visibility("default")))
-void updateScreenControlsHidingState(bool controlsHided) {
-    screenControlsHided = controlsHided;
+void updateScreenControlsHidingState(int controlsHided) {   // (an int: JNA passes a java 'boolean' as a 32 bit int)
+    screenControlsHided = (controlsHided != 0);
 }
 }
 #endif

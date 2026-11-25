@@ -23,6 +23,7 @@
 #include <cstring>
 #include <algorithm>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -1828,8 +1829,15 @@ GLuint compileGLESShader(GLenum type, const std::string & source) {
 	return shader;
 }
 
-//! Directory of the program binary cache, set from Java through JNA (empty: no cache)
+//! Directory of the program binary cache, set from Java through JNA (empty: no cache).
+//! Written on the java side's thread, read on the render thread: guarded, read through glesProgramCacheDir()
+std::mutex g_glesProgramCacheDirMutex;
 std::string g_glesProgramCacheDir;
+
+std::string glesProgramCacheDir() {
+	std::lock_guard<std::mutex> lock(g_glesProgramCacheDirMutex);
+	return g_glesProgramCacheDir;
+}
 
 /*
  * Program binary cache (OpenGL ES 3.0 feature level)
@@ -2362,6 +2370,7 @@ extern "C" {
 //! Directory for cached OpenGL ES program binaries, empty or null disables the cache
 __attribute__((used)) __attribute__((visibility("default")))
 void setGLESShaderCacheDir(const char * path) {
+	std::lock_guard<std::mutex> lock(g_glesProgramCacheDirMutex);
 	g_glesProgramCacheDir = (path != nullptr) ? path : "";
 }
 
@@ -2379,9 +2388,10 @@ bool OpenGLRenderer::initializeGLESProgram() {
 	m_glesProgramCacheEnabled = false;
 	GLESProgramCache cacheStorage;
 	GLESProgramCache * cache = nullptr;
-	if(m_glesIsES3 && !m_glesProgramBinaryFormats.empty() && !g_glesProgramCacheDir.empty()) {
-		mkdir(g_glesProgramCacheDir.c_str(), 0700);
-		cacheStorage.directory = g_glesProgramCacheDir;
+	const std::string programCacheDir = glesProgramCacheDir();
+	if(m_glesIsES3 && !m_glesProgramBinaryFormats.empty() && !programCacheDir.empty()) {
+		mkdir(programCacheDir.c_str(), 0700);
+		cacheStorage.directory = programCacheDir;
 		cacheStorage.formats = &m_glesProgramBinaryFormats;
 		u64 driverHash = hashString(14695981039346656037ull, "arx-gles-program-cache");
 		const GLenum strings[] = { GL_VENDOR, GL_RENDERER, GL_VERSION, GL_SHADING_LANGUAGE_VERSION };
@@ -2522,7 +2532,7 @@ bool OpenGLRenderer::initializeGLESProgram() {
 		cleanGLESProgramCache(*cache);
 		LogInfo << "GLES program cache: " << m_glesProgramStats.diskLoads << " loaded, "
 		        << m_glesProgramStats.compiles << " compiled (" << cache->directory << ")";
-	} else if(m_glesIsES3 && !g_glesProgramCacheDir.empty()) {
+	} else if(m_glesIsES3 && !programCacheDir.empty()) {
 		LogInfo << "GLES program cache disabled: the driver has no program binary formats";
 	}
 	LogInfo << "GLES programs: " << built << " prewarmed (" << (m_glesProgramBytes / 1024)

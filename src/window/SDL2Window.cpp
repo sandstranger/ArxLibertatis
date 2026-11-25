@@ -20,6 +20,7 @@
 #include "window/SDL2Window.h"
 
 #include <algorithm>
+#include <atomic>
 #include <sstream>
 #include <cstdlib>
 
@@ -83,7 +84,11 @@ SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
 #ifdef ANDROID
 typedef void (*forceLandScapeActivityOrientationDelegate)();
-static forceLandScapeActivityOrientationDelegate activityOrientationChangerInstance = nullptr;
+// Set by the launcher through JNA (on the java side's thread), used on the game's
+static std::atomic<forceLandScapeActivityOrientationDelegate> activityOrientationChangerInstance(nullptr);
+static std::atomic<bool> s_requestedGLES2_0(false);
+// What the renderer uses: the launcher's choice (s_requestedGLES2_0) as the window is made, or the fallback when an
+// OpenGL ES 3.0 context is not available; the game's thread only
 bool g_useGLES2_0 = false;
 #endif
 
@@ -148,8 +153,8 @@ void registerForceLandscapeActivityOrientationCallback(
     activityOrientationChangerInstance = instance;
 }
 __attribute__((used)) __attribute__((visibility("default")))
-void setUseGLES2_0State(const bool useGLES2_0) {
-    g_useGLES2_0 = useGLES2_0;
+void setUseGLES2_0State(const int useGLES2_0) {   // (an int: JNA passes a java 'boolean' as a 32 bit int)
+    s_requestedGLES2_0 = (useGLES2_0 != 0);
 }
 }
 #endif
@@ -461,6 +466,10 @@ int SDL2Window::createWindowAndGLContext(const char * profile) {
 bool SDL2Window::initialize() {
 	
 	arx_assert(!m_displayModes.empty());
+	
+	#ifdef ANDROID
+	g_useGLES2_0 = s_requestedGLES2_0;
+	#endif
 	
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 	
@@ -930,11 +939,19 @@ void SDL2Window::processEvents(bool waitForEvent) {
 	int ret = waitForEvent ? SDL_WaitEvent(&event) : SDL_PollEvent(&event);
 	while(ret) {
 #ifdef ANDROID
-        if (event.type == SDL_APP_DIDENTERFOREGROUND && activityOrientationChangerInstance!= nullptr){
-            activityOrientationChangerInstance();
+        if (event.type == SDL_APP_DIDENTERFOREGROUND) {
+            if (const forceLandScapeActivityOrientationDelegate callback = activityOrientationChangerInstance.load()) {
+                callback();
+            }
         }
-#endif		
+#endif
 		switch(event.type) {
+#ifdef ANDROID
+			// The lifecycle event watch (EventFilter()) sees these first, on the java side's thread; the window's focus
+			// listeners change the game's state (input reset, mouse look), so they are told here, on the game's thread.
+			case SDL_APP_WILLENTERBACKGROUND: onFocus(false); break;
+			case SDL_APP_DIDENTERFOREGROUND:  onFocus(true);  break;
+#endif
 			case SDL_WINDOWEVENT: {
 				switch(event.window.event) {
 					
@@ -1033,7 +1050,7 @@ extern void ClearRamCache();
 extern size_t releaseTextureUploadMemory();
     
 int SDLCALL SDL2Window::EventFilter(void* userdata, SDL_Event* event){   
-    auto* sdl2Window = static_cast<SDL2Window*>(userdata);
+    ARX_UNUSED(userdata);
     switch (event->type)
     {
         case SDL_APP_LOWMEMORY:
@@ -1042,15 +1059,15 @@ int SDLCALL SDL2Window::EventFilter(void* userdata, SDL_Event* event){
             ClearRamCache();
             releaseTextureUploadMemory();
             break;
+        // (only what is safe on the java side's thread here: the focus change, which the game's state follows, is made on
+        // the game's thread as the event comes out of the queue, see processEvents())
         case SDL_APP_WILLENTERBACKGROUND:
             SetMute(true);
-            sdl2Window->onFocus(false);            
             ClearRamCache();
             releaseTextureUploadMemory();
             break;
         case SDL_APP_DIDENTERFOREGROUND:
             SetMute(false);
-            sdl2Window->onFocus(true);
             break;
     }
     return 1;

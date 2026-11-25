@@ -215,6 +215,8 @@ bool SHOW_INGAME_MINIMAP = true;
 #ifdef ANDROID
 // (read by the java side, on its own thread)
 static std::atomic<bool> showOnScreenControls(true);
+// !PLAYER_MOUSELOOK_ON for the java side, kept with showOnScreenControls: the java side's thread read the game's flag itself
+static std::atomic<bool> s_invokeMouseButtonsEvents(true);
 #endif
 bool ARX_FLARES_Block = true;
 
@@ -234,18 +236,20 @@ ArxGame::ArxGame()
 
 #ifdef ANDROID
 extern "C" {
+// The queries return an int: JNA reads a java 'boolean' result as a 32 bit int, and of a returned C++ 'bool' only the
+// low byte is defined on arm64 (AAPCS64 leaves the rest of the register unspecified).
 __attribute__((used)) __attribute__((visibility("default")))
-bool needToShowScreenControls() {
-    return showOnScreenControls;
+int needToShowScreenControls() {
+    return showOnScreenControls ? 1 : 0;
 }
 
 __attribute__((used)) __attribute__((visibility("default")))
-bool needToInvokeMouseButtonsEvents(){
-    return !PLAYER_MOUSELOOK_ON;
+int needToInvokeMouseButtonsEvents(){
+    return s_invokeMouseButtonsEvents ? 1 : 0;
 }
 __attribute__((used)) __attribute__((visibility("default")))
-bool needToReInitGameControllers (){
-    return false;
+int needToReInitGameControllers (){
+    return 0;
 }
 }
 #endif
@@ -1356,6 +1360,7 @@ void ArxGame::doFrame() {
 
 #ifdef ANDROID   
     showOnScreenControls = ARXmenu.mode() != Mode_MainMenu;
+    s_invokeMouseButtonsEvents = !PLAYER_MOUSELOOK_ON;
 #endif
     
 	if(cinematicIsStopped()

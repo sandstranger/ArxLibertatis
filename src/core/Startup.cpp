@@ -80,7 +80,10 @@
 
 #ifdef ANDROID
 #include "SwappyController.h"
+#include <mutex>
 #include <string>
+// Set by the launcher through JNA (on the java side's thread), read by SDL_main: guarded
+static std::mutex g_pathToResourcesMutex;
 static std::string g_pathToResources;
 #endif
 #include "graphics/opengl/TextureCache.h"
@@ -92,7 +95,10 @@ int SDL_main(int argc, char **argv) {
 int utf8_main(int argc, char ** argv) {
 #endif
 #ifdef ANDROID
-    chdir(g_pathToResources.c_str());
+    {
+        std::lock_guard<std::mutex> lock(g_pathToResourcesMutex);
+        chdir(g_pathToResources.c_str());
+    }
 #endif    
 	// GCC -ffast-math disables denormal before main() - do the same for other compilers
 	Thread::disableFloatDenormals();
@@ -204,7 +210,8 @@ int utf8_main(int argc, char ** argv) {
 extern "C" {
 __attribute__((used)) __attribute__((visibility("default")))
 void setPathToResources (const char *pathToResources){
-    g_pathToResources = pathToResources;
+    std::lock_guard<std::mutex> lock(g_pathToResourcesMutex);
+    g_pathToResources = (pathToResources) ? pathToResources : "";   // (JNA passes null for a null String: a std::string of null is undefined)
 }
 }
 #endif

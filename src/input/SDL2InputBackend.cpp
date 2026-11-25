@@ -30,6 +30,7 @@
 #include "input/Input.h"
 #include "game/Player.h"
 #include "../src/gui/Hud.h"
+#include <mutex>
 #include <string>
 using namespace std;
 #endif
@@ -70,6 +71,8 @@ static constexpr float mouseSpeed = 80.0f;
 
 #ifdef ANDROID
 static SDL2InputBackend *instance = nullptr;
+// Set by the launcher through JNA (on the java side's thread), read on the game's: guarded
+static std::mutex g_pathToSDLControllerDBMutex;
 static string g_pathToSDLControllerDB;
 #endif
 
@@ -89,7 +92,12 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
     arx_assert(window != nullptr);
 #ifdef ANDROID
     instance = this;
-    const auto *pathToSdl2ControllerDb = g_pathToSDLControllerDB.c_str();
+    string pathToSdl2ControllerDbStr;
+    {
+        std::lock_guard<std::mutex> lock(g_pathToSDLControllerDBMutex);
+        pathToSdl2ControllerDbStr = g_pathToSDLControllerDB;
+    }
+    const auto *pathToSdl2ControllerDb = pathToSdl2ControllerDbStr.c_str();
     if (SDL_GameControllerAddMappingsFromFile(pathToSdl2ControllerDb) < 0) {
         SDL_Log("Couldn't load mappings: %s\n", SDL_GetError());
     } else{
@@ -760,7 +768,8 @@ void SDL2InputBackend::onEvent(const SDL_Event & event) {
 extern "C"{
 __attribute__((used)) __attribute__((visibility("default")))
 void setPathToSDLControllerDB (const char *pathToSDLControllerDB){
-    g_pathToSDLControllerDB = pathToSDLControllerDB;
+    std::lock_guard<std::mutex> lock(g_pathToSDLControllerDBMutex);
+    g_pathToSDLControllerDB = (pathToSDLControllerDB) ? pathToSDLControllerDB : "";    // (JNA passes null for a null String)
 }
 }
 #endif
