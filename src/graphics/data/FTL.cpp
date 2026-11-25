@@ -244,7 +244,8 @@ std::unique_ptr<EERIE_3DOBJ> ARX_FTL_Load(const res::path & file) {
 	// Copy in the group index data
 	for(VertexGroup & group : object->grouplist) {
 		for(VertexId & index : group.indexes) {
-			const s32 vertex = *reinterpret_cast<const s32 *>(dat + pos);
+			s32 vertex;
+			std::memcpy(&vertex, dat + pos, sizeof(s32)); // (the file's offset: not necessarily aligned)
 			pos += sizeof(s32);
 			if(arx_unlikely(vertex < 0 || size_t(vertex) >= object->vertexlist.size())) {
 				LogError << filename << ": Invalid group vertex";
@@ -290,7 +291,8 @@ std::unique_ptr<EERIE_3DOBJ> ARX_FTL_Load(const res::path & file) {
 	// Copy in the selections selected data
 	for(EERIE_SELECTIONS & selection : object->selections) {
 		for(VertexId & selected : selection.selected) {
-			const s32 vertex = *reinterpret_cast<const s32 *>(dat + pos);
+			s32 vertex;
+			std::memcpy(&vertex, dat + pos, sizeof(s32)); // (the file's offset: not necessarily aligned)
 			pos += sizeof(s32);
 			if(arx_unlikely(vertex < 0 || size_t(vertex) >= object->vertexlist.size())) {
 				LogError << filename << ": Invalid selection vertex";

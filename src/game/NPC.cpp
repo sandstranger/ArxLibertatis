@@ -902,6 +902,9 @@ void ARX_PHYSICS_Apply() {
 	
 	ARX_PROFILE_FUNC();
 	
+	// The paths the pathfinder thread found, before the NPCs waiting for one look
+	EERIE_PATHFINDER_Collect();
+	
 	static size_t CURRENT_DETECT = 0;
 
 	CURRENT_DETECT++;

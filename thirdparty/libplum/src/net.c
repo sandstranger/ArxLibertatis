@@ -187,7 +187,9 @@ int net_get_default_gateway(int family, addr_record_t *record) {
 	const int attempts = 3;
 	for (int i = 0; i < attempts; ++i) {
 		PLUM_LOG_VERBOSE("Requesting routing table via Netlink");
-		char buffer[NETLINK_BUFFER_SIZE];
+		// (aligned, Arx Libertatis: it is read and written as struct nlmsghdr / rtmsg / rtattr, whose
+		// neighbouring 32 bit fields armv7 may store with strd/stm, which fault on an unaligned address)
+		char buffer[NETLINK_BUFFER_SIZE] __attribute__((aligned(8)));
 		memset(buffer, 0, sizeof(buffer));
 
 		struct nlmsghdr *nlmsg = (struct nlmsghdr *)buffer;

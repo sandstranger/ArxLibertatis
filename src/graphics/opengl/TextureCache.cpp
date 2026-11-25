@@ -211,7 +211,7 @@ void TextureCache::Init(const char* cacheDir, uint64_t maxSizeBytes) {
 
     struct sched_param param;
     param.sched_priority = 0;
-    pthread_setschedparam(m_workerThread.native_handle(), SCHED_NORMAL, &param);
+    pthread_setschedparam(m_workerThread.native_handle(), SCHED_OTHER, &param); // (SCHED_NORMAL is the kernel's name: bionic has it, glibc not)
 
     SDL_Log("TextureCache initialized: %s %zu entries, %llu MB used\n",
            m_cacheDir.c_str(), m_entries.size(),
@@ -317,6 +317,13 @@ bool TextureCache::TryGetCachedETC2(uint64_t hash, int width, int height, int fo
     CacheHeader header;
     file.read(reinterpret_cast<char*>(&header), sizeof(header));
     if (!file) return false;
+
+    // The size field is the file's: a file cut short or not ours does not get a buffer of whatever it says
+    std::error_code sizeError;
+    const uintmax_t fileSize = std::filesystem::file_size(cachePath, sizeError);
+    if (sizeError || fileSize < sizeof(header) || fileSize - sizeof(header) != header.dataSize) {
+        return false;
+    }
 
     if (outBuffer.size() < header.dataSize) {
         outBuffer.resize(header.dataSize);

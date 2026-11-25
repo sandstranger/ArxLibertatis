@@ -49,6 +49,8 @@
 #include "scene/Interactive.h"
 #include "net/CoopMmo.h"
 
+#include <atomic>
+
 EntityDragStatus g_dragStatus = EntityDragStatus_Invalid;
 Entity * g_draggedEntity = nullptr;
 InventoryPos g_draggedItemPreviousPosition;
@@ -59,7 +61,8 @@ static float g_dragStartAngle = 0;
 static Camera * g_dragStartCamera = nullptr;
 #ifdef ANDROID
 bool allowDrop = false;
-static bool screenControlsHided = false;
+// (written by the java side, on its own thread)
+static std::atomic<bool> screenControlsHided(false);
 #endif
 
 void setDraggedEntity(Entity * entity) {

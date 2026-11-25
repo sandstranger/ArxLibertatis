@@ -47,10 +47,13 @@ enum GLArrayClientState {
 	GL_TexturedVertexLit
 };
 
-#ifdef ANDROID
+// A field of the vertex at base: base is null (an offset into the bound buffer) as often as not, and
+// taking vertices->field of a null pointer is undefined.
 static inline const void * vertexAttributeOffset(const void * base, size_t offset) {
 	return reinterpret_cast<const void *>(reinterpret_cast<std::uintptr_t>(base) + offset);
 }
+
+#ifdef ANDROID
 
 //! Vertex attribute locations of the GLES programs (see buildGLESProgram())
 enum GLESVertexAttribute : GLuint {
@@ -103,13 +106,13 @@ inline void setVertexArray(OpenGLRenderer * renderer, const TexturedVertex * ver
 	                      vertexAttributeOffset(vertices, offsetof(TexturedVertex, color)));
 	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(TexturedVertex, uv)), sizeof(*vertices));
 #else
-	glVertexPointer(4, GL_FLOAT, sizeof(*vertices), &vertices->p);
+	glVertexPointer(4, GL_FLOAT, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(TexturedVertex, p)));
 	if(renderer->hasVertexFogCoordinate()) {
 		glEnableClientState(GL_FOG_COORDINATE_ARRAY);
-		glFogCoordPointer(GL_FLOAT, sizeof(*vertices), &vertices->w);
+		glFogCoordPointer(GL_FLOAT, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(TexturedVertex, w)));
 	}
-	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(TexturedVertex, color)));
+	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(TexturedVertex, uv)), sizeof(*vertices));
 #endif
 }
 
@@ -146,10 +149,10 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX * vertice
 		                      vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, p)));
 	}
 #else
-	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
+	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, p)));
 	if(renderer->hasVertexFogCoordinate()) glDisableClientState(GL_FOG_COORDINATE_ARRAY);
-	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	setVertexArrayTexCoord(0, &vertices->uv, sizeof(*vertices));
+	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, color)));
+	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX, uv)), sizeof(*vertices));
 #endif
 }
 
@@ -169,12 +172,12 @@ inline void setVertexArray(OpenGLRenderer * renderer, const SMY_VERTEX3 * vertic
 	setVertexArrayTexCoord(1, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + sizeof(Vec2f)), sizeof(*vertices));
 	setVertexArrayTexCoord(2, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + 2 * sizeof(Vec2f)), sizeof(*vertices));
 #else
-	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), &vertices->p.x);
+	glVertexPointer(3, GL_FLOAT, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, p)));
 	if(renderer->hasVertexFogCoordinate()) glDisableClientState(GL_FOG_COORDINATE_ARRAY);
-	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), &vertices->color);
-	setVertexArrayTexCoord(0, &vertices->uv[0], sizeof(*vertices));
-	setVertexArrayTexCoord(1, &vertices->uv[1], sizeof(*vertices));
-	setVertexArrayTexCoord(2, &vertices->uv[2], sizeof(*vertices));
+	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(*vertices), vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, color)));
+	setVertexArrayTexCoord(0, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + 0 * sizeof(Vec2f)), sizeof(*vertices));
+	setVertexArrayTexCoord(1, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + 1 * sizeof(Vec2f)), sizeof(*vertices));
+	setVertexArrayTexCoord(2, vertexAttributeOffset(vertices, offsetof(SMY_VERTEX3, uv) + 2 * sizeof(Vec2f)), sizeof(*vertices));
 #endif
 }
 

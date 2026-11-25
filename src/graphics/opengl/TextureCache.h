@@ -108,7 +108,12 @@ public:
 
 private:
     TextureCache() = default;
-    ~TextureCache() = default;
+    ~TextureCache() {
+        // A way out that skipped Shutdown() must not destroy a running std::thread (std::terminate)
+        if (m_workerThread.joinable()) {
+            Shutdown();
+        }
+    }
 
     std::string GetCachePath(uint64_t hash);
     bool ValidateCacheFile(const char* path, uint64_t expectedHash,

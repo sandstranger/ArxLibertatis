@@ -32,7 +32,9 @@ std::string_view loadString(const char * data, size_t maxLength) {
 }
 
 void storeString(char * dst, size_t maxLength, std::string_view src) {
-	std::memcpy(dst, src.data(), std::min(maxLength, src.length()));
+	if(!src.empty()) { // (an empty view's data() may be null: memcpy from null is undefined, even of 0 bytes)
+		std::memcpy(dst, src.data(), std::min(maxLength, src.length()));
+	}
 	if(maxLength > src.length()) {
 		std::memset(dst + src.length(), 0, maxLength - src.length());
 	}

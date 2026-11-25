@@ -349,7 +349,10 @@ static EERIE_ANIM * TheaToEerie(const char * adr, size_t size, const res::path &
 		}
 
 		// Now Read Sound Data included in this frame
-		s32 num_sample = *reinterpret_cast<const s32 *>(adr + pos);
+		// (memcpy: the sample before it has any size, so this is at any offset; an s32 load from there is
+		// undefined, and a crash on armv7 when it ends up in an ldrd/ldm)
+		s32 num_sample;
+		std::memcpy(&num_sample, adr + pos, sizeof(s32));
 		pos += sizeof(s32);
 		LogDebug(" -> num_sample " << num_sample << " s32:" << sizeof(s32));
 

@@ -50,6 +50,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "cinematic/CinematicController.h"
 
 #include <cstdlib>
+#include <cstring>
 
 #include <stddef.h>
 #include <cstdio>
@@ -251,8 +252,13 @@ static void loadLighting(const char * dat, size_t & pos, bool compact, bool skip
 	
 	if(compact) {
 		if(!skip) {
-			const u32 * begin = reinterpret_cast<const u32 *>(dat + pos);
-			std::transform(begin, begin + count, g_levelLighting.begin(), ToColorBGRA());
+			// (one at a time: the file's offset is not necessarily aligned for u32 loads, which the compiler
+			// may vectorize or pair, and trap on armv7)
+			for(size_t i = 0; i < count; i++) {
+				u32 bgra;
+				std::memcpy(&bgra, dat + pos + i * sizeof(u32), sizeof(u32));
+				g_levelLighting[i] = ToColorBGRA()(bgra);
+			}
 		}
 		pos += sizeof(u32) * count;
 	} else {

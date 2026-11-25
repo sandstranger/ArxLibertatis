@@ -45,6 +45,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/ArxGame.h"
 
 #include <stddef.h>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -212,7 +213,8 @@ extern CircularVertexBuffer<SMY_VERTEX3> * pDynamicVertexBuffer;
 bool EXTERNALVIEW = false;
 bool SHOW_INGAME_MINIMAP = true;
 #ifdef ANDROID
-bool showOnScreenControls = true;
+// (read by the java side, on its own thread)
+static std::atomic<bool> showOnScreenControls(true);
 #endif
 bool ARX_FLARES_Block = true;
 

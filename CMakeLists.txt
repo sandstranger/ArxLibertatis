@@ -379,7 +379,8 @@ endif()
 # This copy carries thirdparty/libplum-multihomed.patch: upstream picks the
 # first default route and sends its UPnP discovery out of whatever interface
 # the routing table offers first, which on a machine running Radmin VPN or
-# Hamachi is the VPN rather than the real router.
+# Hamachi is the VPN rather than the real router. And net.c's netlink buffer is
+# aligned for the structs it is read as (armv7 faults on unaligned strd/stm).
 set(PLUM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libplum")
 file(GLOB PLUM_SOURCES "${PLUM_DIR}/src/*.c")
 add_library(plum STATIC ${PLUM_SOURCES})

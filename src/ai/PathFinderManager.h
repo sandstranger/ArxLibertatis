@@ -58,6 +58,8 @@ struct PATHFINDER_REQUEST {
 };
 
 bool EERIE_PATHFINDER_Add_To_Queue(const PATHFINDER_REQUEST & request);
+//! Hands the paths found since the last call to their NPCs (the game's thread, once per frame)
+void EERIE_PATHFINDER_Collect();
 long EERIE_PATHFINDER_Get_Queued_Number();
 bool EERIE_PATHFINDER_Is_Busy();
 void EERIE_PATHFINDER_Clear();

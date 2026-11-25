@@ -81,9 +81,9 @@
 #ifdef ANDROID
 #include "SwappyController.h"
 #include <string>
-#include "../graphics/opengl/TextureCache.h"
 static std::string g_pathToResources;
 #endif
+#include "graphics/opengl/TextureCache.h"
 
 
 #ifdef ANDROID
@@ -185,8 +185,10 @@ int utf8_main(int argc, char ** argv) {
 
 #ifdef ANDROID
     DestroySwappy();
-    TextureCache::Instance().Shutdown();
 #endif
+    // Its writer thread stops here, on every platform: a std::thread still running when the statics
+    // are destroyed is std::terminate.
+    TextureCache::Instance().Shutdown();
 
     // Shutdown the logging system
 	// If there has been a critical error, a dialog will be shown now

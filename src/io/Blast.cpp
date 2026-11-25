@@ -387,11 +387,13 @@ static BlastResult blastDecompress(state * s) {
 			/* copy length bytes from distance bytes back */
 			do {
 				to = s->out + s->next;
-				from = to - dist;
-				copy = MAXWIN;
+				// (the source wraps around the window: indexed, not a pointer before the window moved back in)
 				if(int(s->next) < dist) {
-					from += copy;
+					from = s->out + (s->next + MAXWIN - unsigned(dist));
 					copy = dist;
+				} else {
+					from = s->out + (s->next - unsigned(dist));
+					copy = MAXWIN;
 				}
 				copy -= s->next;
 				if(copy > len) {

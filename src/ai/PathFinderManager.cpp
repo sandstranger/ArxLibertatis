@@ -49,12 +49,16 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <atomic>
 #include <list>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 #include "ai/Anchors.h"
 #include "ai/PathFinder.h"
 #include "game/Entity.h"
+#include "game/EntityManager.h"
 #include "game/NPC.h"
 #include "graphics/Math.h"
 #include "platform/Thread.h"
@@ -67,13 +71,46 @@ static constexpr float PATHFINDER_HEURISTIC_MAX = PathFinder::HEURISTIC_MAX;
 static constexpr float PATHFINDER_HEURISTIC_RANGE = PATHFINDER_HEURISTIC_MAX - PATHFINDER_HEURISTIC_MIN;
 static constexpr float PATHFINDER_DISTANCE_MAX = 5000.0f;
 
+/*
+ * The pathfinder thread used to read the requesting NPC while the game changed it, and to write the
+ * path into the NPC (pathfind.list, then pathfind.listnb) while the game read, reset and freed them,
+ * with nothing ordering the two. On ARM's weak memory model the game could see the count before the
+ * list (and index a null or freed list), or free a list the thread had just stored. Now a request
+ * carries what the search needs, copied from the NPC when it is queued, the thread never touches
+ * the NPC, and the paths come back through a mailbox that the game empties once per frame, on its
+ * own thread (EERIE_PATHFINDER_Collect).
+ */
+struct PathFinderJob {
+	
+	PATHFINDER_REQUEST request = { };
+	EntityHandle handle;
+	Behaviour behavior;
+	float behaviorParam = 0.f;
+	Vec3f pos = Vec3f(0.f);
+	Vec3f target = Vec3f(0.f);
+	float radius = 0.f;
+	float height = 0.f;
+	
+};
+
+struct PathFinderResult {
+	
+	Entity * entity = nullptr; // only compared, never dereferenced off the game's thread
+	EntityHandle handle;
+	std::vector<long> path;
+	
+};
+
 class PathFinderThread final : public StoppableThread {
 	
-	std::mutex m_mutex;
-	std::list<PATHFINDER_REQUEST> m_queue;
-	volatile bool m_busy;
+	std::mutex m_mutex; // the queue and the results
+	std::mutex m_searchMutex; // held through a search: clearQueue() waits for it, g_anchors goes after
+	std::list<PathFinderJob> m_queue;
+	std::vector<PathFinderResult> m_results;
+	std::atomic<bool> m_busy;
 	
 	void run() override;
+	void search(const PathFinderJob & job, PathFinder & pathfinder);
 	
 public:
 	
@@ -90,13 +127,22 @@ public:
 	
 	void clearQueue() {
 		
+		std::scoped_lock searchLock(m_searchMutex);
 		std::scoped_lock lock(m_mutex);
 		
 		m_queue.clear();
+		m_results.clear();
+	}
+	
+	std::vector<PathFinderResult> takeResults() {
+		
+		std::scoped_lock lock(m_mutex);
+		
+		return std::exchange(m_results, std::vector<PathFinderResult>());
 	}
 	
 	bool isBusy() const {
-		return m_busy;
+		return m_busy.load();
 	}
 	
 };
@@ -105,25 +151,103 @@ void PathFinderThread::queueRequest(const PATHFINDER_REQUEST & request) {
 	
 	arx_assert(request.entity && (request.entity->ioflags & IO_NPC));
 	
+	// What the search needs from the NPC, read here on the game's thread
+	PathFinderJob job;
+	job.request = request;
+	job.handle = request.entity->index();
+	job.behavior = request.entity->_npcdata->behavior;
+	job.behaviorParam = request.entity->_npcdata->behavior_param;
+	job.pos = request.entity->pos;
+	job.target = request.entity->target;
+	job.radius = request.entity->physics.cyl.radius;
+	job.height = request.entity->physics.cyl.height;
+	
 	std::scoped_lock lock(m_mutex);
+	
+	// A path not collected yet answers an older request of this NPC
+	m_results.erase(std::remove_if(m_results.begin(), m_results.end(), [&](const PathFinderResult & result) {
+		return result.entity == request.entity;
+	}), m_results.end());
 	
 	// If this NPC is already requesting a Pathfinding then either
 	// try to Override it or add it to queue if it is currently being
 	// processed.
-	for(PATHFINDER_REQUEST & oldRequest : m_queue) {
-		if(oldRequest.entity == request.entity) {
-			oldRequest = request;
+	for(PathFinderJob & oldJob : m_queue) {
+		if(oldJob.request.entity == request.entity) {
+			oldJob = job;
 			return;
 		}
 	}
 	
-	if(!m_queue.empty()
-	   && (request.entity->_npcdata->behavior & (BEHAVIOUR_MOVE_TO | BEHAVIOUR_FLEE | BEHAVIOUR_LOOK_FOR))) {
+	if(!m_queue.empty() && (job.behavior & (BEHAVIOUR_MOVE_TO | BEHAVIOUR_FLEE | BEHAVIOUR_LOOK_FOR))) {
 		// priority: insert as second element of queue
-		m_queue.insert(++m_queue.begin(), request);
+		m_queue.insert(++m_queue.begin(), job);
 	} else {
-		m_queue.push_back(request);
+		m_queue.push_back(job);
 	}
+	
+}
+
+void PathFinderThread::search(const PathFinderJob & job, PathFinder & pathfinder) {
+	
+	if(job.behavior == BEHAVIOUR_NONE) {
+		return;
+	}
+	
+	ARX_PROFILE_FUNC();
+	
+	pathfinder.setCylinder(job.radius, job.height);
+	
+	const Behaviour behavior = job.behavior;
+	const long from = job.request.from;
+	const long to = job.request.to;
+	
+	float distance;
+	if(behavior & (BEHAVIOUR_MOVE_TO | BEHAVIOUR_GO_HOME)) {
+		distance = fdist(g_anchors[from].pos, g_anchors[to].pos);
+	} else if(behavior & (BEHAVIOUR_WANDER_AROUND | BEHAVIOUR_FLEE | BEHAVIOUR_HIDE)) {
+		distance = job.behaviorParam;
+	} else if(behavior & BEHAVIOUR_LOOK_FOR) {
+		distance = fdist(job.pos, job.target);
+	} else {
+		return;
+	}
+	float heuristic = PATHFINDER_HEURISTIC_MAX;
+	if(distance < PATHFINDER_DISTANCE_MAX) {
+		heuristic = PATHFINDER_HEURISTIC_MIN + PATHFINDER_HEURISTIC_RANGE * (distance / PATHFINDER_DISTANCE_MAX);
+	}
+	pathfinder.setHeuristic(heuristic);
+	
+	bool stealth = behavior.hasAll(BEHAVIOUR_SNEAK | BEHAVIOUR_HIDE);
+	
+	PathFinder::Result result;
+	if(behavior & (BEHAVIOUR_MOVE_TO | BEHAVIOUR_GO_HOME)) {
+		
+		pathfinder.move(from, to, result, stealth);
+		
+	} else if(behavior & BEHAVIOUR_WANDER_AROUND) {
+		
+		pathfinder.wanderAround(from, distance, result, stealth);
+		
+	} else if(behavior & (BEHAVIOUR_FLEE | BEHAVIOUR_HIDE)) {
+		
+		float safeDistance = distance + fdist(job.target, job.pos);
+		pathfinder.flee(from, job.target, safeDistance, result, stealth);
+		
+	} else if(behavior & BEHAVIOUR_LOOK_FOR) {
+		
+		float radius = job.behaviorParam;
+		pathfinder.lookFor(from, job.target, radius, result, stealth);
+		
+	}
+	
+	PathFinderResult found;
+	found.entity = job.request.entity;
+	found.handle = job.handle;
+	found.path.assign(result.begin(), result.end());
+	
+	std::scoped_lock lock(m_mutex);
+	m_results.push_back(std::move(found));
 	
 }
 
@@ -131,74 +255,24 @@ void PathFinderThread::run() {
 	
 	PathFinder pathfinder(g_anchors.size(), g_anchors.data(), &g_staticLights);
 	
-	for(; !isStopRequested(); m_busy = false, sleep(10ms)) {
+	for(; !isStopRequested(); sleep(10ms)) {
 		
-		std::scoped_lock lock(m_mutex);
+		// Taken before the job: once clearQueue() has it, no job taken before the clear is searched
+		std::scoped_lock searchLock(m_searchMutex);
+		
+		PathFinderJob job;
+		{
+			std::scoped_lock lock(m_mutex);
+			if(m_queue.empty()) {
+				continue;
+			}
+			job = std::move(m_queue.front());
+			m_queue.pop_front();
+		}
 		
 		m_busy = true;
-		
-		if(m_queue.empty()) {
-			continue;
-		}
-		
-		PATHFINDER_REQUEST request = m_queue.front();
-		m_queue.pop_front();
-		
-		// TODO potentially unsafe Entity access
-		if(request.entity->_npcdata->behavior == BEHAVIOUR_NONE) {
-			continue;
-		}
-		
-		ARX_PROFILE_FUNC();
-		
-		pathfinder.setCylinder(request.entity->physics.cyl.radius, request.entity->physics.cyl.height);
-		
-		float distance;
-		if(request.entity->_npcdata->behavior & (BEHAVIOUR_MOVE_TO | BEHAVIOUR_GO_HOME)) {
-			distance = fdist(g_anchors[request.from].pos, g_anchors[request.to].pos);
-		} else if(request.entity->_npcdata->behavior & (BEHAVIOUR_WANDER_AROUND | BEHAVIOUR_FLEE | BEHAVIOUR_HIDE)) {
-			distance = request.entity->_npcdata->behavior_param;
-		} else if(request.entity->_npcdata->behavior & BEHAVIOUR_LOOK_FOR) {
-			distance = fdist(request.entity->pos, request.entity->target);
-		} else {
-			continue;
-		}
-		float heuristic = PATHFINDER_HEURISTIC_MAX;
-		if(distance < PATHFINDER_DISTANCE_MAX) {
-			heuristic = PATHFINDER_HEURISTIC_MIN + PATHFINDER_HEURISTIC_RANGE * (distance / PATHFINDER_DISTANCE_MAX);
-		}
-		pathfinder.setHeuristic(heuristic);
-		
-		bool stealth = request.entity->_npcdata->behavior.hasAll(BEHAVIOUR_SNEAK | BEHAVIOUR_HIDE);
-		
-		PathFinder::Result result;
-		if(request.entity->_npcdata->behavior & (BEHAVIOUR_MOVE_TO | BEHAVIOUR_GO_HOME)) {
-			
-			pathfinder.move(request.from, request.to, result, stealth);
-			
-		} else if(request.entity->_npcdata->behavior & BEHAVIOUR_WANDER_AROUND) {
-			
-			pathfinder.wanderAround(request.from, distance, result, stealth);
-			
-		} else if(request.entity->_npcdata->behavior & (BEHAVIOUR_FLEE | BEHAVIOUR_HIDE)) {
-			
-			float safeDistance = distance + fdist(request.entity->target, request.entity->pos);
-			pathfinder.flee(request.from, request.entity->target, safeDistance, result, stealth);
-			
-		} else if(request.entity->_npcdata->behavior & BEHAVIOUR_LOOK_FOR) {
-			
-			float radius = request.entity->_npcdata->behavior_param;
-			pathfinder.lookFor(request.from, request.entity->target, radius, result, stealth);
-			
-		}
-		
-		if(!result.empty()) {
-			long * list = new long[result.size()];
-			std::copy(result.begin(), result.end(), list);
-			// TODO potential memory leak
-			request.entity->_npcdata->pathfind.list = list;
-		}
-		request.entity->_npcdata->pathfind.listnb = result.size();
+		search(job, pathfinder);
+		m_busy = false;
 		
 	}
 	
@@ -216,6 +290,32 @@ bool EERIE_PATHFINDER_Add_To_Queue(const PATHFINDER_REQUEST & request) {
 	g_pathFinderThread->queueRequest(request);
 	
 	return true;
+}
+
+void EERIE_PATHFINDER_Collect() {
+	
+	if(!g_pathFinderThread) {
+		return;
+	}
+	
+	for(PathFinderResult & result : g_pathFinderThread->takeResults()) {
+		
+		Entity * io = entities.get(result.handle);
+		if(!io || io != result.entity || !(io->ioflags & IO_NPC) || !io->_npcdata->pathfind.pathwait) {
+			continue; // gone, or not waiting for a path any more
+		}
+		
+		IO_PATHFIND & pathfind = io->_npcdata->pathfind;
+		delete[] pathfind.list;
+		pathfind.list = nullptr;
+		if(!result.path.empty()) {
+			pathfind.list = new long[result.path.size()];
+			std::copy(result.path.begin(), result.path.end(), pathfind.list);
+		}
+		pathfind.listnb = long(result.path.size());
+		
+	}
+	
 }
 
 long EERIE_PATHFINDER_Get_Queued_Number() {
