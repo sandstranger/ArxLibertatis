@@ -36,7 +36,7 @@ struct IUnknown; // Workaround for error C2187 in combaseapi.h when using /permi
 #include <objbase.h>
 #else // ARX_PLATFORM != ARX_PLATFORM_WIN32
 
-#if ARX_HAVE_OPEN
+#if ARX_HAVE_OPEN || ARX_HAVE_PIPE2 // (pipe2's O_CLOEXEC is fcntl.h's)
 #include <fcntl.h>
 #endif
 
